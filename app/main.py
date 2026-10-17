@@ -8,8 +8,11 @@ credit back to PayPal in one click.
 """
 from __future__ import annotations
 
+import hmac
 import json
+import logging
 import os
+import secrets
 import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -22,9 +25,13 @@ from . import llm
 from .config import Settings, get_settings
 from .guard import SpendGuard
 from .ledger import Ledger, from_micro
+from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
 
+log = logging.getLogger("agenttab")
+DEMO_POLICY = ("Only buy data about public websites of competitors for market research. "
+               "Never spend on social media sites. Never fetch facebook.com.")
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -54,13 +61,23 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         allow_private_targets = os.getenv("ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV") == "1"
     app = FastAPI(title="AgentTab", version="1.0.0",
                   description="PayPal-funded spending tabs for AI agents, guarded by AI.")
+    admin_token = s.admin_token
+    if not admin_token:
+        admin_token = secrets.token_urlsafe(32)
+        tok_file = Path(".admin_token")
+        tok_file.write_text(admin_token)
+        tok_file.chmod(0o600)
+        log.warning("ADMIN_TOKEN not set: generated a random one in %s (chmod 600)", tok_file.resolve())
+    if s.demo_mode and (len(admin_token) < 24 or admin_token in ("dev-admin", "admin", "changeme")):
+        raise RuntimeError("DEMO_MODE requires a strong ADMIN_TOKEN (24+ random chars)")
+    limiter = RateLimiter()
     ledger = Ledger(s.db_path)
     paypal = PayPalClient(s)
-    guard = SpendGuard(s)
+    guard = SpendGuard(s, ai_allowed=lambda: limiter.allow("llm", s.llm_calls_per_day, DAY))
     app.state.ledger, app.state.paypal, app.state.guard = ledger, paypal, guard
 
     def admin(x_admin_token: str = Header("")):
-        if x_admin_token != s.admin_token:
+        if not hmac.compare_digest(x_admin_token.encode(), admin_token.encode()):
             raise HTTPException(401, "admin token required")
 
     def agent_from_key(x_agent_key: str = Header("")):
@@ -68,6 +85,15 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not a:
             raise HTTPException(401, "valid X-Agent-Key required")
         return a
+
+    def client_ip(request: Request) -> str:
+        fwd = request.headers.get("x-forwarded-for", "")
+        # Render's proxy appends the real client IP last; earlier entries are client-controlled.
+        return (fwd.split(",")[-1].strip() if fwd else (request.client.host if request.client else "?"))
+
+    def paypal_budget():
+        if not limiter.allow("paypal", s.paypal_calls_per_day, DAY):
+            raise HTTPException(429, "daily PayPal sandbox call budget for this demo is used up; try tomorrow")
 
     def money(v: str | float) -> Decimal:
         try:
@@ -92,7 +118,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.enabled(s),
+        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.enabled(s), "demo_mode": s.demo_mode,
                 "models": [s.llm_model, s.llm_fallback_model] if llm.enabled(s) else []}
 
     @app.get("/api/catalog")
@@ -133,6 +159,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """Return unused credit to the payer's PayPal, newest captures first."""
         if not ledger.agent(aid):
             raise HTTPException(404, "no such agent")
+        return do_refund(aid)
+
+    def do_refund(aid: str):
         remaining = ledger.balance(aid)
         if remaining <= 0:
             return {"refunded_usd": 0.0, "refunds": []}
@@ -143,6 +172,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             amt = min(remaining, from_micro(cap["amount_micro"])).quantize(Decimal("0.01"), rounding="ROUND_DOWN")
             if amt <= 0:
                 break
+            paypal_budget()
             try:
                 r = paypal.refund_capture(cap["paypal_ref"], amt)
             except PayPalError as e:
@@ -155,9 +185,12 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.get("/api/agents/{aid}/report", dependencies=[Depends(admin)])
     def report(aid: str):
         """Plain-English spend report for the owner (AI-written when an LLM is configured)."""
-        a = ledger.agent(aid)
-        if not a:
+        if not ledger.agent(aid):
             raise HTTPException(404, "no such agent")
+        return do_report(aid)
+
+    def do_report(aid: str):
+        a = ledger.agent(aid)
         rows = ledger.entries(aid, 200)
         charges = [r for r in rows if r["kind"] == "charge"]
         denies = [r for r in rows if r["kind"] == "deny"]
@@ -166,7 +199,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                  "denied": [{"tool": d["tool"], "target": d["target"], "reason": d["reason"]} for d in denies[:10]],
                  "top_targets": sorted({c["target"] for c in charges})[:10]}
         text, model = None, None
-        if llm.enabled(s):
+        if llm.enabled(s) and limiter.allow("llm", s.llm_calls_per_day, DAY):
             try:
                 text, model = llm.chat(s, [
                     {"role": "system", "content": "Write a 4-sentence spending report for the owner of an AI agent. Flag anything risky. Plain English, no markdown."},
@@ -183,6 +216,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     # ---------------- funding via PayPal ----------------
 
     def _topup(aid: str, amount: Decimal):
+        paypal_budget()
         try:
             o = paypal.create_order(amount, aid, f"AgentTab credit for {aid}")
         except PayPalError as e:
@@ -205,6 +239,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not (paypal.mock or paypal.is_sandbox):
             raise HTTPException(403, "only available in PayPal sandbox")
         amount = money(body.amount_usd)
+        paypal_budget()
         try:
             cap = paypal.sandbox_card_topup(amount, aid)
         except PayPalError as e:
@@ -228,6 +263,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(404, "unknown order")
         if o["status"] == "CAPTURED":
             return RedirectResponse("/?funded=" + o["agent_id"])
+        paypal_budget()
         try:
             cap = paypal.capture_order(token)
         except PayPalError as e:
@@ -262,7 +298,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
 
     @app.post("/api/tools/{name}")
-    def call_tool(name: str, body: ToolCall, a=Depends(agent_from_key)):
+    def call_tool(name: str, body: ToolCall, request: Request, a=Depends(agent_from_key)):
+        if not limiter.allow("tools:" + client_ip(request), s.tool_calls_per_ip_hour, HOUR):
+            raise HTTPException(429, "too many tool calls from your IP; try again later")
         if name not in TOOLS:
             raise HTTPException(404, "unknown tool; see /api/catalog")
         price = PRICES[name]
@@ -295,6 +333,43 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                          f"[{decision.source}] {decision.reason}")
         return {"charged_usd": float(price), "balance_usd": float(ledger.balance(aid)),
                 "guard": decision.as_dict(), "result": result}
+
+    # ---------------- public sandboxed demo ----------------
+    @app.post("/api/demo/session")
+    def demo_session(request: Request):
+        """Anyone can start a demo: a fresh agent with a fixed policy and tight caps,
+        funded with $1.00 of PayPal *sandbox* money (test card, real sandbox capture)."""
+        if not s.demo_mode:
+            raise HTTPException(404, "demo mode is off")
+        ip = client_ip(request)
+        if not limiter.allow("demo:" + ip, s.demo_sessions_per_ip_hour, HOUR):
+            raise HTTPException(429, "demo session limit for your IP reached; try again in an hour")
+        if not limiter.allow("demo:all", s.demo_sessions_per_day, DAY):
+            raise HTTPException(429, "today's demo sessions are used up; try tomorrow")
+        ag = ledger.create_agent("demo-" + secrets.token_hex(3), "", DEMO_POLICY, Decimal("0.50"), Decimal("0.05"))
+        paypal_budget()
+        try:
+            cap = paypal.sandbox_card_topup(Decimal("1.00"), ag["agent_id"])
+        except PayPalError as e:
+            raise HTTPException(502, f"PayPal sandbox top-up failed: {e}")
+        ledger.add_order(cap["order_id"], ag["agent_id"], Decimal("1.00"))
+        ledger.mark_order(cap["order_id"], "CAPTURED")
+        ledger.add_entry(ag["agent_id"], "fund", cap["amount"], paypal_ref=cap["capture_id"],
+                         reason=f"PayPal sandbox order {cap['order_id']} (demo, test card)")
+        return {"agent_key": ag["api_key"], **agent_view(ledger.agent(ag["agent_id"])),
+                "paypal_order_id": cap["order_id"], "paypal_capture_id": cap["capture_id"]}
+
+    @app.get("/api/demo/ledger")
+    def demo_ledger(a=Depends(agent_from_key)):
+        return ledger.entries(a["id"], 200)
+
+    @app.post("/api/demo/refund")
+    def demo_refund(a=Depends(agent_from_key)):
+        return do_refund(a["id"])
+
+    @app.get("/api/demo/report")
+    def demo_report(a=Depends(agent_from_key)):
+        return do_report(a["id"])
 
     return app
 

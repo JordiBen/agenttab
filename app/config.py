@@ -21,7 +21,16 @@ class Settings:
     # Guard = short classification, so a fast Flash-Lite first; newest Flash as second try.
     llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
     llm_fallback_model: str = os.getenv("LLM_FALLBACK_MODEL", "gemini-3.8-flash")
-    admin_token: str = os.getenv("ADMIN_TOKEN", "dev-admin")
+    # Owner/admin token. Must come from the environment; there is no default value.
+    # If unset, a random one is generated at startup and written to ./.admin_token (chmod 600).
+    admin_token: str = os.getenv("ADMIN_TOKEN", "")
+    # Public demo: anyone can open a sandboxed demo session; owner endpoints stay admin-only.
+    demo_mode: bool = os.getenv("DEMO_MODE", "0") == "1"
+    demo_sessions_per_ip_hour: int = int(os.getenv("DEMO_SESSIONS_PER_IP_HOUR", "3"))
+    demo_sessions_per_day: int = int(os.getenv("DEMO_SESSIONS_PER_DAY", "40"))
+    tool_calls_per_ip_hour: int = int(os.getenv("TOOL_CALLS_PER_IP_HOUR", "40"))
+    llm_calls_per_day: int = int(os.getenv("LLM_CALLS_PER_DAY", "400"))      # then heuristic guard
+    paypal_calls_per_day: int = int(os.getenv("PAYPAL_CALLS_PER_DAY", "120"))  # orders/captures/refunds
 
 
 def get_settings() -> Settings:

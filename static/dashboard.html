@@ -19,9 +19,31 @@
 <body>
 <header><h1>AgentTab</h1><span>PayPal-funded spending tabs for AI agents, guarded by AI · by WebIntel Tools</span></header>
 <main>
+ <div class="card" id="demo" style="display:none;border:2px solid #ffc439">
+  <h3>Try it: public sandbox demo</h3>
+  <p>Start a session and you get your own agent, funded with <b>$1.00 of PayPal sandbox money</b> (a real sandbox capture with a test card, so no real money moves).
+  Its fixed policy: <i>"Only buy data about public websites of competitors for market research. Never spend on social media sites. Never fetch facebook.com."</i>
+  Caps are $0.05 per call and $0.50 per day. Every purchase is checked by the Gemini spend guard.</p>
+  <div class="row">
+   <button class="alt" onclick="demoStart()">1. Start demo session</button>
+   <button onclick="demoBuy('tech_detect','https://wordpress.org','Compare competitor CMS tech stacks for market research')">2. Buy: wordpress.org tech stack</button>
+   <button onclick="demoBuy('tech_detect','https://www.facebook.com/somebrand','Competitor market research on their tech')">3. Try: facebook.com (should be blocked)</button>
+   <button onclick="demoReport()">4. AI spend report</button>
+   <button onclick="demoRefund()">5. Refund unused credit to PayPal</button>
+  </div>
+  <div class="row" style="margin-top:10px">
+   <select id="dtool"><option>tech_detect</option><option>seo_audit</option><option>page_markdown</option></select>
+   <input id="durl" size="34" placeholder="https://competitor.example">
+   <input id="dpurpose" size="44" placeholder="purpose, e.g. SEO audit of a competitor for market research">
+   <button onclick="demoBuy(dtool.value,durl.value,dpurpose.value)">Buy custom</button>
+  </div>
+  <p id="dout" style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:13px"></p>
+  <div id="dledger" style="height:260px"></div>
+ </div>
+ <div class="card" id="ownerhint"><b>Owner console</b> (needs the admin token set on the server)</div>
  <div class="card">
   <div class="row">
-   <div><label>Admin token</label><input id="tok" value="dev-admin" size="12"></div>
+   <div><label>Admin token</label><input id="tok" type="password" placeholder="admin token" size="16" onchange="localStorage.tok=this.value;load()"></div>
    <div><label>Agent name</label><input id="name" value="research-agent"></div>
    <div><label>Spending policy (plain English)</label><textarea id="policy">Only buy data about public websites of our competitors for market research. Never spend on social media sites. Never fetch facebook.com.</textarea></div>
    <div><label>Daily cap $</label><input id="cap" value="2.00" size="5"></div>
@@ -39,6 +61,7 @@
  <div class="card"><h3>Live ledger: charges, denials, funding, refunds</h3><div id="ledger"></div></div>
 </main>
 <script>
+if(localStorage.tok) document.getElementById('tok').value=localStorage.tok;
 const T=()=>document.getElementById('tok').value;
 const H=()=>({'Content-Type':'application/json','X-Admin-Token':T()});
 const money=p=>p.value==null?'':'$'+Number(p.value).toFixed(4);
@@ -59,6 +82,7 @@ const ledgerGrid=agGrid.createGrid(document.getElementById('ledger'),{
  getRowStyle:p=>p.data.kind==='deny'?{background:'#fdecea'}:null
 });
 async function load(){
+ if(!T()) return;
  const a=await fetch('/api/agents',{headers:H()}); if(a.ok) agentsGrid.setGridOption('rowData',await a.json());
  const l=await fetch('/api/ledger',{headers:H()}); if(l.ok) ledgerGrid.setGridOption('rowData',await l.json());
 }
@@ -79,5 +103,25 @@ async function refund(){const a=sel(); if(!a) return;
  const r=await fetch('/api/agents/'+a.agent_id+'/refund',{method:'POST',headers:H()}); document.getElementById('report').textContent=JSON.stringify(await r.json()); load();}
 async function report(){const a=sel(); if(!a) return;
  const r=await fetch('/api/agents/'+a.agent_id+'/report',{headers:H()}); const j=await r.json(); document.getElementById('report').textContent=j.report||JSON.stringify(j);}
-load(); setInterval(load,3000);
+// ---- public demo ----
+const ledgerCols=ledgerGrid.getColumnDefs();
+const dGrid=agGrid.createGrid(document.getElementById('dledger'),{columnDefs:ledgerCols,defaultColDef:{flex:1,sortable:true,filter:true,resizable:true},
+ getRowStyle:p=>p.data.kind==='deny'?{background:'#fdecea'}:null});
+const DK=()=>sessionStorage.dkey;
+const show=(o)=>{document.getElementById('dout').textContent=typeof o==='string'?o:JSON.stringify(o,null,1);};
+async function dload(){ if(!DK()) return; const r=await fetch('/api/demo/ledger',{headers:{'X-Agent-Key':DK()}}); if(r.ok) dGrid.setGridOption('rowData',await r.json()); }
+async function demoStart(){ show('Funding your agent through PayPal sandbox…');
+ const r=await fetch('/api/demo/session',{method:'POST'}); const j=await r.json();
+ if(!r.ok) return show(j); sessionStorage.dkey=j.agent_key;
+ show(`Agent ${j.name} funded: $${j.balance_usd.toFixed(2)} (PayPal sandbox order ${j.paypal_order_id}, capture ${j.paypal_capture_id})`); dload(); }
+async function demoBuy(tool,url,purpose){ if(!DK()) return show('Start a demo session first.'); show('Guard is checking the purchase…');
+ const r=await fetch('/api/tools/'+tool,{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Key':DK()},body:JSON.stringify({url,purpose})});
+ const j=await r.json();
+ if(r.ok){ const res=j.result; show(`ALLOWED by ${j.guard.source}${j.guard.model?' ('+j.guard.model+')':''}: ${j.guard.reason}\nCharged $${j.charged_usd}, balance $${j.balance_usd}\n\n`+JSON.stringify(res,null,1).slice(0,1500)); }
+ else show((r.status===403?'BLOCKED: ':r.status===402?'PAYMENT REQUIRED: ':'')+JSON.stringify(j.detail||j,null,1));
+ dload(); }
+async function demoReport(){ if(!DK()) return show('Start a demo session first.'); const r=await fetch('/api/demo/report',{headers:{'X-Agent-Key':DK()}}); const j=await r.json(); show(j.report||j); }
+async function demoRefund(){ if(!DK()) return show('Start a demo session first.'); const r=await fetch('/api/demo/refund',{method:'POST',headers:{'X-Agent-Key':DK()}}); show(await r.json()); dload(); }
+fetch('/healthz').then(r=>r.json()).then(h=>{ if(h.demo_mode){ document.getElementById('demo').style.display=''; dload(); } });
+load(); setInterval(load,3000); setInterval(dload,4000);
 </script></body></html>

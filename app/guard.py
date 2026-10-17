@@ -50,8 +50,9 @@ INJECTION = re.compile(r"\b(ignore|disregard|override|bypass|forget)\b.{0,40}\b(
 
 
 class SpendGuard:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, ai_allowed=None):
         self.s = settings
+        self.ai_allowed = ai_allowed or (lambda: True)  # daily LLM budget hook
 
     def hard_limits(self, price: Decimal, balance: Decimal, spent_today: Decimal,
                     daily_cap: Decimal, per_call_cap: Decimal) -> Decision | None:
@@ -66,6 +67,10 @@ class SpendGuard:
     def evaluate(self, policy: str, tool: str, target: str, purpose: str, price: Decimal) -> Decision:
         if INJECTION.search(purpose or ""):  # cheap deterministic pre-filter, before any LLM call
             return Decision(False, "purpose contains instructions aimed at the guard (prompt injection)", "limit")
+        if llm.enabled(self.s) and not self.ai_allowed():
+            d = self._heuristic(policy, tool, target, purpose)
+            d.reason += " (daily AI budget used up)"
+            return d
         if llm.enabled(self.s):
             try:
                 return self._ai(policy, tool, target, purpose, price)

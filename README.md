@@ -27,7 +27,8 @@ priced from $0.01 to $0.03 per call and published at `/api/catalog` so agents ca
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload            # http://localhost:8000  (admin token: dev-admin)
+export ADMIN_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')   # or leave unset: a random one is written to ./.admin_token
+uvicorn app.main:app --reload            # http://localhost:8000
 ```
 By default `PAYPAL_MODE=mock` simulates PayPal so anyone can try it offline. For the real PayPal sandbox:
 
@@ -58,6 +59,15 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
    - After you approve, buys the data.
    - Gets the Facebook purchase **denied** by the guard.
    - Writes a brief.
+
+## Public demo mode (`DEMO_MODE=1`)
+- **Start demo session** gives a visitor their own agent with a fixed policy and caps ($0.05 per call, $0.50 per day). It's funded with $1.00 through a real PayPal **sandbox** capture using a test card. The visitor then buys lookups, sees the Gemini guard block Facebook, reads the AI report and refunds to PayPal.
+- Visitors only ever hold their own agent key. Owner endpoints need `ADMIN_TOKEN` (24+ random characters, required in demo mode, no default).
+- Rate limits, set by env vars:
+  - Demo sessions: 3 per IP per hour, 40 per day.
+  - Tool calls: 40 per IP per hour.
+  - Gemini calls: 400 per day, after which the guard falls back to the heuristic.
+  - PayPal sandbox calls: 120 per day.
 
 ## API
 | Method | Path | Who | What |

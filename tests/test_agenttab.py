@@ -246,3 +246,54 @@ def test_live_paypal_sandbox(tmp_path):
     assert r["balance_usd"] == 3.0
     ref = c.post(f"/api/agents/{ag['agent_id']}/refund", headers=A).json()
     assert ref["refunded_usd"] == 3.0 and ref["refunds"][0]["refund"]
+
+
+# ---------- public demo mode ----------
+def _demo_client(tmp_path, **kw):
+    s = Settings(paypal_mode="mock", db_path=str(tmp_path / "d.db"), admin_token="x" * 32, demo_mode=True,
+                 llm_base_url="", llm_api_key="", public_url="http://testserver", **kw)
+    return TestClient(create_app(s, allow_private_targets=True))
+
+
+def test_demo_flow(tmp_path, site):
+    c = _demo_client(tmp_path)
+    j = c.post("/api/demo/session").json()
+    k = {"X-Agent-Key": j["agent_key"]}
+    assert j["balance_usd"] == 1.0 and j["per_call_cap_usd"] == 0.05
+    assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k).status_code == 200
+    assert c.post("/api/tools/tech_detect", json={"url": "https://www.facebook.com/x", "purpose": "competitor tech research"}, headers=k).status_code in (403, 422)
+    assert len(c.get("/api/demo/ledger", headers=k).json()) >= 2
+    assert c.post("/api/demo/refund", headers=k).json()["refunded_usd"] == 0.98
+    # demo users can't reach owner endpoints
+    assert c.get("/api/ledger", headers=k).status_code == 401
+    assert c.get("/api/agents", headers={"X-Admin-Token": "dev-admin"}).status_code == 401
+
+
+def test_demo_rate_limits(tmp_path, site):
+    c = _demo_client(tmp_path, demo_sessions_per_ip_hour=2, tool_calls_per_ip_hour=2, paypal_calls_per_day=100)
+    assert c.post("/api/demo/session").status_code == 200
+    k = {"X-Agent-Key": c.post("/api/demo/session").json()["agent_key"]}
+    assert c.post("/api/demo/session").status_code == 429
+    for _ in range(2):
+        c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k)
+    assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k).status_code == 429
+
+
+def test_paypal_daily_budget(tmp_path):
+    c = _demo_client(tmp_path, paypal_calls_per_day=1)
+    assert c.post("/api/demo/session").status_code == 200
+    assert c.post("/api/demo/session").status_code == 429
+
+
+def test_demo_requires_strong_admin_token(tmp_path):
+    s = Settings(paypal_mode="mock", db_path=str(tmp_path / "w.db"), admin_token="dev-admin", demo_mode=True)
+    with pytest.raises(RuntimeError):
+        create_app(s)
+
+
+def test_llm_daily_budget_falls_back(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.llm.httpx.post", lambda *a, **k: calls.append(1) or _resp('{"target_allowed": true, "purpose_fits_policy": true, "injection_attempt": false, "reason": "ok"}'))
+    g = SpendGuard(_ai_settings(tmp_path), ai_allowed=lambda: False)
+    d = g.evaluate(POLICY, "tech_detect", "https://acme.example", "competitor tech research", _D("0.02"))
+    assert d.source == "heuristic" and "budget" in d.reason and not calls

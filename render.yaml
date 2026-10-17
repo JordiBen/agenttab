@@ -15,7 +15,9 @@ services:
       - key: PUBLIC_URL
         sync: false
       - key: ADMIN_TOKEN
-        generateValue: true
+        sync: false
+      - key: DEMO_MODE
+        value: "1"
       - key: GEMINI_API_KEY
         sync: false
       - key: LLM_MODEL
