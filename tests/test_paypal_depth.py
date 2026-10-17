@@ -344,7 +344,7 @@ def test_auto_topup_card_decline_is_402_and_credits_nothing(tmp_path):
     aid = ag["agent_id"]
     _saved(c, ag)
     c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 1, "monthly_cap_usd": 3}, headers=A)
-    c.app.state.paypal.mock_fail["charge_vault"] = "INSTRUMENT_DECLINED"
+    c.app.state.paypal.mock_fail["authorize_vault"] = "INSTRUMENT_DECLINED"
     r = buy(c, ag["api_key"], **MUG)
     assert r.status_code == 402 and "INSTRUMENT_DECLINED" in r.json()["auto_topup"]
     assert c.app.state.ledger.balance(aid) == 0 and c.app.state.ledger.purchases(aid) == []
@@ -407,6 +407,13 @@ def test_live_sandbox_authorize_capture_void_declines_and_vault():
     ch = pp.charge_vault(v["vault_id"], Decimal("1.00"), "ag_live", op_id=f"t4-{op}")
     assert pp.get_capture(ch["capture_id"])["status"] == "COMPLETED"
     pp.refund_capture(ch["capture_id"], Decimal("1.00"), op_id=f"t4-{op}")
+    h = pp.authorize_vault(v["vault_id"], Decimal("0.50"), "ag_live", op_id=f"t6-{op}")     # auto top-up: hold first
+    assert h["amount"] == Decimal("0.50")
+    hc = pp.capture_authorization(h["authorization_id"], Decimal("0.50"))
+    assert pp.get_capture(hc["capture_id"])["status"] == "COMPLETED"
+    pp.refund_capture(hc["capture_id"], Decimal("0.50"), op_id=f"t6-{op}")
+    h2 = pp.authorize_vault(v["vault_id"], Decimal("0.50"), "ag_live", op_id=f"t7-{op}")
+    assert pp.void_authorization(h2["authorization_id"]) == "VOIDED"
     pp.delete_vault_token(v["vault_id"])
     with pytest.raises(PayPalError):
         pp.charge_vault(v["vault_id"], Decimal("1.00"), "ag_live", op_id=f"t5-{op}")

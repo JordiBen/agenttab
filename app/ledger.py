@@ -210,11 +210,19 @@ class Ledger:
             self.db.commit()
 
     def _insert_entry(self, aid, kind, amount, tool="", target="", purpose="", decision="", reason="",
-                      paypal_ref="", capture_ref=""):
-        self.db.execute(
+                      paypal_ref="", capture_ref="") -> int:
+        return self.db.execute(
             "INSERT INTO entries(agent_id,ts,kind,amount_micro,tool,target,purpose,decision,reason,paypal_ref,capture_ref)"
             " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (aid, time.time(), kind, to_micro(amount), tool, target, purpose, decision, reason, paypal_ref, capture_ref))
+            (aid, time.time(), kind, to_micro(amount), tool, target, purpose, decision, reason, paypal_ref, capture_ref)).lastrowid
+
+    def set_entry_paypal_ref(self, entry_id: int, paypal_ref: str, reason: str | None = None) -> None:
+        with self.lock:
+            if reason is None:
+                self.db.execute("UPDATE entries SET paypal_ref=? WHERE id=?", (paypal_ref, entry_id))
+            else:
+                self.db.execute("UPDATE entries SET paypal_ref=?, reason=? WHERE id=?", (paypal_ref, reason, entry_id))
+            self.db.commit()
 
     def refunded_on_capture(self, capture_id: str) -> Decimal:
         r = self.db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM entries WHERE kind='refund' AND capture_ref=?",
@@ -224,7 +232,8 @@ class Ledger:
     def balance(self, aid: str) -> Decimal:
         r = self.db.execute(
             "SELECT COALESCE(SUM(CASE kind WHEN 'fund' THEN amount_micro WHEN 'charge' THEN -amount_micro"
-            " WHEN 'refund' THEN -amount_micro WHEN 'credit' THEN amount_micro ELSE 0 END),0)"
+            " WHEN 'refund' THEN -amount_micro WHEN 'credit' THEN amount_micro WHEN 'fund_reversal' THEN -amount_micro"
+            " ELSE 0 END),0)"
             " FROM entries WHERE agent_id=?", (aid,)).fetchone()[0]
         return from_micro(r)
 
@@ -266,15 +275,21 @@ class Ledger:
 
     def commit_tab_purchase(self, aid: str, vendor: str, item: str, quantity: int, amount: Decimal, target: str,
                             purpose: str, refund_deadline: float | None, decision_source: str, reason: str,
-                            fulfillment: str, tag: str, limits: dict) -> tuple[str | None, str]:
+                            fulfillment: str, tag: str, limits: dict, prefund: dict | None = None) -> tuple[str | None, str]:
         """Re-check balance, daily cap and vendor budget and write purchase + charge in ONE write transaction
         (BEGIN IMMEDIATE), so concurrent purchases can never overspend, even across processes.
-        limits = {"daily_cap": Decimal, "vendor_budget": Decimal | None}. Returns (purchase_id, "") or (None, why)."""
+        limits = {"daily_cap": Decimal, "vendor_budget": Decimal | None}. Returns (purchase_id, "") or (None, why).
+        prefund = {"amount", "tool", "reason"}: an auto top-up held (authorized, not yet captured) on the saved card.
+        Its fund entry is written in the same transaction, so it exists only if the purchase commits; the caller
+        captures the hold afterwards and sets the entry's PayPal ref (prefund["entry_id"] is filled in here)."""
         now = time.time()
         with self.lock:
             db = self.db
             db.execute("BEGIN IMMEDIATE")
             try:
+                if prefund:
+                    prefund["entry_id"] = self._insert_entry(aid, "fund", prefund["amount"], prefund["tool"],
+                                                             reason=prefund["reason"])
                 bal = self.balance(aid)
                 spent = self.spent_since(aid, now - 86400)
                 why = ""

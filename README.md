@@ -36,7 +36,7 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 |---|---|---|---|---|---|
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
 | Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + Gemini judge | **47/47** (100.0%) | 20/20 | 0 | 671.5 / 836.2 ms | 43 / 17794 |
+| Rules + Gemini judge | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
 
 | Category | Cases | No guard | Rules + keyword | Rules + Gemini |
 |---|---|---|---|---|
@@ -150,7 +150,10 @@ The guard makes the model answer three separate checks (target allowed, purpose 
 - **Saved card (Vault v3).** `POST /api/agents/{id}/saved-card` saves PayPal's sandbox test card (setup token → payment
   token; only brand and last 4 are shown). The owner can top up from it, or turn on auto top-up
   (`PUT /api/agents/{id}/auto-topup`, e.g. $1 at a time, at most $5 per 30 days). Auto top-up only runs for purchases
-  the guard already allowed, and never for a frozen agent. Charges are merchant-initiated (stored credential, unscheduled).
+  the guard already allowed, and never for a frozen agent. It places a merchant-initiated hold on the card (stored
+  credential, unscheduled), delivers the purchase, writes the top-up and the purchase in one ledger transaction, and only
+  then captures the hold. A failed delivery or a lost commit voids the hold. A capture declined after delivery reverses
+  the credit and freezes the agent. The response says what happened (`auto_topup`).
 
 ### Try the demo agent
 1. Open the dashboard, create an agent, and copy its key.
@@ -237,7 +240,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-133 offline tests (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+146 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,
