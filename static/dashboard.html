@@ -1,17 +1,17 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AgentTab: give your AI agent a tab, not a credit card</title>
-<meta name="description" content="AgentTab: a PayPal-funded spending tab for shop purchasing agents, with vendor budgets, human approvals, refunds and a live Gemini guard.">
-<meta name="theme-color" content="#06070b">
-<meta name="color-scheme" content="dark">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Cdefs%3E%3ClinearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22%3E%3Cstop offset=%220%22 stop-color=%22%23ffc46b%22/%3E%3Cstop offset=%221%22 stop-color=%22%23ff6a88%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%2232%22 height=%2232%22 rx=%229%22 fill=%22url(%23g)%22/%3E%3Cpath d=%22M9 23l7-14 7 14M12 18h8%22 stroke=%22%2310060a%22 stroke-width=%223%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
-<link rel="preload" href="/static/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
+<meta name="description" content="AgentTab: a PayPal-funded spending tab for shop purchasing agents, with vendor budgets, human approvals, refunds and a live AI guard.">
+<meta name="theme-color" content="#ecebe7">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%2338450f%22/%3E%3Cpath d=%22M6 24 10 20 14 24 18 20 22 24 26 20V6H6Z%22 fill=%22%23ecebe7%22/%3E%3C/svg%3E">
+<link rel="preload" href="/static/fonts/roundo/Roundo-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/app.css">
 <!-- AG Grid Community (MIT) is self-hosted. Bryntum Scheduler is the official 45-day trial package from npm: its commercial
      license doesn't allow redistributing it in this repo, so it's loaded from jsDelivr, pinned with Subresource Integrity. -->
 <script src="/static/vendor/ag-grid-community-33.3.2.min.js" integrity="sha384-e5dtcdU6W+6eGbKHSLjkBTaMThWX2E+jXV4KTlX+WmtwwBvVFBl8ohNejNV+PAHr" defer></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/scheduler.css" integrity="sha384-NGkA4OIgBKXLkL9GL+ZkKB5ngDxXNNkaM+RCCQyzZ4IpWkgXohwGVo4vq28S0TA7" crossorigin="anonymous" media="print" onload="this.media='all'">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/svalbard-dark.css" integrity="sha384-OtVLyCoI51cB8ETfdUjnI7tEIKr3nTV8iYffVzXP9LVAeLeECbrcPHeSPmsZ1fSa" crossorigin="anonymous" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/svalbard-light.css" integrity="sha384-oqO05cxkQZ4fVNcNA3KhcbsSpdbeKkE5ueV5QJSdirzC7TRcTR8ltD/1zWT26mYi" crossorigin="anonymous" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/fontawesome/css/fontawesome.css" integrity="sha384-N/HxUPjGYXuq90qENJW4UQ6Vq8yZ3/QICew+C8+4qRK01TPldW3DoXtdBFW1z7Cw" crossorigin="anonymous" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/fontawesome/css/solid.css" integrity="sha384-d0/7jDoEiY/WF2esXosaOUW5d0p4j5ydbnE5M4i05cBN4x7k4gZVMDgq1x0mcF1P" crossorigin="anonymous" media="print" onload="this.media='all'">
 <script src="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/scheduler.umd.js" integrity="sha384-t+5C/njp4jX6dGeABtlI2mRfcrCl5NxCFf7Cy68Ee6IA1KmPQSIhTFAYdNQ3GgxE" crossorigin="anonymous" defer></script>
@@ -20,131 +20,71 @@
 </head>
 <body>
 <a class="skip" href="#workspace">Skip to the live demo</a>
-<div class="noise" aria-hidden="true"></div>
 
 <nav class="nav" aria-label="Main"><div class="wrap">
- <a class="logo" href="#top" aria-label="AgentTab home"><span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 19 12 5l7 14M8 14h8"/></svg></span>AgentTab</a>
- <div class="nav-links"><a href="#how">How it works</a><a href="#features">Features</a><a href="#proof">Proof</a><a href="#workspace">Live demo</a><a href="https://github.com/JordiBen/agenttab">GitHub</a></div>
+ <a class="logo" href="#top" aria-label="AgentTab home">AgentTab</a>
+ <div class="nav-links"><a href="#how">How it works</a><a href="#proof">Proof</a><a href="#showcase">Scenarios</a><a href="#workspace">Live demo</a><a href="https://github.com/JordiBen/agenttab">GitHub</a></div>
  <span class="live off" id="navlive" role="status"><i></i><span>Checking AI…</span></span>
- <button class="btn btn-glow btn-sm" onclick="openDemo()">Open live demo</button>
+ <button class="btn btn-light btn-sm" onclick="openDemo()">Open live demo</button>
 </div></nav>
 
 <header class="hero" id="top">
- <div class="aurora" aria-hidden="true"><i class="a1"></i><i class="a2"></i><i class="a3"></i></div>
- <div class="gridlines" aria-hidden="true"></div>
  <div class="wrap hero-in">
+  <h1 class="reveal">Your agent gets a tab. Not your card.</h1>
   <div class="hero-copy">
-   <div class="eyebrow reveal"><span class="live off" id="herolive"><i></i><span>Checking AI…</span></span><span class="chip">PayPal sandbox · real captures, test money</span><a class="chip chip-mcp" id="heromcp" href="#mcp"><b>MCP server</b> · Works with any MCP client →</a></div>
-   <h1 class="reveal"><span class="l">Give your AI agent</span> <span class="l">a <span class="grad">tab</span>, not a</span> <span class="l"><span class="grad">credit card.</span></span></h1>
-   <p class="lead reveal">AgentTab funds a shop's purchasing agent through PayPal, then lets it buy only inside vendor budgets, human approvals and a live Gemini guard.</p>
-   <div class="cta reveal">
-    <button class="btn btn-glow btn-lg" onclick="openDemo()">Open live demo <span aria-hidden="true">→</span></button>
-    <button class="btn btn-glass btn-lg" onclick="runGauntletFromHero()"><span class="dot-red" aria-hidden="true"></span>Run the attack Gauntlet</button>
-   </div>
-   <p class="fine reveal">No sign-up. A funded sandbox agent opens in seconds. Free instance: the first load can take a minute.</p>
+   <p class="lead reveal">AgentTab funds a shop's purchasing agent through PayPal, then lets it buy only inside vendor budgets, caps, human approval and a live AI guard.</p>
+   <div class="reveal"><button class="btn btn-primary" onclick="overspend()">Try to make the agent overspend</button></div>
+   <p class="honest reveal"><span class="chip">PayPal sandbox · test money</span><span class="live off" id="herolive"><i></i><span>Checking AI…</span></span><a class="chip chip-mcp" id="heromcp" href="#mcp"><b>MCP server</b> · Works with any MCP client →</a></p>
+   <p class="fine reveal">No sign-up. A funded sandbox agent opens in seconds, then the injected purchase runs. Free instance: the first load can take a minute.</p>
   </div>
-
-  <div class="term glass reveal" aria-label="Guard decision feed">
-   <div class="term-bar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="mono">agenttab · guard.log</span><span class="term-mode" id="feedmode">replay</span></div>
+  <div class="receipt saw-b reveal" data-ui aria-label="Guard decision receipt">
+   <div class="r-head"><span><b>AgentTab</b><br>guard receipt · Lumen &amp; Loom</span><span class="term-mode" id="feedmode">replay</span></div>
    <div class="term-body" id="feed" aria-live="off"></div>
-   <div class="term-foot" id="feedfoot">Real Gemini decisions from our committed eval run, replayed. Your own demo purchases appear here live.</div>
-  </div>
- </div>
-
- <div class="wrap">
-  <div class="band glass reveal">
-   <div class="stat big"><div class="ctr"><b id="hnum" data-from="47">47</b><span class="arrow" aria-hidden="true">→</span><b class="zero" id="hzero">0</b></div><span id="hnumtxt">attack purchases in our test set → purchases that moved money</span></div>
-   <div class="stat"><b id="hlegit">20/20</b><span>legitimate buys go through</span></div>
-   <div class="stat"><b id="hfb">0</b><span>false blocks</span></div>
-   <div class="stat"><b id="hlat">660 ms</b><span>median Gemini decision</span></div>
+   <div class="term-foot" id="feedfoot">Replayed from our committed eval run (dry run: no money moved). Your own demo purchases print here live.</div>
   </div>
  </div>
 </header>
 
 <section id="how"><div class="wrap">
- <div class="sec-head reveal"><div class="kicker">How it works</div><h2>From "here's $100" to a <span class="grad">safe purchase</span>.</h2>
-  <p>The owner writes the rules once, in plain English. The agent shops on its own. Anything risky stops before money moves.</p></div>
- <div class="steps">
-  <div class="step glass reveal"><div class="n">01</div><h3>Fund the tab with PayPal</h3><p>One top-up through PayPal Checkout (Orders v2). When the tab runs dry the agent gets a 402 and asks its human for more.</p>
-   <div class="tags"><span>Real sandbox captures</span><span>Unused credit refunds to PayPal</span></div></div>
-  <div class="step glass reveal"><div class="n">02</div><h3>The agent buys inside the rules</h3><p>Deterministic layers first: allowlist, vendor budgets, caps, unsafe URLs, purpose required. Then Gemini judges what rules can't express.</p>
-   <div class="tags"><span>Injection blocked</span><span>AI down → a human decides</span></div></div>
-  <div class="step glass reveal"><div class="n">03</div><h3>You approve, refund and watch</h3><p>Purchases over $60 wait for your PayPal approval. Refund windows and webhooks land on a timeline that suggests refunds before they close.</p>
-   <div class="tags"><span>Verified webhooks</span><span>Nothing refunds without you</span></div></div>
+ <div class="sec-head reveal"><h2>Every purchase walks the same path.</h2>
+  <p>Segments are sized by where the 67 eval purchases were actually decided.</p></div>
+ <div class="how-bar reveal" id="howbar" data-ui>
+  <div class="seg" style="--n:1;--c:var(--ink)"><div class="fill"><span>Catalog &amp; allowlist</span><span class="count" data-k="rules"></span></div><p><b>First,</b> unknown vendors, unsafe URLs, empty purposes and injected instructions stop here.</p></div>
+  <div class="seg" style="--n:1;--c:var(--ink-80)"><div class="fill"><span>Caps &amp; budgets</span><span class="count" data-k="caps"></span></div><p><b>Then</b> per-purchase, daily and 30-day vendor limits, in whole cents.</p></div>
+  <div class="seg" style="--n:1;--c:var(--ink-60)"><div class="fill"><span>AI guard</span><span class="count" data-k="ai"></span></div><p><b>Then</b> the AI judges what rules can't express. If it's unavailable, a human decides.</p></div>
+  <div class="seg" style="--n:1;--c:var(--stamp-hold)"><div class="fill"><span>Human approval</span><span class="count" data-k="hold"></span></div><p><b>Then</b> anything over $60 waits for the owner.</p></div>
+  <div class="seg" style="--n:1;--c:var(--ink-20);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div><p><b>Finally</b> the tab pays, through PayPal sandbox.</p></div>
  </div>
-</div></section>
-
-<section id="features"><div class="wrap">
- <div class="sec-head reveal"><div class="kicker">Features</div><h2>Every guardrail a purchasing agent needs.<br><span class="dim">None it can argue its way past.</span></h2></div>
  <div class="bento">
-  <article class="tile t-judge glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">✦</span><h3>An AI judge for what rules can't express</h3></div>
-   <p>Gemini answers three separate questions (target allowed? purpose fits the policy? injection attempt?) and approves only if all pass. Every decision is logged with the layer that made it.</p>
-   <div class="trace" aria-label="Example decision trace">
-    <div class="trace-buy"><div><div class="what">ShopSuite · Inventory SaaS, 2 seats</div><div class="amt">$78.00</div></div><span class="pill warn">Needs owner</span></div>
-    <ol>
-     <li><span class="k">catalog</span><span class="d">Known vendor and item</span><span class="pill ok">pass</span></li>
-     <li><span class="k">purpose</span><span class="d">"Track stock across our two storage rooms"</span><span class="pill ok">pass</span></li>
-     <li><span class="k">injection</span><span class="d">No instructions aimed at the guard</span><span class="pill ok">pass</span></li>
-     <li><span class="k">allowlist</span><span class="d">ShopSuite is an approved vendor</span><span class="pill ok">pass</span></li>
-     <li><span class="k">caps</span><span class="d">$78 ≤ $120 per purchase, daily cap OK</span><span class="pill ok">pass</span></li>
-     <li><span class="k">budget</span><span class="d">$0 of $300 used this 30 days</span><span class="pill ok">pass</span></li>
-     <li><span class="k">gemini</span><span class="d">Business software, fits the policy</span><span class="pill ok">pass</span></li>
-     <li><span class="k">approval</span><span class="d">Above $60: owner pays it via PayPal</span><span class="pill warn">hold</span></li>
-    </ol>
-   </div>
-  </article>
-  <article class="tile t-tab glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">$</span><h3>A prepaid tab, funded by PayPal</h3></div>
-   <p>Orders v2 create → approve → capture. Integer micro-dollar ledger; parallel buys can't overspend.</p>
-   <svg class="spark-lg" viewBox="0 0 300 70" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="sg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#ffb35c" stop-opacity=".45"/><stop offset="1" stop-color="#ffb35c" stop-opacity="0"/></linearGradient></defs>
-    <path d="M0 8 L40 8 L40 22 L95 22 L95 26 L150 26 L150 38 L200 38 L200 12 L250 12 L250 30 L300 30 L300 70 L0 70Z" fill="url(#sg)"/><path d="M0 8 L40 8 L40 22 L95 22 L95 26 L150 26 L150 38 L200 38 L200 12 L250 12 L250 30 L300 30" fill="none" stroke="#ffb35c" stroke-width="2"/></svg>
-   <div class="mini-legend"><span>top-up</span><span>buys</span><span>refund</span></div>
-  </article>
-  <article class="tile t-budget glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">◔</span><h3>Vendor budgets</h3></div>
-   <p>Each approved vendor gets its own rolling 30-day budget. Others are blocked before any AI runs.</p>
-   <div class="mbars"><div><span>SampleBox</span><i style="--w:66%"></i></div><div><span>ShopSuite</span><i style="--w:40%"></i></div><div><span>SiteScope</span><i style="--w:12%"></i></div></div>
-  </article>
-  <article class="tile t-appr glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">✓</span><h3>Human approval over $60</h3></div>
-   <p>Big buys return 202 with a PayPal link. The owner pays that one purchase, or rejects it.</p>
-   <div class="flow"><span class="pill blue">202</span><span class="fl" aria-hidden="true"></span><span class="pill warn">owner</span><span class="fl" aria-hidden="true"></span><span class="pill ok">paid</span></div>
-  </article>
-  <article class="tile t-time glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">↺</span><h3>Refund windows on a live timeline</h3></div>
-   <p>Budgets, approvals, refund deadlines and renewals on a Bryntum Scheduler, moved by PayPal webhooks. The scheduler <em>proposes</em> refunds; you confirm.</p>
-   <div class="tl" aria-hidden="true"><i style="--l:2%;--w:60%;--c:#60a5fa"></i><i style="--l:30%;--w:40%;--c:#34d399"></i><i style="--l:55%;--w:30%;--c:#f472b6"></i><b style="--l:42%"></b></div>
-  </article>
-  <article class="tile t-hook glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">⚡</span><h3>Verified webhooks</h3></div>
-   <p>Every PayPal event is checked with verify-webhook-signature and applied exactly once.</p>
-  </article>
-  <article class="tile t-ssrf glass reveal">
-   <div class="t-head"><span class="ico" aria-hidden="true">⛨</span><h3>SSRF-safe fetching</h3></div>
-   <p>Every redirect hop must resolve to a public IP; the request is pinned to it. 2 MB cap.</p>
-  </article>
-  <a class="tile t-mcp glass reveal" id="bentomcp" href="#mcp">
-   <div class="t-head"><span class="ico" aria-hidden="true">⌘</span><h3>An MCP server for any agent</h3></div>
-   <p>The same guarded tab as MCP tools (<code>buy</code>, <code>get_tab</code>, <code>request_topup</code>…) over Streamable HTTP. Every call goes through the same guard; no owner tools are exposed.</p>
-   <span class="t-link">Connect a client →</span>
-  </a>
+  <article class="tile reveal"><h3>A prepaid tab, funded by PayPal</h3><p>Orders v2 create → approve → capture. Integer micro-dollar ledger; parallel buys can't overspend.</p></article>
+  <article class="tile reveal"><h3>Vendor budgets</h3><p>Each approved vendor gets its own rolling 30-day budget. Others are blocked before any AI runs.</p></article>
+  <article class="tile reveal"><h3>Human approval over $60</h3><p>Big buys return 202 with a PayPal link. The owner pays that one purchase, or rejects it.</p></article>
+  <article class="tile reveal"><h3>Refund windows on a live timeline</h3><p>Budgets, approvals, refund deadlines and renewals on a Bryntum Scheduler, moved by PayPal webhooks. The scheduler <em>proposes</em> refunds; you confirm.</p></article>
+  <article class="tile reveal"><h3>Verified webhooks, SSRF-safe fetching</h3><p>Every PayPal event is checked with verify-webhook-signature and applied exactly once. Every redirect hop must resolve to a public IP.</p></article>
+  <a class="tile t-mcp reveal" id="bentomcp" href="#mcp"><h3>An MCP server for any agent</h3><p>The same guarded tab as MCP tools (<code>buy</code>, <code>get_tab</code>, <code>request_topup</code>…) over Streamable HTTP. No owner tools are exposed.</p><span class="t-link">Connect a client →</span></a>
  </div>
 </div></section>
 
-<section id="proof"><div class="wrap">
- <div class="sec-head reveal"><div class="kicker">Proof</div><h2>Measured, <span class="grad">not claimed</span>.</h2>
-  <p>67 labeled purchases (47 attacks or rule violations, 20 legitimate) run through the same <code>decide()</code> the server uses. Or run a random sample yourself, live.</p></div>
+<section id="proof" class="band saw-tb"><div class="wrap">
+ <div class="tiles" id="tiles">
+  <div class="ptile lead reveal"><h2>Measured, not claimed.</h2><p id="tilesrc">67 labeled purchases (47 attacks or rule violations, 20 legitimate) run through the same <code>decide()</code> the server uses. The set isn't held out.</p></div>
+  <div class="ptile reveal"><span class="lbl">Rules alone</span><div class="big" id="tkw">–</div><p id="tkwtxt">attacks stopped by the deterministic rules and keyword check</p></div>
+  <div class="ptile reveal"><span class="lbl">Rules + AI <span class="stalepill" id="tstale" hidden>previous catalog</span></span><div class="big" id="tai">–</div><p id="taitxt">attacks stopped with the AI guard added</p></div>
+  <div class="ptile reveal"><span class="lbl">No guard</span><div class="big" id="tnone">–</div><p>attacks a naive agent would stop: it buys everything</p></div>
+  <div class="ptile reveal"><span class="lbl">Legitimate buys</span><div class="big" id="hlegit">–</div><p>handled right, <span id="hfb">–</span> wrongly blocked</p></div>
+  <div class="ptile reveal"><span class="lbl">AI decision time</span><div class="big" id="hlat">–</div><p>median per decision in the eval, including the AI round trip</p></div>
+  <div class="ptile reveal"><span class="lbl">Who stopped what</span><p id="tlayers">–</p></div>
+ </div>
  <div class="proof">
-  <div class="card glass reveal" id="score"><h3>Safety scorecard</h3><p class="sub" id="scoretxt">loading…</p>
+  <div class="card reveal" id="score"><h3>Safety scorecard</h3><p class="sub" id="scoretxt">loading…</p>
    <div class="tbl-wrap"><table class="tbl" id="scoretbl"><thead><tr><th>Mode</th><th>Attacks stopped</th><th>Legit OK</th><th>False blocks</th><th>p50 / p95</th><th>LLM calls</th></tr></thead><tbody></tbody></table></div>
    <div class="cats" id="cats"></div>
-   <div class="legend"><span style="--c:#475569">No guard</span><span style="--c:#7dd3fc">Rules + keywords</span><span style="--c:linear-gradient(90deg,#ffb35c,#ff6a88)">Rules + Gemini</span></div>
+   <div class="legend"><span style="--c:var(--ink-20)">No guard</span><span style="--c:var(--ink-60)">Rules + keywords</span><span style="--c:var(--ink)">Rules + AI</span></div>
    <p class="sub" style="margin-top:12px">Source: <a href="https://github.com/JordiBen/agenttab/tree/main/eval">eval/cases.json</a> and results.json. The purpose rule was added after a first run (45/47); the set isn't held out.</p>
   </div>
-  <div class="card glass reveal" id="gauntlet"><h3>Gauntlet <span class="pill bad" style="vertical-align:2px">live</span></h3>
+  <div class="card reveal" id="gauntlet"><h3>Gauntlet <span class="pill bad">live</span></h3>
    <p class="sub">One random attack from each of 8 categories plus 2 legitimate buys, through the real guard, right now. Dry run: no money moves, PayPal isn't called.</p>
-   <button class="btn btn-glow" id="gbtn" onclick="runGauntlet()">Run the Gauntlet live</button>
+   <button class="btn btn-light" id="gbtn" onclick="runGauntlet()">Run the Gauntlet live</button>
    <div class="g-sum" id="gsum"></div>
    <div class="g-list" id="glist"><div class="g-empty" aria-hidden="true">
     <div><span class="pill bad">direct injection</span><i></i></div><div><span class="pill bad">indirect injection</span><i></i></div>
@@ -152,23 +92,56 @@
     <div><span class="pill bad">look-alike URL</span><i></i></div><div><span class="pill bad">forbidden vendor</span><i></i></div>
     <div><span class="pill bad">budget splitting</span><i></i></div><div><span class="pill bad">vague purpose</span><i></i></div>
     <div><span class="pill ok">legitimate</span><i></i></div><div><span class="pill ok">legitimate</span><i></i></div>
-    <p>10 live decisions · about 5 Gemini calls · 0 PayPal calls</p></div></div>
+    <p>10 live decisions · about 5 AI calls · 0 PayPal calls</p></div></div>
   </div>
  </div>
 </div></section>
 
-<section class="ws" id="workspace"><div class="wrap">
- <div class="sec-head reveal"><div class="kicker">Live demo</div><h2>Lumen &amp; Loom's purchasing agent</h2>
+<section id="showcase"><div class="wrap">
+ <div class="sec-head reveal"><h2>Five purchases, five real verdicts.</h2>
+  <p>Each one is a case from the committed eval run, with the verdict and the layer that made it.</p></div>
+ <div class="show">
+  <ul class="scen" role="tablist" aria-label="Purchase scenarios" id="scen">
+   <li><button role="tab" aria-selected="true" aria-controls="stage" data-case="legit-12">A supplier mug sample</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="legit-15">Two SaaS seats</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="indirect_injection-05">An instruction injected from a web page</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="forbidden_vendor-04">A gift card</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="social_target-01">Research on a social network</button></li>
+  </ul>
+  <div class="stage saw-tb" id="stage" role="tabpanel" aria-live="polite" data-ui><p class="purp">Loading the eval run…</p></div>
+ </div>
+ <div class="shots">
+  <figure class="shot saw-b reveal"><img src="/static/img/demo-workspace.jpg" alt="The AgentTab live demo: guided purchase buttons, the agent console and the tab balance" loading="lazy" width="1184" height="888"><figcaption>The live demo workspace</figcaption></figure>
+  <figure class="shot saw-b reveal"><img src="/static/img/purchases-grid.jpg" alt="The purchases grid with paid, held and blocked purchases and their deciding layer" loading="lazy" width="1184" height="448"><figcaption>Purchases, with the layer that decided</figcaption></figure>
+  <figure class="shot saw-b reveal"><img src="/static/img/schedule.jpg" alt="The Bryntum schedule with vendor budgets, an approval and refund windows" loading="lazy" width="1184" height="677"><figcaption>Budgets and refund windows on the schedule</figcaption></figure>
+  <figure class="shot saw-b reveal"><img src="/static/img/owner-console.jpg" alt="The ledger: every top-up, charge, denial and refund with its PayPal reference" loading="lazy" width="1184" height="448"><figcaption>The ledger, with PayPal references</figcaption></figure>
+ </div>
+</div></section>
+
+<section id="mcpinfo"><div class="wrap mcpinfo">
+ <div class="sec-head reveal" style="margin:0"><h2>Works with any MCP client.</h2>
+  <p>Six guarded tools over Streamable HTTP, authenticated with the agent key only. Every call goes through the same guard and tab.</p>
+  <p><a class="btn btn-light" href="#mcp">Get a demo key</a></p></div>
+ <pre class="reveal" data-ui aria-label="MCP client config">{"mcpServers": {
+  "agenttab": {
+   "url": "https://agenttab.onrender.com/mcp",
+   "headers": {"X-Agent-Key": "atk_…"}
+  }
+}}</pre>
+</div></section>
+
+<section class="ws band saw-t" id="workspace"><div class="wrap">
+ <div class="sec-head reveal"><h2>Lumen &amp; Loom's purchasing agent</h2>
   <p>A small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p></div>
  <div id="demo" class="stack" style="display:none">
   <div class="grid-ws">
    <div class="stack">
-   <div class="card glass" id="dguided"><h3>Guided demo</h3>
+   <div class="card" id="dguided"><h3>Guided demo</h3>
     <p class="sub">Vendors have 30-day budgets; anything over <b>$60</b> needs your approval; samples and SaaS can be refunded for <b>7 days</b> (research data is final, failed calls are never charged).</p>
     <button type="button" class="policy clamp" onclick="this.classList.toggle('clamp')" aria-label="Owner's policy (click to expand)"><b>Owner's policy</b> <span class="more">expand</span><span id="dpolicy"></span></button>
     <p id="dexpired" class="note" style="display:none"></p>
     <div class="steplist">
-     <button class="btn btn-glow" onclick="demoStart()">1. Start demo session <span class="price">funds $100</span></button>
+     <button class="btn btn-primary" onclick="demoStart()">1. Start demo session <span class="price">funds $100</span></button>
      <button class="btn btn-step ok" onclick="demoBuy('samplebox','ceramic-mug-sample','','Quality-check a stoneware mug from a supplier before we stock it')">2. Buy a supplier mug sample <span class="price">$18</span></button>
      <button class="btn btn-step ok" onclick="demoBuy('sitescope-data','tech_detect','https://www.brooklinen.com','Compare the e-commerce platform of competitor Brooklinen with ours')">3. Competitor research <span class="price">$24</span></button>
      <button class="btn btn-step warn" onclick="demoBuy('shopsuite','inventory-seat','','Two inventory software seats to track stock across our two storage rooms',2)">4. Inventory SaaS, 2 seats <span class="price">$78 <span class="long">→ </span>needs approval</span></button>
@@ -184,7 +157,7 @@
       <button class="btn btn-ghost" onclick="demoReport()">AI spend report</button><button class="btn btn-ghost" onclick="demoRefund()">Refund unused tab credit</button></div>
     </div>
    </div>
-   <div class="card glass" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue" style="vertical-align:2px">MCP 2026-07-28</span></h3></div>
+   <div class="card" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue">MCP 2026-07-28</span></h3></div>
     <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
     <div class="mcp-grid">
      <div><label>Endpoint (Streamable HTTP)</label><code class="mcp-val" id="mcpurl"></code></div>
@@ -198,21 +171,21 @@
    </div>
    </div>
    <div class="stack">
-    <div class="card glass"><h3>Agent console</h3><p class="sub">What the guard decided, and why.</p>
+    <div class="card"><h3>Agent console</h3><p class="sub">What the guard decided, and why.</p>
      <div class="verdict" id="dverdict" aria-live="polite"></div><p id="dbusy" class="note" role="status" style="display:none"></p><pre class="console" id="dout"></pre></div>
-    <div class="card glass"><h3>Tab and vendor budgets</h3><div id="dbudgets"><p class="sub">Start a session to see the tab.</p></div></div>
+    <div class="card"><h3>Tab and vendor budgets</h3><div id="dbudgets"><p class="sub">Start a session to see the tab.</p></div></div>
    </div>
   </div>
-  <div class="card glass"><div class="card-head"><h3>Schedule <span class="pill blue" style="vertical-align:2px">Bryntum Scheduler</span></h3>
+  <div class="card"><div class="card-head"><h3>Schedule <span class="pill blue">Bryntum Scheduler</span></h3>
     <button class="btn btn-ghost btn-sm" onclick="demoFF()">Demo clock: jump 6 days ahead</button></div>
    <p class="sub">Budgets, approvals, refund windows and renewals, moved by signature-verified PayPal webhooks. Right-click an event for actions.</p>
    <div id="dsched" class="sched"></div><div id="dsugg" style="margin-top:10px"></div></div>
-  <div class="card glass"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h"></div></div>
-  <div class="card glass"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h"></div></div>
+  <div class="card"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h"></div></div>
+  <div class="card"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h"></div></div>
  </div>
- <div id="nodemo" class="card glass" style="display:none"><h3>Public demo is off on this server</h3><p class="sub">Use the owner console below with your admin token.</p></div>
+ <div id="nodemo" class="card" style="display:none"><h3>Public demo is off on this server</h3><p class="sub">Use the owner console below with your admin token.</p></div>
 
- <details class="owner glass" style="margin-top:20px" id="ownerhint"><summary>Owner console <span class="dim">(admin token required)</span></summary><div class="inner">
+ <details class="owner" style="margin-top:20px" id="ownerhint"><summary>Owner console <span class="dim">(admin token required)</span></summary><div class="inner">
   <div class="row">
    <div><label for="tok">Admin token</label><input id="tok" type="password" placeholder="admin token" onchange="sessionStorage.tok=this.value;load()"></div>
    <div><label for="name">Agent name</label><input id="name" value="research-agent"></div>
@@ -223,7 +196,7 @@
   <div class="row"><button class="btn btn-light" onclick="createAgent()">Create agent</button><span id="newkey" class="mono" style="overflow-wrap:anywhere"></span></div>
   <div><h3>Agents</h3><div id="agents" class="grid-h" style="margin-top:8px"></div>
    <div class="row" style="margin-top:10px"><div style="flex:0 1 110px"><input id="amt" value="100.00" aria-label="Amount in USD"></div>
-    <button class="btn btn-glow" onclick="topup()">Fund selected with PayPal</button>
+    <button class="btn btn-primary" onclick="topup()">Fund selected with PayPal</button>
     <button class="btn btn-ghost" id="cardbtn" style="display:none" onclick="cardTopup()">Sandbox test-card top-up</button>
     <button class="btn btn-ghost" onclick="refund()">Refund unused credit</button><button class="btn btn-ghost" onclick="report()">AI spend report</button>
     <button class="btn btn-ghost" onclick="reconcile()">Reconcile with PayPal</button><button class="btn btn-ghost" onclick="unfreeze()">Unfreeze</button></div>
@@ -234,9 +207,13 @@
  </div></details>
 </div></section>
 
-<footer><div class="wrap">
- <span><b>AgentTab</b> · MIT · <a href="https://github.com/JordiBen/agenttab">GitHub</a> · <a href="/docs">API docs</a></span>
- <span>PayPal sandbox only, no real money · Bryntum Scheduler evaluation build · Inter (SIL OFL) · AG Grid Community (MIT)</span>
+<footer class="saw-t"><div class="wrap">
+ <div class="wm" aria-label="AgentTab"><b style="--h:72px">A</b><b style="--h:56px">g</b><b style="--h:64px">e</b><b style="--h:52px">n</b><b style="--h:68px">t</b><b style="--h:80px">T</b><b style="--h:58px">a</b><b style="--h:70px">b</b></div>
+ <div class="fcols">
+  <div><h3>Project</h3><ul><li><a href="https://github.com/JordiBen/agenttab">GitHub</a></li><li><a href="/docs">API docs</a></li><li>MIT licence</li></ul></div>
+  <div><h3>On this page</h3><ul><li><a href="#how">How it works</a></li><li><a href="#proof">Proof</a></li><li><a href="#workspace">Live demo</a></li></ul></div>
+  <div><h3>Honest labels</h3><ul><li>PayPal sandbox only, no real money</li><li>Bryntum Scheduler evaluation build</li><li>Roundo (SIL OFL) · AG Grid Community (MIT)</li></ul></div>
+ </div>
 </div></footer>
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 </body></html>

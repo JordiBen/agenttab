@@ -312,7 +312,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return FileResponse(STATIC / "dashboard.html")
 
     STATIC_FILES = {"schedule.js": "application/javascript", "app.css": "text/css", "app.js": "application/javascript",
-                    "fonts/InterVariable.woff2": "font/woff2", "fonts/Inter-OFL.txt": "text/plain",
+                    "fonts/roundo/Roundo-Variable.woff2": "font/woff2", "fonts/roundo/License/OFL.txt": "text/plain",
+                    # real screenshots of AgentTab itself (local mock run), used on the landing page
+                    "img/demo-workspace.jpg": "image/jpeg", "img/purchases-grid.jpg": "image/jpeg",
+                    "img/schedule.jpg": "image/jpeg", "img/owner-console.jpg": "image/jpeg",
                     "vendor/ag-grid-community-33.3.2.min.js": "application/javascript",
                     "vendor/ag-grid-LICENSE.txt": "text/plain"}
 
@@ -321,7 +324,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if path not in STATIC_FILES:          # explicit allowlist: nothing else under static/ is served
             raise HTTPException(404)
         return FileResponse(STATIC / path, media_type=STATIC_FILES[path],
-                            headers={"Cache-Control": "public, max-age=604800, immutable" if path.startswith(("fonts/", "vendor/"))
+                            headers={"Cache-Control": "public, max-age=604800, immutable" if path.startswith(("fonts/", "vendor/", "img/"))
                                      else "no-cache"})
 
     @app.get("/healthz")
@@ -1503,7 +1506,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not f.exists():
             raise HTTPException(404, "no eval results yet")
         j = json.loads(f.read_text())
-        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "notes") if k in j}
+        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "stale_modes", "notes") if k in j}
 
     @app.get("/api/replay")
     def replay():

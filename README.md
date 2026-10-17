@@ -254,7 +254,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-190 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+205 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,
@@ -263,7 +263,7 @@ procurement, webhooks, schedule, eval runner, and a docs check that every test t
 them on Python 3.12 and 3.13, plus the offline eval, which must match the committed scorecard.
 
 ## Built with
-PayPal Orders v2, Payments v2, Vault v3 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Inter (SIL OFL), any OpenAI-compatible LLM
+PayPal Orders v2, Payments v2, Vault v3 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Roundo by Indian Type Foundry (SIL OFL, self-hosted), any OpenAI-compatible LLM
 (Gemini 3.5 Flash-Lite by default), and Render (one-click `render.yaml`).
 
 MIT License · © WebIntel Tools

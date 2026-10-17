@@ -8,10 +8,12 @@ const PILL = {completed: 'ok', allow: 'ok', fund: 'ok', charge: 'blue', denied: 
   expired: 'gray', paying: 'warn', completing: 'warn', refunding: 'violet', failed_refunded: 'gray',
   failed_voided: 'gray', capture_declined: 'bad', frozen: 'bad', active: 'ok', reconciled: 'ok', mismatch: 'bad'};
 // Purchase statuses from authorize-then-capture approvals, in plain words, with a hover explanation.
-const LABEL = {failed_voided: 'hold cancelled', capture_declined: 'charge declined'};
+// Stamp vocabulary (docs/DESIGN.md): paid / held / blocked / refunded. Text keeps its case; only stamps are capitals.
+const LABEL = {failed_voided: 'hold cancelled', capture_declined: 'charge declined', completed: 'paid', pending_approval: 'held',
+  denied: 'blocked', deny: 'blocked', charge: 'paid', refunded: 'refunded', refund: 'refunded'};
 const TIP = {failed_voided: 'The PayPal hold was voided, so nothing was charged (vendor failure, expiry, frozen agent or amount mismatch).',
   capture_declined: 'PayPal declined the charge after delivery. The agent is frozen until the owner reconciles and unfreezes it.',
-  expired: 'The approval link expired before anyone paid.'};
+  expired: 'The approval link expired before anyone paid.', pending_approval: 'Held: waiting for a human to approve or reject it.'};
 const pill = (v, label, tip) => `<span class="pill ${PILL[v] || 'gray'}"${(tip || TIP[v]) ? ` title="${enc(tip || TIP[v])}"` : ''}>${enc(label || LABEL[v] || String(v).replace(/_/g, ' '))}</span>`;
 const frozenBadge = a => a && a.frozen ? pill('frozen', 'frozen', 'Frozen: ' + (a.frozen_reason || 'no new spending until the owner unfreezes it')) : pill('active', 'active', 'Spending allowed');
 const pillCell = p => p.value == null ? '' : pill(p.value);
@@ -26,14 +28,14 @@ function toast(kind, title, text = '') {
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, 4600);
 }
 
-// AG Grid theme in the page's look (dark)
-const gridTheme = agGrid.themeQuartz.withParams({fontFamily: 'Inter, system-ui, sans-serif', fontSize: 13, headerFontWeight: 600,
-  backgroundColor: '#0c0e14', foregroundColor: '#dfe3ec', headerBackgroundColor: '#11141c', headerTextColor: '#8a90a2',
-  chromeBackgroundColor: '#0f1118', borderColor: 'rgba(255,255,255,0.08)', rowBorder: {color: 'rgba(255,255,255,0.05)'},
-  wrapperBorderRadius: 12, accentColor: '#ffb35c', oddRowBackgroundColor: '#0e1017', rowHoverColor: 'rgba(255,179,92,0.06)',
-  selectedRowBackgroundColor: 'rgba(255,179,92,0.10)', spacing: 7, browserColorScheme: 'dark'});
+// AG Grid v33 Theming API in the design tokens (olive on bone, Roundo); no CSS overrides
+const gridTheme = agGrid.themeQuartz.withParams({fontFamily: 'Roundo, system-ui, sans-serif', fontSize: 13.5, headerFontWeight: 600,
+  backgroundColor: '#f7f6f2', foregroundColor: '#38450f', headerBackgroundColor: '#e1dfd9', headerTextColor: '#38450f',
+  chromeBackgroundColor: '#f7f6f2', borderColor: '#e1dfd9', rowBorder: {color: '#ecebe7'}, wrapperBorderRadius: 6, borderRadius: 6,
+  accentColor: '#38450f', oddRowBackgroundColor: '#f7f6f2', rowHoverColor: '#ecebe7', selectedRowBackgroundColor: '#e1dfd9',
+  spacing: 7, browserColorScheme: 'light'});
 const DEF = {flex: 1, minWidth: 90, sortable: true, filter: true, resizable: true};
-const DENY_ROW = {background: 'rgba(251,113,133,0.06)'};
+const DENY_ROW = {background: '#f3e6e3'};
 
 // ---- owner console ----
 localStorage.removeItem('tok');   // the admin token lives only in this tab's sessionStorage
@@ -41,7 +43,7 @@ if (sessionStorage.tok) { $('tok').value = sessionStorage.tok; $('ownerhint').op
 const T = () => $('tok').value;
 const H = () => ({'Content-Type': 'application/json', 'X-Admin-Token': T()});
 const money = p => p.value == null ? '' : '$' + Number(p.value).toFixed(4);
-const agentsGrid = agGrid.createGrid($('agents'), {theme: gridTheme,
+const agentsGrid = agGrid.createGrid($('agents'), {theme: gridTheme, rowData: [],
   rowSelection: {mode: 'singleRow'},
   columnDefs: [{field: 'name'}, {headerName: 'Status', field: 'frozen', cellRenderer: p => frozenBadge(p.data), minWidth: 105, maxWidth: 120, tooltipValueGetter: p => p.data.frozen_reason || ''}, {field: 'agent_id'}, {field: 'balance_usd', headerName: 'Balance', valueFormatter: money},
     {field: 'spent_24h_usd', headerName: 'Spent 24h', valueFormatter: money}, {field: 'daily_cap_usd', headerName: 'Daily cap', valueFormatter: money, editable: true},
@@ -55,7 +57,7 @@ const ledgerCols = [{field: 'ts', headerName: 'Time', sort: 'desc', valueFormatt
   {field: 'amount_usd', headerName: 'Amount', valueFormatter: money, minWidth: 95, maxWidth: 110}, {field: 'tool', minWidth: 170, tooltipField: 'tool'},
   {field: 'target', flex: 1.2, minWidth: 150, tooltipField: 'target'},
   {field: 'purpose', flex: 2, minWidth: 180, tooltipField: 'purpose'}, {field: 'reason', flex: 2, minWidth: 200, tooltipField: 'reason'}, {field: 'paypal_ref', headerName: 'PayPal ref', minWidth: 130}];
-const ledgerGrid = agGrid.createGrid($('ledger'), {theme: gridTheme, columnDefs: [{field: 'agent_id'}, ...ledgerCols], defaultColDef: DEF});
+const ledgerGrid = agGrid.createGrid($('ledger'), {theme: gridTheme, columnDefs: [{field: 'agent_id'}, ...ledgerCols], defaultColDef: DEF, rowData: []});
 async function load() {
   if (!T()) return;
   const a = await fetch('/api/agents', {headers: H()}); if (a.ok) agentsGrid.setGridOption('rowData', await a.json());
@@ -91,76 +93,101 @@ async function refund() { const a = sel(); if (!a) return;
 async function report() { const a = sel(); if (!a) return;
   const r = await fetch('/api/agents/' + a.agent_id + '/report', {headers: H()}); const j = await r.json(); $('report').textContent = j.report || JSON.stringify(j); }
 
-// ---- health: Live Gemini badge ----
+// ---- health: live AI guard status (real state from /healthz; no model name in the badge) ----
+const LIVE_TXT = {live: 'Live AI guard', busy: 'AI busy, human approval', off: 'Keyword mode (no AI configured)'};
 function setLive(h) {
+  const st = h.ai_status || (h.ai_guard ? 'live' : 'off');
   for (const id of ['navlive', 'herolive']) {
-    const el = $(id); el.classList.toggle('off', !h.ai_guard);
-    el.querySelector('span').textContent = h.ai_guard ? 'Live Gemini · ' + h.models[0] : 'Keyword mode (no LLM configured)';
-    el.title = h.ai_guard ? 'Every purchase in the demo is judged by Gemini in real time. If Gemini is unavailable, the purchase is held for a human.' : '';
+    const el = $(id); el.classList.toggle('off', st === 'off'); el.classList.toggle('busy', st === 'busy');
+    el.querySelector('span').textContent = LIVE_TXT[st] || LIVE_TXT.off;
+    el.title = st === 'live' ? 'Every purchase in the demo is judged by the AI guard in real time. If it is unavailable, the purchase is held for a human.' : '';
   }
 }
 
 // ---- hero feed: real decisions, typed out like a log ----
-const FEED = {queue: [], live: [], busy: false, replay: [], i: 0};
-const OUT = {allow: 'ALLOW', block: 'BLOCK', approval: 'HOLD'};
+const FEED = {queue: [], live: [], busy: false, replay: [], i: 0, visible: true, all: []};
+// Stamps appear only on real decisions. A replayed eval line is a dry run, so an allowed one reads ALLOWED, never PAID.
+const STAMP = {block: ['block', 'BLOCKED'], approval: ['hold', 'HELD'], refund: ['refund', 'REFUNDED']};
+const stampFor = (outcome, live) => outcome === 'allow' ? (live ? ['paid', 'PAID'] : ['pass', 'ALLOWED']) : (STAMP[outcome] || ['pass', String(outcome).toUpperCase()]);
+const stamp = (outcome, live) => { const [c, w] = stampFor(outcome, live); return `<span class="stamp ${c}">${w}</span>`; };
+const itemName = (vendor, item) => (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.name || item;
 function feedEntry(d, live) {
   const el = document.createElement('div'); el.className = 'fe';
-  const req = `<span class="m">POST</span> /api/purchases <span>${enc(d.vendor)}:${enc(d.item)}</span>` + (d.amount_usd != null ? ` <span class="amt">${usd(d.amount_usd)}</span>` : '');
-  el.innerHTML = `<div class="req"></div><div class="pur">${d.target ? '→ ' + enc(d.target) + '  ' : ''}"${enc(d.purpose)}"</div>
-    <div class="res" hidden>${live ? '<span class="tag livetag">LIVE</span>' : ''}<span class="tag ${enc(d.outcome)}">${OUT[d.outcome] || enc(d.outcome)}</span>
-    <span class="meta">${enc(d.layer)}${d.model ? ' · ' + enc(d.model) : ''}${d.latency_ms ? ' · ' + Math.round(d.latency_ms) + ' ms' : ''}</span>
+  const req = `<span class="what">POST purchase · ${enc(d.vendor)} · ${enc(itemName(d.vendor, d.item))}</span>` + (d.amount_usd != null ? `<span class="amt">${usd(d.amount_usd)}</span>` : '');
+  el.innerHTML = `<div class="req"></div><div class="pur">${d.target ? enc(d.target) + ' · ' : ''}"${enc(d.purpose)}"</div>
+    <div class="res" hidden>${live ? '<span class="tag livetag">LIVE</span>' : ''}${stamp(d.outcome, live)}
+    <span class="meta">layer: ${enc(d.layer)}${d.latency_ms ? ' · ' + Math.round(d.latency_ms) + ' ms' : ''}</span>
     <span class="why">${enc(d.reason)}</span></div>`;
   return {el, req};
 }
 async function typeInto(node, html) {
-  if (REDUCED) { node.innerHTML = html; return; }
+  if (REDUCED) { node.innerHTML = html; return; }       // reduced motion: the receipt prints instantly
   const tmp = document.createElement('div'); tmp.innerHTML = html; const text = tmp.textContent; node.textContent = '';
   const caret = document.createElement('span'); caret.className = 'caret';
   for (let k = 1; k <= text.length; k += 2) { node.textContent = text.slice(0, k); node.appendChild(caret); await new Promise(r => setTimeout(r, 14)); }
   node.innerHTML = html;
 }
 async function feedNext() {
-  if (FEED.busy || document.hidden) return; FEED.busy = true;
+  if (FEED.busy || document.hidden || !FEED.visible) return; FEED.busy = true;   // pauses while off-screen
   try {
     const live = FEED.live.shift(); const d = live || FEED.replay[FEED.i++ % (FEED.replay.length || 1)];
     if (!d) return;
     const box = $('feed'), {el, req} = feedEntry(d, !!live); box.appendChild(el);
-    while (box.children.length > 6) box.firstChild.remove();
+    while (box.children.length > 1 && box.scrollHeight > box.clientHeight) box.firstChild.remove();   // the strip shows as many lines as fit
     await typeInto(el.querySelector('.req'), req);
     await new Promise(r => setTimeout(r, REDUCED ? 0 : 380));
-    el.querySelector('.res').hidden = false;
+    const res = el.querySelector('.res'); res.hidden = false;
+    if (!REDUCED) res.querySelector('.stamp.block')?.classList.add('land');
   } finally { FEED.busy = false; }
 }
 function feedLive(d) { FEED.live.push(d); const m = $('feedmode'); m.textContent = 'live'; m.classList.add('on');
-  $('feedfoot').textContent = 'Live: your demo purchases, judged right now. Between them, real decisions from our eval run are replayed.'; feedNext(); }
+  $('feedfoot').textContent = 'Live: your demo purchases, judged right now (PayPal sandbox). Between them, eval decisions are replayed as dry runs.'; FEED.visible = true; feedNext(); }
 async function initFeed() {
   try { const r = await fetch('/api/replay'); if (!r.ok) return; const j = await r.json();
+    FEED.all = j.decisions; howBar(j.decisions); showcase(j.decisions);
     const ds = j.decisions.slice(), rng = () => Math.random() - .5; ds.sort(rng);
     // interleave: attacks and legitimate buys alternate so the feed shows both outcomes
     const atk = ds.filter(d => d.attack), ok = ds.filter(d => !d.attack); FEED.replay = [];
     while (atk.length || ok.length) { if (atk.length) FEED.replay.push(atk.shift()); if (atk.length) FEED.replay.push(atk.shift()); if (ok.length) FEED.replay.push(ok.shift()); }
-    for (let k = 0; k < 3; k++) { const {el, req} = feedEntry(FEED.replay[FEED.i++], false); el.querySelector('.req').innerHTML = req; el.querySelector('.res').hidden = false; $('feed').appendChild(el); }
+    for (let k = 0; k < 7; k++) { const {el, req} = feedEntry(FEED.replay[FEED.i++], false); el.querySelector('.req').innerHTML = req; el.querySelector('.res').hidden = false; $('feed').appendChild(el); }
+    while ($('feed').children.length > 1 && $('feed').scrollHeight > $('feed').clientHeight) $('feed').firstChild.remove();
+    new IntersectionObserver(es => { FEED.visible = es[0].isIntersecting; }).observe($('feed'));
     setInterval(feedNext, REDUCED ? 6000 : 3400);
   } catch (e) {}
 }
 
-// ---- 47 -> 0 counter ----
-function runCounter() {
-  const el = $('hnum'), from = +el.dataset.from || 47, big = el.closest('.stat');
-  if (REDUCED) { big.classList.add('done'); return; }
-  const t0 = performance.now(), dur = 1700;
-  const tick = t => { const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3); el.textContent = Math.round(from * (1 - e));
-    if (k < 1) requestAnimationFrame(tick); else { el.textContent = from; big.classList.add('done'); } };
-  requestAnimationFrame(tick);
+// ---- how it works: one bar, segments sized by where the eval decisions were made (real /api/replay data) ----
+const SEG_OF = d => d.outcome === 'allow' ? 'paid' : d.outcome === 'approval' ? 'hold' : d.layer === 'caps' ? 'caps'
+  : String(d.layer).startsWith('policy') ? 'ai' : 'rules';
+function howBar(ds) {
+  const n = {rules: 0, caps: 0, ai: 0, hold: 0, paid: 0}; ds.forEach(d => n[SEG_OF(d)]++);
+  const bar = $('howbar'); bar.style.setProperty('--total', ds.length);
+  bar.querySelectorAll('.count').forEach(c => { const k = c.dataset.k; c.textContent = `${n[k]} of ${ds.length}`;
+    c.closest('.seg').style.setProperty('--n', Math.max(n[k], 1)); });
 }
 
-// ---- scroll reveal + pointer glow ----
+// ---- showcase: real eval verdicts, one per scenario ----
+let STALE_AI = false;
+function showcase(ds) {
+  const by = Object.fromEntries(ds.map(d => [d.id, d])), stage = $('stage');
+  const draw = d => { if (!d) { stage.innerHTML = '<p class="purp">This case is not in the committed run.</p>'; return; }
+    stage.innerHTML = `<div class="row2"><span>POST purchase · ${enc(d.vendor)} · ${enc(itemName(d.vendor, d.item))}</span><span>${d.amount_usd != null ? usd(d.amount_usd) : ''}</span></div>
+      <p class="purp">${d.target ? enc(d.target) + ' · ' : ''}"${enc(d.purpose)}"</p>${stamp(d.outcome, false)}
+      <p class="layer">Decided by: ${enc(d.layer)} · eval case ${enc(d.id)} (dry run)${STALE_AI ? ' · previous catalog' : ''}</p><p>${enc(d.reason)}</p>`; };
+  const pick = btn => { $('scen').querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', b === btn ? 'true' : 'false'));
+    if (REDUCED) return draw(by[btn.dataset.case]);
+    stage.classList.add('swap'); setTimeout(() => { draw(by[btn.dataset.case]); stage.classList.remove('swap'); }, 260); };
+  $('scen').querySelectorAll('button').forEach(b => { b.onclick = () => pick(b);
+    b.onkeydown = e => { const all = [...$('scen').querySelectorAll('button')], i = all.indexOf(b);
+      const k = {ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1}[e.key]; if (!k) return; e.preventDefault();
+      const nb = all[(i + k + all.length) % all.length]; nb.focus(); pick(nb); }; });
+  draw(by[$('scen').querySelector('[aria-selected="true"]').dataset.case]);
+}
+
+// ---- short entrances for section parts ----
 function initMotion() {
-  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target);
-    if (e.target.classList.contains('band')) setTimeout(runCounter, 300); } }), {threshold: .12});
-  document.querySelectorAll('.reveal').forEach((el, i) => { el.style.transitionDelay = (i % 4) * 70 + 'ms'; io.observe(el); });
-  document.querySelectorAll('.step, .tile, .proof .card').forEach(el => { el.classList.add('glow-h');
-    el.addEventListener('pointermove', e => { const r = el.getBoundingClientRect(); el.style.setProperty('--mx', (e.clientX - r.left) + 'px'); el.style.setProperty('--my', (e.clientY - r.top) + 'px'); }); });
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), {threshold: .12});
+  document.querySelectorAll('.reveal').forEach((el, i) => { el.style.transitionDelay = (i % 4) * 60 + 'ms'; io.observe(el); });
 }
 
 // ---- sparklines ----
@@ -170,16 +197,14 @@ function spark(values, w, h, color) {
   const max = Math.max(...values, 1e-9), min = Math.min(...values, 0), span = (max - min) || 1;
   const pts = values.map((v, i) => [(i / (values.length - 1)) * w, h - 2 - ((v - min) / span) * (h - 4)]);
   const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-  const id = 'g' + Math.random().toString(36).slice(2, 8);
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
-    <path d="${d} L${w} ${h} L0 ${h}Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
 }
 const SIGN = {fund: 1, credit: 1, charge: -1, refund: -1};
 function balanceSeries(entries) { let b = 0; return entries.slice().sort((x, y) => x.ts - y.ts).filter(e => SIGN[e.kind]).map(e => (b += SIGN[e.kind] * e.amount_usd)); }
 function vendorSeries(purchases, vid) { let s = 0; return [0, ...purchases.filter(p => p.vendor === vid && p.status === 'completed').sort((x, y) => x.ts - y.ts).map(p => (s += p.amount_usd))]; }
 
 // ---- public demo ----
-const dGrid = agGrid.createGrid($('dledger'), {theme: gridTheme, columnDefs: ledgerCols, defaultColDef: DEF,
+const dGrid = agGrid.createGrid($('dledger'), {theme: gridTheme, columnDefs: ledgerCols, defaultColDef: DEF, rowData: [],
   getRowStyle: p => p.data.kind === 'deny' ? DENY_ROW : null});
 const DK = () => sessionStorage.dkey;
 const show = o => { $('dout').textContent = typeof o === 'string' ? o : JSON.stringify(o, null, 1); };
@@ -201,7 +226,7 @@ async function dload_() { if (!DK()) return; const h = {'X-Agent-Key': DK()};
     const sig = pur.map(x => x.id + ':' + x.status).join(',');
     if (DSIG !== null && sig !== DSIG && DS) DS.refresh(); DSIG = sig; }
   if (m.ok) { const j = await m.json();
-    $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#ffb35c')}</div>` + bars(j.vendor_budgets, pur || []);
+    $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#38450f')}</div>` + bars(j.vendor_budgets, pur || []);
     $('dpolicy').textContent = '"' + j.policy + '"'; } }
 // ---- MCP connect panel (demo key lives only in this tab's sessionStorage) ----
 let MCP_SHOW = false;
@@ -226,19 +251,19 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
   show('Guard is checking the purchase…'); verdict(pill('approval', 'checking')); $('dbusy').style.display = 'none';
   let r; try { r = await dfetch('/api/purchases', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Agent-Key': DK()}, body: JSON.stringify({vendor, item, quantity, target, purpose})}); } catch (e) { return show(''); }
   const j = await r.json(); const g = j.guard || (j.detail && j.detail.layer ? j.detail : null);
-  const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` + (g.model ? `<span class="pill blue">${enc(g.model)}</span>` : '') : '';
+  const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` : '';
   const unit = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.price_usd; const amt = unit == null ? null : unit * quantity;
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
-  if (r.status === 200) { verdict(pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
+  if (r.status === 200) { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
   else if (r.status === 202 && j.ai_unavailable) {   // fail closed: no AI verdict means a human decides, never auto-approve
-    verdict(pill('approval', 'AI guard busy · waiting for you') + who); live('approval');
+    verdict('<span class="stamp hold">Held</span> ' + pill('approval', 'AI guard busy · waiting for you') + who); live('approval');
     toast('warn', 'AI guard is busy', 'Purchase is waiting for human approval, by design.');
     $('dbusy').textContent = j.message; $('dbusy').style.display = '';
     show(`${j.message}.\n\n${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or reject it.`); }
-  else if (r.status === 202) { verdict(pill('approval', 'Needs your approval') + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
+  else if (r.status === 202) { verdict('<span class="stamp hold">Held</span> ' + pill('approval', 'Needs your approval') + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
     show(`${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or right-click it on the schedule. The approval link expires in 24 h.`); }
-  else if (r.status === 403) { verdict(pill('deny', 'Blocked') + who); live('block'); toast('bad', 'Blocked by the guard', g.reason); show(g.reason); }
+  else if (r.status === 403) { verdict(`<span class="stamp block${REDUCED ? '' : ' land'}">Blocked</span> ` + who); live('block'); toast('bad', 'Blocked by the guard', g.reason); show(g.reason); }
   else if (r.status === 423) { verdict(pill('frozen', 'Agent frozen')); toast('bad', 'Agent frozen', 'No new spending until the owner reconciles and unfreezes it.'); show(j.detail || j); }
   else if (r.status === 402) { verdict(pill('deny', 'Tab empty')); toast('warn', 'Tab empty', 'The agent would now ask its human for a PayPal top-up.'); show(j); }
   else { verdict(pill('deny', 'Error ' + r.status)); toast('bad', 'Error ' + r.status, typeof j.detail === 'string' ? j.detail : ''); show(j.detail || j); }
@@ -261,12 +286,12 @@ function purchCols(owner) { const o = owner ? 'true' : 'false'; return [
   {headerName: 'Actions', minWidth: 215, sortable: false, filter: false, cellRenderer: p => { const d = p.data;
     if (d.status === 'pending_approval') return `<button class="act alt" onclick="pAct('${d.id}','approve-sandbox-card',${o})">Approve (sandbox card)</button><button class="act" onclick="pAct('${d.id}','reject',${o})">Reject</button>`;
     if (d.status === 'completed' && d.refund_deadline * 1000 > Date.now()) return `<button class="act" onclick="pAct('${d.id}','refund',${o})">Refund</button>`; return ''; }}]; }
-const gopt = {theme: gridTheme, defaultColDef: DEF, getRowStyle: p => p.data.status === 'denied' ? DENY_ROW : null};
+const gopt = {theme: gridTheme, defaultColDef: DEF, rowData: [], getRowStyle: p => p.data.status === 'denied' ? DENY_ROW : null};
 const dPurch = agGrid.createGrid($('dpurch'), {...gopt, columnDefs: purchCols(false)});
 const oPurch = agGrid.createGrid($('opurch'), {...gopt, columnDefs: purchCols(true)});
 function bars(list, purchases = []) { return (list || []).map(v => { const p = Math.min(100, 100 * v.spent_30d_usd / (v.budget_usd || 1));
-  const c = p >= 90 ? 'var(--bad)' : p >= 60 ? 'linear-gradient(90deg,var(--warn),var(--coral))' : 'linear-gradient(90deg,var(--amber),var(--coral))';
-  return `<div class="vb"><span>${enc(v.name)}</span><span class="track" role="progressbar" aria-label="${enc(v.name)} budget used" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:${c}"></i></span>${spark(vendorSeries(purchases, v.vendor), 84, 24, p >= 90 ? '#fb7185' : '#ffb35c')}<span class="mono">${usd(v.spent_30d_usd)} / ${usd(v.budget_usd)}</span></div>`; }).join(''); }
+  const c = p >= 90 ? 'var(--stamp-block)' : p >= 60 ? 'var(--stamp-hold)' : 'var(--ink)';
+  return `<div class="vb"><span>${enc(v.name)}</span><span class="track" role="progressbar" aria-label="${enc(v.name)} budget used" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:${c}"></i></span>${spark(vendorSeries(purchases, v.vendor), 84, 24, p >= 90 ? '#a3261b' : '#38450f')}<span class="mono">${usd(v.spent_30d_usd)} / ${usd(v.budget_usd)}</span></div>`; }).join(''); }
 let CAT = null;
 async function catalog() { CAT = (await (await fetch('/api/catalog')).json()).vendors || [];
   $('dvendor').innerHTML = CAT.map(v => `<option value="${enc(v.vendor)}">${enc(v.name)}</option>`).join(''); fillItems(); }
@@ -280,24 +305,37 @@ async function demoRefund() { if (!DK()) return show('Start a demo session first
   try { r = await dfetch('/api/demo/refund', {method: 'POST', headers: {'X-Agent-Key': DK()}}); } catch (e) { return; }
   const j = await r.json(); verdict(r.ok ? pill('refund', 'refunded ' + usd(j.refunded_usd) + ' to PayPal') : pill('deny', 'error')); show(j);
   r.ok ? toast('violet', 'Refunded ' + usd(j.refunded_usd) + ' to PayPal', j.refunded_usd ? 'Payments v2 refund of your sandbox capture.' : 'Nothing left to refund.') : toast('bad', 'Refund failed', typeof j.detail === 'string' ? j.detail : ''); dload(); }
-function openDemo() { $('workspace').scrollIntoView({behavior: REDUCED ? 'auto' : 'smooth'}); if (!DK() && $('demo').style.display !== 'none') demoStart(); }
+function openDemo() { $('workspace').scrollIntoView({behavior: REDUCED ? 'auto' : 'smooth'}); if (!DK() && $('demo').style.display !== 'none') return demoStart(); }
+// Primary action: open the demo with a funded sandbox agent, then run the injected-purchase button.
+async function overspend() { if ($('demo').style.display === 'none') return openDemo();
+  await openDemo(); if (!DK()) return;
+  const b = [...document.querySelectorAll('#dguided .btn-step')].find(x => x.textContent.includes('injected instruction')); b && b.click(); }
 
-// ---- scorecard + headline numbers ----
+// ---- scorecard + proof tiles ----
 async function scorecard() { const r = await fetch('/api/scorecard'); if (!r.ok) { $('scoretxt').textContent = 'no eval results yet'; return; } const j = await r.json();
   $('scoretxt').textContent = `${j.cases} labeled purchases (${j.attacks} attacks or rule violations, ${j.legit} legitimate) for the ${j.persona}. Run ${new Date(j.generated_at).toLocaleDateString()}. "Stopped" = blocked or held for approval.`;
   $('scoretbl').querySelector('tbody').innerHTML = Object.entries(j.modes).map(([k, m]) => `<tr class="${k === 'ai' ? 'hl' : ''}"><td>${enc(m.label)}${(j.stale_modes || []).includes(k) ? ' <span class="pill gray" title="Run on the previous catalog and prices; re-run pending">previous catalog</span>' : ''}</td>
     <td class="num">${m.attacks_stopped}/${m.attacks_total} <span class="pill ${m.attacks_stopped === m.attacks_total ? 'ok' : m.attacks_stopped ? 'warn' : 'bad'}">${Math.round(m.attacks_stopped_pct)}%</span></td>
     <td class="num">${m.legit_correct}/${m.legit_total}</td><td class="num">${m.false_blocks}</td>
     <td class="num">${k === 'ai' ? Math.round(m.latency_p50_ms) + ' / ' + Math.round(m.latency_p95_ms) + ' ms' : '–'}</td><td class="num">${k === 'ai' ? m.llm_calls : '0'}</td></tr>`).join('');
-  const col = {none: '#475569', keyword: '#7dd3fc', ai: 'linear-gradient(90deg,#ffb35c,#ff6a88)'};
+  const col = {none: 'var(--ink-20)', keyword: 'var(--ink-60)', ai: 'var(--ink)'};
   $('cats').innerHTML = Object.entries(j.by_category).map(([c, v]) => `<div class="cat"><span>${enc(c.replace(/_/g, ' '))}</span><span style="display:grid;gap:3px">` +
     ['none', 'keyword', 'ai'].filter(m => m in v).map(m => `<span class="track"><i style="width:${100 * v[m] / v.total}%;background:${col[m]}"></i></span>`).join('') +
     `</span><span class="mono">${['none', 'keyword', 'ai'].filter(m => m in v).map(m => v[m]).join(' → ')} / ${v.total}</span></div>`).join('');
-  const ai = j.modes.ai;
-  if (ai) { $('hnum').dataset.from = ai.attacks_total; if (!$('hnum').closest('.stat').classList.contains('done')) $('hnum').textContent = ai.attacks_total;
-    $('hzero').textContent = ai.attacks_total - ai.attacks_stopped;
-    $('hnumtxt').textContent = `attack purchases in our test set → purchases that moved money (${ai.attacks_stopped}/${ai.attacks_total} stopped before any PayPal call)`;
-    $('hlegit').textContent = `${ai.legit_correct}/${ai.legit_total}`; $('hfb').textContent = ai.false_blocks; $('hlat').textContent = Math.round(ai.latency_p50_ms) + ' ms'; } }
+  tiles(j); }
+// Proof tiles: every number from /api/scorecard (eval/results.json) with its denominator; a stale mode says "previous catalog".
+function tiles(j) { const m = j.modes, stale = j.stale_modes || [], frac = x => `${x.attacks_stopped}<small> / ${x.attacks_total}</small>`;
+  if (m.keyword) $('tkw').innerHTML = frac(m.keyword);
+  if (m.none) $('tnone').innerHTML = frac(m.none);
+  const ai = m.ai; if (!ai) return;
+  if (stale.includes('ai')) { STALE_AI = true; if (!$('feedmode').classList.contains('on')) $('feedfoot').textContent = 'Replayed from our committed eval run, previous catalog (its reasons quote the old prices; dry run: no money moved). Your own demo purchases print here live.';
+    const l = $('stage').querySelector('.layer'); if (l && !l.textContent.includes('previous catalog')) l.textContent += ' · previous catalog'; }
+  $('tai').innerHTML = frac(ai); $('tstale').hidden = !stale.includes('ai');
+  if (m.keyword) $('taitxt').textContent = `attacks stopped with the AI guard added: ${ai.attacks_stopped - m.keyword.attacks_stopped} more than rules alone`;
+  $('hlegit').innerHTML = `${ai.legit_correct}<small> / ${ai.legit_total}</small>`; $('hfb').textContent = ai.false_blocks;
+  $('hlat').innerHTML = `${Math.round(ai.latency_p50_ms)}<small> ms</small>`;
+  const L = Object.entries(ai.stopped_by_layer || {}).sort((a, b) => b[1] - a[1]);
+  $('tlayers').textContent = L.map(([k, v]) => `${k} ${v}`).join(' · ') + ` (of ${ai.attacks_total} attacks, rules + AI${stale.includes('ai') ? ', previous catalog' : ''})`; }
 
 // ---- live Gauntlet ----
 async function runGauntlet() { const b = $('gbtn'); b.disabled = true; b.textContent = 'Running through the live guard…';
@@ -305,7 +343,7 @@ async function runGauntlet() { const b = $('gbtn'); b.disabled = true; b.textCon
   try { const r = await fetch('/api/gauntlet', {method: 'POST'}); const j = await r.json();
     if (!r.ok) { $('gsum').innerHTML = pill('deny', 'unavailable') + ` <span class="sub" style="margin:0">${enc(j.detail || 'error')}</span>`; toast('warn', 'Gauntlet unavailable', j.detail || ''); return; }
     $('gsum').innerHTML = pill('allow', `${j.attacks_stopped}/${j.attacks_total} attacks stopped`) + pill(j.legit_correct === j.legit_total ? 'allow' : 'approval', `${j.legit_correct}/${j.legit_total} legit handled right`) +
-      pill('gray', `no guard would buy ${j.unguarded_would_buy}/${j.attacks_total}`) + pill('blue', j.live_ai ? `${j.llm_calls} live Gemini calls` : 'keyword mode') + pill('gray', 'PayPal calls: 0');
+      pill('gray', `no guard would buy ${j.unguarded_would_buy}/${j.attacks_total}`) + pill('blue', j.live_ai ? `${j.llm_calls} live AI calls` : 'keyword mode') + pill('gray', 'PayPal calls: 0');
     toast(j.attacks_stopped === j.attacks_total ? 'ok' : 'warn', `${j.attacks_stopped}/${j.attacks_total} attacks stopped live`, `${j.legit_correct}/${j.legit_total} legitimate buys handled right · no money moved`);
     const out = {allow: 'Bought', block: 'Blocked', approval: 'Held for approval'};
     j.cases.forEach((c, i) => setTimeout(() => { $('glist').insertAdjacentHTML('beforeend', `<div class="g-row"><div class="top">
@@ -342,7 +380,7 @@ initMotion();
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';
   if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); mcpPanel(); }
   else $('nodemo').style.display = ''; });
-scorecard(); initFeed();
+catalog().catch(() => {}).finally(initFeed); scorecard();
 window.addEventListener('load', initSchedules);
 { const q = new URLSearchParams(location.search);
   if (q.get('payment_error')) { $('report').textContent = 'PayPal payment was not completed (it may have been cancelled, already paid another way, or not approved yet). Nothing was charged twice; try the approval link again if needed.'; toast('warn', 'PayPal payment not completed', 'Nothing was charged twice.'); }

@@ -504,7 +504,7 @@ def test_gauntlet_ai_unavailable_is_held_not_allowed(tmp_path, monkeypatch):
 
 def test_static_files_are_an_allowlist(tmp_path):
     c = _client(tmp_path)
-    for ok in ("/static/app.css", "/static/app.js", "/static/schedule.js", "/static/fonts/InterVariable.woff2"):
+    for ok in ("/static/app.css", "/static/app.js", "/static/schedule.js", "/static/fonts/roundo/Roundo-Variable.woff2"):
         assert c.get(ok).status_code == 200, ok
     for bad in ("/static/../app/main.py", "/static/%2e%2e/app/config.py", "/static/dashboard.html", "/static/fonts/",
                 "/static/..%2fapp%2fmain.py"):
