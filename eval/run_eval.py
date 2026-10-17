@@ -3,10 +3,10 @@
 Runs every labeled case in eval/cases.json through app.procurement.decide() in three modes:
   none     - no guard (every catalog purchase goes through)
   keyword  - deterministic layers (allowlist, caps, budgets, unsafe targets, injection regex) + keyword policy check
-  ai       - the same deterministic layers + the Gemini policy judge (what production runs)
+  ai       - the same deterministic layers + the AI policy judge (what production runs; Claude by default)
 
     python -m eval.run_eval                 # none + keyword, keeps the stored ai results
-    python -m eval.run_eval --modes ai      # spends ~1 Gemini call per case that reaches the policy layer
+    python -m eval.run_eval --modes ai      # ~1 AI call per case that reaches the policy layer (needs ANTHROPIC_API_KEY)
 Results -> eval/results.json (committed; served at /api/scorecard and shown on the dashboard).
 """
 from __future__ import annotations
@@ -28,7 +28,22 @@ from app.guard import SpendGuard
 HERE = Path(__file__).parent
 CASES = HERE / "cases.json"
 RESULTS = HERE / "results.json"
-MODE_LABELS = {"none": "No guard", "keyword": "Rules + keyword check", "ai": "Rules + Gemini judge"}
+MODE_LABELS = {"none": "No guard", "keyword": "Rules + keyword check", "ai": "Rules + AI judge"}
+ARCHIVE = HERE / "archive"
+
+
+def ai_label(s: Settings) -> str:
+    return "Rules + Claude judge" if s.guard_provider == "anthropic" else "Rules + Gemini judge"
+
+
+def archive_mode(mode: str, m: dict) -> Path:
+    """Never delete an earlier run: before a new run replaces a mode, the old one is written to eval/archive/."""
+    ARCHIVE.mkdir(exist_ok=True)
+    tag = (m.get("run_at") or "unknown").replace(":", "").replace("+0000", "Z")
+    models = "-".join(m.get("models") or []) or "no-model"
+    out = ARCHIVE / f"results-{mode}-{models}-{tag}.json"
+    out.write_text(json.dumps({"archived_from": "eval/results.json", "mode": mode, **m}, indent=1) + "\n")
+    return out
 
 
 def shop_config() -> pr.AgentConfig:
@@ -116,7 +131,8 @@ def by_category(modes: dict) -> dict:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--modes", default="none,keyword")
-    ap.add_argument("--throttle", type=float, default=4.0, help="seconds between Gemini calls (free-tier RPM)")
+    ap.add_argument("--throttle", type=float, default=None,
+                    help="seconds between AI calls (default 4.0 for Gemini free-tier RPM, 0.5 for Anthropic)")
     ap.add_argument("--out", default=str(RESULTS))
     a = ap.parse_args(argv)
     cases = load_cases()
@@ -126,11 +142,15 @@ def main(argv=None):
     for mode in [m.strip() for m in a.modes.split(",") if m.strip()]:
         guard = None
         if mode == "ai":
-            if not llm.enabled(s):
-                raise SystemExit("ai mode needs GEMINI_API_KEY (or LLM_API_KEY)")
+            if not llm.guard_enabled(s):
+                raise SystemExit("ai mode needs ANTHROPIC_API_KEY (GUARD_PROVIDER=anthropic, the default) "
+                                 "or GEMINI_API_KEY with GUARD_PROVIDER=gemini")
             guard = SpendGuard(s)
-        rows = run_mode(mode, cases, guard, a.throttle if mode == "ai" else 0)
-        modes[mode] = {"label": MODE_LABELS[mode], "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            if "ai" in modes and Path(a.out).resolve() == RESULTS.resolve():
+                print("archived previous ai run ->", archive_mode("ai", modes["ai"]))
+        throttle = a.throttle if a.throttle is not None else (0.5 if s.guard_provider == "anthropic" else 4.0)
+        rows = run_mode(mode, cases, guard, throttle if mode == "ai" else 0)
+        modes[mode] = {"label": ai_label(s) if mode == "ai" else MODE_LABELS[mode], "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                        "cases_sha256": cases_fingerprint(), **summarize(rows), "rows": rows}
         print(f"{mode:8s} stopped {modes[mode]['attacks_stopped']}/{modes[mode]['attacks_total']}  "
               f"legit {modes[mode]['legit_correct']}/{modes[mode]['legit_total']}  misses={modes[mode]['misses']}")
@@ -145,7 +165,7 @@ def main(argv=None):
            "notes": ["'Stopped' = blocked outright or held for human approval; both mean no money moved.",
                      "Deterministic layers (vendor allowlist, per-vendor budgets, caps, unsafe-target and injection filters) "
                      "run before any policy check in both guarded modes.",
-                     "Latency is per decision; in ai mode it includes the Gemini round trip.",
+                     "Latency is per decision; in ai mode it includes the AI provider round trip.",
                      "The 'purpose required / too vague' hard rule was added after the first run (Gemini 45/47, both misses vague); the cases are not a held-out set, so treat these as regression numbers, not a benchmark."]}
     if "ai" in ordered and ordered["ai"]["heuristic_fallbacks"]:
         res["notes"].append(f"{ordered['ai']['heuristic_fallbacks']} ai-mode decision(s) fell back to the keyword check "

@@ -1,5 +1,5 @@
 """Browser e2e: the demo explains an unavailable AI guard, and MCP is reachable from the hero and the bento.
-The server's LLM points at a closed local port, so the AI is genuinely unavailable (no Gemini calls)."""
+The server's AI provider (Anthropic, the default) points at a closed local port, so the AI is genuinely unavailable (no AI calls)."""
 import os, shutil, socket, subprocess, sys, time
 import httpx, pytest
 
@@ -18,10 +18,10 @@ def _free_port():
 def server(tmp_path_factory):
     port, dead = _free_port(), _free_port()
     base = f"http://127.0.0.1:{port}"
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("PAYPAL_", "GEMINI_", "LLM_"))}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PAYPAL_", "GEMINI_", "LLM_", "ANTHROPIC_"))}
     env.update(ADMIN_TOKEN="e2e-admin-token-not-secret", PAYPAL_MODE="mock", ALLOW_INSECURE_MOCK="1", DEMO_MODE="1",
                PUBLIC_URL=base, AGENTTAB_DB=str(tmp_path_factory.mktemp("r4") / "r4.db"),
-               LLM_BASE_URL=f"http://127.0.0.1:{dead}/v1", LLM_API_KEY="not-a-real-key")
+               GUARD_PROVIDER="anthropic", ANTHROPIC_BASE_URL=f"http://127.0.0.1:{dead}", ANTHROPIC_API_KEY="not-a-real-key")
     p = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port)], cwd=ROOT, env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(100):

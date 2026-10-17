@@ -67,6 +67,7 @@ button:disabled{opacity:.55;cursor:wait}
  background:rgba(52,211,153,.08);color:#a7f3d0;border:1px solid rgba(52,211,153,.28);white-space:nowrap}
 .live i{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 1.8s infinite}
 .live.off{background:rgba(148,163,184,.08);color:var(--ink2);border-color:var(--line2)} .live.off i{background:#94a3b8;animation:none}
+.live.busy{background:rgba(251,146,60,.12);color:#fdba74;border-color:rgba(251,146,60,.45)} .live.busy i{background:#fb923c;animation:none}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.6)}70%{box-shadow:0 0 0 8px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
 @keyframes blink{50%{opacity:.35}}
 .chip{display:inline-flex;align-items:center;padding:5px 12px;border-radius:999px;font-size:12.5px;color:var(--ink2);background:rgba(255,255,255,.04);border:1px solid var(--line)}
