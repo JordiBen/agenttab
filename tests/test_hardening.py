@@ -1,4 +1,4 @@
-"""Regression tests for the external code review (items #1-#17)."""
+"""Hardening regression tests: concurrency, demo scoping, rate limits, fail-closed guard, SSRF, refunds, races."""
 import ipaddress
 import threading
 import time
@@ -24,7 +24,7 @@ def _client(tmp_path, name="r.db", **kw):
     return TestClient(create_app(s, allow_private_targets=True))
 
 
-# ---------- #1 CRITICAL: concurrent purchases can't overspend ----------
+# ---------- concurrent purchases can't overspend ----------
 def _slow_decide(monkeypatch, delay=0.05):
     real = pr.decide
 
@@ -77,7 +77,7 @@ def test_commit_recheck_blocks_overspend_even_without_the_lock(tmp_path):
     assert led.balance(aid) == Decimal("0.10")
 
 
-# ---------- #2 demo privileges only for demo-session agents ----------
+# ---------- demo privileges only for demo-session agents ----------
 def test_demo_mode_does_not_turn_regular_agents_into_owners(tmp_path):
     c = _demo_client(tmp_path)
     adm = {"X-Admin-Token": "x" * 32}
@@ -122,7 +122,7 @@ def test_demo_flag_is_ignored_if_server_leaves_demo_mode(tmp_path):
     assert c2.get("/api/demo/ledger", headers={"X-Agent-Key": key}).status_code == 404
 
 
-# ---------- #3 one visitor can't exhaust the shared demo ----------
+# ---------- one visitor can't exhaust the shared demo ----------
 def test_per_agent_limits_on_topup_report_refund_purchases(tmp_path):
     c = _demo_client(tmp_path, topup_requests_per_agent_hour=2, reports_per_agent_hour=2,
                      tab_refunds_per_agent_hour=1, purchases_per_agent_hour=2, paypal_calls_per_day=100)
@@ -193,7 +193,7 @@ def test_webhook_junk_without_headers_does_not_consume_budget(tmp_path):
     assert c.app.state.limiter.count("webhook:all", 86400) == 1
 
 
-# ---------- #4 SSRF ----------
+# ---------- SSRF ----------
 @pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.1", "169.254.169.254", "0.0.0.0", "::", "::1", "::ffff:127.0.0.1",
                                 "::ffff:169.254.169.254", "100.64.0.1", "fd00::1", "fe80::1", "224.0.0.1", "2002:7f00:1::1"])
 def test_ip_is_public_rejects_internal_forms(ip):
@@ -276,7 +276,7 @@ def test_connects_to_the_validated_ip(monkeypatch):
     assert seen == {"url": "https://93.184.215.14/page", "host": "shop.example.com", "sni": "shop.example.com"}
 
 
-# ---------- #6 tab refunds never re-refund a capture ----------
+# ---------- tab refunds never re-refund a capture ----------
 def test_tab_refund_tracks_refunded_amount_per_capture(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
@@ -299,7 +299,7 @@ def test_tab_refund_tracks_refunded_amount_per_capture(tmp_path):
     assert c.post(f"/api/agents/{aid}/refund", headers=A).json()["refunds"] == []
 
 
-# ---------- #7 return URL / webhook / card races ----------
+# ---------- return URL / webhook / card races ----------
 def test_return_url_and_webhook_race_captures_once(tmp_path, monkeypatch):
     c = _client(tmp_path)
     ag = shop_agent(c)
@@ -387,7 +387,7 @@ def test_webhook_event_processed_once_under_concurrency(tmp_path):
 
 
 # ---------- smaller items ----------
-def test_live_items_quantity_one_and_non_refundable(tmp_path, monkeypatch):   # #9, #15
+def test_live_items_quantity_one_and_non_refundable(tmp_path, monkeypatch):
     from tests.test_agenttab import site as _  # noqa: F401  (fixture module import only)
     c = _client(tmp_path)
     ag = shop_agent(c)
@@ -405,7 +405,7 @@ def test_live_items_quantity_one_and_non_refundable(tmp_path, monkeypatch):   # 
     assert any(e["type"] == "delivered" for e in ev)
 
 
-def test_nan_and_infinite_amounts_rejected(tmp_path):            # #10
+def test_nan_and_infinite_amounts_rejected(tmp_path):
     c = _client(tmp_path)
     for bad in ("NaN", "Infinity", "-Infinity"):
         r = c.post("/api/agents", content='{"name":"x","policy":"hello world","daily_cap_usd":%s}' % bad,
@@ -417,7 +417,7 @@ def test_nan_and_infinite_amounts_rejected(tmp_path):            # #10
     assert r.status_code == 200
 
 
-def test_paypal_request_ids_are_derived_from_the_operation(monkeypatch):   # #11
+def test_paypal_request_ids_are_derived_from_the_operation(monkeypatch):
     from app.paypal import PayPalClient
     pp = PayPalClient(Settings(paypal_mode="sandbox", paypal_client_id="x", paypal_client_secret="y"))
     pp._access_token = lambda: "tok"
@@ -434,7 +434,7 @@ def test_paypal_request_ids_are_derived_from_the_operation(monkeypatch):   # #11
     assert seen[0] == seen[1] == "refund-CAP1-purchase-pu_1"
 
 
-def test_mock_mode_refused_for_public_or_demo(tmp_path):        # #13
+def test_mock_mode_refused_for_public_or_demo(tmp_path):
     with pytest.raises(RuntimeError):
         create_app(Settings(paypal_mode="mock", db_path=str(tmp_path / "a.db"), admin_token="x" * 32,
                             public_url="https://agenttab.onrender.com"))
@@ -445,13 +445,13 @@ def test_mock_mode_refused_for_public_or_demo(tmp_path):        # #13
                         public_url="http://localhost:8000"))
 
 
-def test_mock_approve_rejects_html(tmp_path):                     # #13
+def test_mock_approve_rejects_html(tmp_path):
     c = _client(tmp_path)
     r = c.get("/mock-paypal/approve/%3Cscript%3Ealert(1)%3C%2Fscript%3E")
     assert r.status_code == 404 and "<script>alert" not in r.text
 
 
-def test_report_numbers_come_from_ledger_not_model(tmp_path, monkeypatch):   # #14
+def test_report_numbers_come_from_ledger_not_model(tmp_path, monkeypatch):
     import app.llm as llm
     monkeypatch.setattr(llm, "chat", lambda s, m, **k: ("The agent spent $999 and everything was approved.", "m1"))
     c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
@@ -460,7 +460,7 @@ def test_report_numbers_come_from_ledger_not_model(tmp_path, monkeypatch):   # #
     assert rep["report"].startswith(rep["summary"]) and "0 paid purchases for $0.00" in rep["summary"]
 
 
-def test_settings_read_env_at_construction(monkeypatch, tmp_path):   # #16
+def test_settings_read_env_at_construction(monkeypatch, tmp_path):
     monkeypatch.setenv("TOOL_CALLS_PER_IP_HOUR", "7")
     assert Settings().tool_calls_per_ip_hour == 7
     monkeypatch.delenv("TOOL_CALLS_PER_IP_HOUR")
@@ -473,9 +473,52 @@ def test_settings_read_env_at_construction(monkeypatch, tmp_path):   # #16
     assert not os.path.exists(tmp_path / ".admin_token")            # importing has no side effects
 
 
-def test_true_client_ip_not_trusted(tmp_path):                  # #17
+def test_true_client_ip_not_trusted(tmp_path):
     c = _client(tmp_path)
     r = c.get("/api/admin/client-ip", headers=A | {"True-Client-IP": "1.2.3.4"}).json()
     assert r["resolved"] != "1.2.3.4"
     r = c.get("/api/admin/client-ip", headers=A | {"CF-Connecting-IP": "5.6.7.8"}).json()
     assert r["resolved"] == "5.6.7.8"
+
+
+def test_gauntlet_dry_run_and_rate_limit(tmp_path):
+    c = _client(tmp_path, gauntlet_runs_per_ip_hour=1)
+    j = c.post("/api/gauntlet").json()
+    assert j["attacks_total"] == 8 and j["legit_total"] == 2 and j["paypal_calls"] == 0 and j["legit_correct"] == 2
+    assert j["mode"] == "keyword" and j["unguarded_would_buy"] == 8 and j["attacks_stopped"] >= 4
+    assert not c.app.state.ledger.agents()          # dry run: nothing written
+    assert c.post("/api/gauntlet").status_code == 429
+
+
+def test_gauntlet_ai_unavailable_is_held_not_allowed(tmp_path, monkeypatch):
+    import app.llm as llm
+
+    def down(*a, **k):
+        raise llm.LLMError("quota")
+    monkeypatch.setattr(llm, "chat", down)
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    j = c.post("/api/gauntlet").json()
+    assert j["live_ai"] and j["attacks_stopped"] == j["attacks_total"]
+    assert all(r["outcome"] != "allow" for r in j["cases"] if r["attack"])
+
+
+def test_static_files_are_an_allowlist(tmp_path):
+    c = _client(tmp_path)
+    for ok in ("/static/app.css", "/static/app.js", "/static/schedule.js", "/static/fonts/InterVariable.woff2"):
+        assert c.get(ok).status_code == 200, ok
+    for bad in ("/static/../app/main.py", "/static/%2e%2e/app/config.py", "/static/dashboard.html", "/static/fonts/",
+                "/static/..%2fapp%2fmain.py"):
+        assert c.get(bad).status_code == 404, bad
+
+
+def test_gauntlet_global_daily_cap(tmp_path):
+    c = _client(tmp_path, gauntlet_runs_per_day=2, gauntlet_runs_per_ip_hour=10)
+    codes = [c.post("/api/gauntlet", headers={"CF-Connecting-IP": f"9.9.9.{i}"}).status_code for i in range(3)]
+    assert codes == [200, 200, 429]
+
+
+def test_dashboard_has_no_inline_admin_token_storage(tmp_path):
+    c = _client(tmp_path)
+    html, js = c.get("/").text, c.get("/static/app.js").text
+    assert "localStorage.tok=" not in html + js and "sessionStorage.tok" in html + js
+    assert 'integrity="sha384-' in html and "@33/" not in html
