@@ -36,6 +36,10 @@ def scorecard_table(r: dict, archive: dict | None) -> str:
     out += [_row(m["label"] + (STALE if k in stale else ""), m) for k, m in r["modes"].items()]
     if archive and "ai" in archive.get("modes", {}) and "ai" not in stale:
         out.append(_row(archive["modes"]["ai"]["label"] + ARCHIVED, archive["modes"]["ai"]))
+    runs = [f"{m['label']} @ `{m['git_sha'][:7]}`" + (" (uncommitted changes)" if m.get("git_dirty") else "")
+            for m in r["modes"].values() if m.get("git_sha") and m["git_sha"] != "unknown"]
+    if runs:
+        out += ["", "Code each run used (from `eval/results.json`): " + "; ".join(runs) + "."]
     return "\n".join(out)
 
 
