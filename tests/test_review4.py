@@ -118,19 +118,19 @@ def test_repeated_identical_purchase_spends_one_llm_call_end_to_end(tmp_path, mo
     fake = FakeLLM([(OK, "gemini-3.5-flash-lite")])
     monkeypatch.setattr(llm, "chat", fake)
     c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_model="gemini-3.5-flash-lite")
-    ag = shop_agent(c, daily_cap_usd=5.0, vendor_budgets={"samplebox": 5.0})
-    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 2}, headers=A)
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
+    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 200}, headers=A)
     body = dict(vendor="samplebox", item="ceramic-mug-sample", purpose=PURPOSE)
     r1, r2 = buy(c, ag["api_key"], **body).json(), buy(c, ag["api_key"], **body).json()
     assert r1["guard"]["layer"] == "policy-ai" and r2["guard"].get("cached") is True and len(fake.calls) == 1
-    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("1.60")   # both bought, each charged once
+    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("164.00")  # both bought, each charged once
 
 
 # ---------- (2) Gauntlet caps and the per-IP LLM budget ----------
 def test_gauntlet_caps_are_lower_by_default():
     s = Settings()
     assert s.gauntlet_runs_per_ip_hour <= 2 and s.gauntlet_runs_per_day <= 12 and s.gauntlet_llm_calls_per_day <= 60
-    assert 0 < s.llm_calls_per_ip_day <= 30
+    assert s.llm_calls_per_ip_day == 60          # reviewer: per-IP budget raised from 30 to 60 a day
 
 
 def test_per_ip_llm_budget_sends_one_visitor_to_human_approval_but_not_others(tmp_path, monkeypatch):
@@ -138,8 +138,8 @@ def test_per_ip_llm_budget_sends_one_visitor_to_human_approval_but_not_others(tm
     monkeypatch.setattr(llm, "chat", fake)
     c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_calls_per_ip_day=2,
                 tool_calls_per_ip_hour=100)
-    ag = shop_agent(c, daily_cap_usd=5.0, vendor_budgets={"samplebox": 5.0})
-    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 3}, headers=A)
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
+    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 300}, headers=A)
 
     def b(ip, n):
         return c.post("/api/purchases", headers={"X-Agent-Key": ag["api_key"], "CF-Connecting-IP": ip},
@@ -170,12 +170,12 @@ def test_ai_unavailable_purchase_says_guard_busy_waiting_for_human(tmp_path, mon
     monkeypatch.setattr(llm, "chat", down)
     c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
     ag = shop_agent(c)
-    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 1}, headers=A)
+    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 100}, headers=A)
     r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample", purpose=PURPOSE)
     j = r.json()
     assert r.status_code == 202 and j["status"] == "approval_required" and j["ai_unavailable"] is True
     assert j["message"] == "AI guard is busy, purchase is waiting for human approval, by design"
-    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("1.00")   # nothing charged, nothing auto-approved
+    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("100.00")  # nothing charged, nothing auto-approved
     js = (ROOT / "static/app.js").read_text()
     assert "j.ai_unavailable" in js and "dbusy" in js and 'id="dbusy"' in (ROOT / "static/dashboard.html").read_text()
 
@@ -183,7 +183,7 @@ def test_ai_unavailable_purchase_says_guard_busy_waiting_for_human(tmp_path, mon
 def test_normal_approval_has_no_busy_message(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
-    j = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat",
+    j = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat", quantity=2,
             purpose="Inventory software to track stock across our two warehouses").json()
     assert j["status"] == "approval_required" and "ai_unavailable" not in j and "message" not in j
 

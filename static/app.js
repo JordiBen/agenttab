@@ -222,12 +222,12 @@ async function demoStart() { show('Funding your agent through PayPal sandbox…'
   DS && DS.refresh(); verdict(pill('fund', 'funded'));
   toast('ok', 'Funded ' + usd(j.balance_usd) + ' via PayPal sandbox', 'Capture ' + j.paypal_capture_id);
   show(`Agent ${j.name} funded: ${usd(j.balance_usd)}\nPayPal sandbox order ${j.paypal_order_id}\nCapture ${j.paypal_capture_id}`); dload(); }
-async function demoBuy(vendor, item, target, purpose) { if (!DK()) { toast('info', 'Start a demo session first', 'Step 1 funds your agent with $1.00 of sandbox money.'); return show('Start a demo session first.'); }
+async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK()) { toast('info', 'Start a demo session first', 'Step 1 funds your agent with $100 of sandbox money.'); return show('Start a demo session first.'); }
   show('Guard is checking the purchase…'); verdict(pill('approval', 'checking')); $('dbusy').style.display = 'none';
-  let r; try { r = await dfetch('/api/purchases', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Agent-Key': DK()}, body: JSON.stringify({vendor, item, quantity: 1, target, purpose})}); } catch (e) { return show(''); }
+  let r; try { r = await dfetch('/api/purchases', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Agent-Key': DK()}, body: JSON.stringify({vendor, item, quantity, target, purpose})}); } catch (e) { return show(''); }
   const j = await r.json(); const g = j.guard || (j.detail && j.detail.layer ? j.detail : null);
   const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` + (g.model ? `<span class="pill blue">${enc(g.model)}</span>` : '') : '';
-  const amt = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.price_usd;
+  const unit = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.price_usd; const amt = unit == null ? null : unit * quantity;
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
   if (r.status === 200) { verdict(pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
@@ -285,7 +285,7 @@ function openDemo() { $('workspace').scrollIntoView({behavior: REDUCED ? 'auto' 
 // ---- scorecard + headline numbers ----
 async function scorecard() { const r = await fetch('/api/scorecard'); if (!r.ok) { $('scoretxt').textContent = 'no eval results yet'; return; } const j = await r.json();
   $('scoretxt').textContent = `${j.cases} labeled purchases (${j.attacks} attacks or rule violations, ${j.legit} legitimate) for the ${j.persona}. Run ${new Date(j.generated_at).toLocaleDateString()}. "Stopped" = blocked or held for approval.`;
-  $('scoretbl').querySelector('tbody').innerHTML = Object.entries(j.modes).map(([k, m]) => `<tr class="${k === 'ai' ? 'hl' : ''}"><td>${enc(m.label)}</td>
+  $('scoretbl').querySelector('tbody').innerHTML = Object.entries(j.modes).map(([k, m]) => `<tr class="${k === 'ai' ? 'hl' : ''}"><td>${enc(m.label)}${(j.stale_modes || []).includes(k) ? ' <span class="pill gray" title="Run on the previous catalog and prices; re-run pending">previous catalog</span>' : ''}</td>
     <td class="num">${m.attacks_stopped}/${m.attacks_total} <span class="pill ${m.attacks_stopped === m.attacks_total ? 'ok' : m.attacks_stopped ? 'warn' : 'bad'}">${Math.round(m.attacks_stopped_pct)}%</span></td>
     <td class="num">${m.legit_correct}/${m.legit_total}</td><td class="num">${m.false_blocks}</td>
     <td class="num">${k === 'ai' ? Math.round(m.latency_p50_ms) + ' / ' + Math.round(m.latency_p95_ms) + ' ms' : '–'}</td><td class="num">${k === 'ai' ? m.llm_calls : '0'}</td></tr>`).join('');

@@ -12,6 +12,7 @@ Results -> eval/results.json (committed; served at /api/scorecard and shown on t
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import time
@@ -37,6 +38,11 @@ def shop_config() -> pr.AgentConfig:
 
 def load_cases() -> list[dict]:
     return json.loads(CASES.read_text())
+
+
+def cases_fingerprint() -> str:
+    """sha256 of the case file: a mode whose stored fingerprint differs was run on older cases/prices."""
+    return hashlib.sha256(CASES.read_bytes()).hexdigest()
 
 
 def case_state(c: dict) -> pr.State:
@@ -125,7 +131,7 @@ def main(argv=None):
             guard = SpendGuard(s)
         rows = run_mode(mode, cases, guard, a.throttle if mode == "ai" else 0)
         modes[mode] = {"label": MODE_LABELS[mode], "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       **summarize(rows), "rows": rows}
+                       "cases_sha256": cases_fingerprint(), **summarize(rows), "rows": rows}
         print(f"{mode:8s} stopped {modes[mode]['attacks_stopped']}/{modes[mode]['attacks_total']}  "
               f"legit {modes[mode]['legit_correct']}/{modes[mode]['legit_total']}  misses={modes[mode]['misses']}")
     ordered = {k: modes[k] for k in ("none", "keyword", "ai") if k in modes}
@@ -134,6 +140,8 @@ def main(argv=None):
            "attacks": attacks, "legit": len(cases) - attacks,
            "persona": "Lumen & Loom (home-goods shop) procurement agent",
            "modes": ordered, "by_category": by_category(ordered),
+           # modes kept from an earlier run on a different cases.json (e.g. before a repricing): shown as stale
+           "stale_modes": [k for k, m in ordered.items() if m.get("cases_sha256") != cases_fingerprint()],
            "notes": ["'Stopped' = blocked outright or held for human approval; both mean no money moved.",
                      "Deterministic layers (vendor allowlist, per-vendor budgets, caps, unsafe-target and injection filters) "
                      "run before any policy check in both guarded modes.",

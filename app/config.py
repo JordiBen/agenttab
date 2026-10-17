@@ -53,7 +53,7 @@ class Settings:
     llm_calls_per_day: int = _env_int("LLM_CALLS_PER_DAY", 400)            # guard; then purchases need approval
     llm_report_calls_per_day: int = _env_int("LLM_REPORT_CALLS_PER_DAY", 60)  # reports; then a template
     # Per visitor IP, across guard checks and the Gauntlet: one visitor can't spend the shared Gemini quota.
-    llm_calls_per_ip_day: int = _env_int("LLM_CALLS_PER_IP_DAY", 30)
+    llm_calls_per_ip_day: int = _env_int("LLM_CALLS_PER_IP_DAY", 60)
     verdict_cache_ttl_s: float = field(default_factory=lambda: float(os.getenv("VERDICT_CACHE_TTL_S", "600")))
     paypal_calls_per_day: int = _env_int("PAYPAL_CALLS_PER_DAY", 120)  # orders/captures/refunds
     # A purchase waits at most this long for the same agent's previous purchase, then gets 429 (busy).

@@ -13,9 +13,9 @@ from bs4 import BeautifulSoup
 UA = "AgentTab/1.0 (+https://github.com/JordiBen/agenttab)"
 
 PRICES = {
-    "page_markdown": Decimal("0.01"),
-    "tech_detect": Decimal("0.02"),
-    "seo_audit": Decimal("0.03"),
+    "page_markdown": Decimal("12.00"),
+    "tech_detect": Decimal("24.00"),
+    "seo_audit": Decimal("49.00"),
 }
 
 DESCRIPTIONS = {

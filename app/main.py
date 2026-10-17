@@ -57,8 +57,8 @@ class NewAgent(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     owner_email: str = ""
     policy: str = Field(min_length=5, max_length=2000)
-    daily_cap_usd: float = 2.0
-    per_call_cap_usd: float = 0.10          # hard per-purchase maximum
+    daily_cap_usd: float = 250.0
+    per_call_cap_usd: float = 120.0         # hard per-purchase maximum
     vendor_budgets: dict[str, float] | None = None   # {vendor_id: rolling 30-day budget}; None = any vendor
     approval_threshold_usd: float | None = None      # above this a human approves via PayPal
     refund_window_days: int = Field(default=7, ge=0, le=180)
@@ -81,7 +81,7 @@ class PurchaseReq(BaseModel):
 
 class TopUp(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
-    amount_usd: float = 5.0
+    amount_usd: float = 100.0
 
 class FreezeReq(BaseModel):
     reason: str = Field(default="frozen by owner", min_length=1, max_length=300)
@@ -100,7 +100,7 @@ class _BuyArgs(BaseModel):
     item: str = Field(max_length=64, description="Item id from get_catalog, e.g. ceramic-mug-sample")
     quantity: int = Field(default=1, ge=1, le=100)
     purpose: str = Field(min_length=1, max_length=500, description="The specific business reason for this purchase")
-    target: str = Field(default="", max_length=2048, description="Only for WebIntel Data items: the public https:// URL to analyze")
+    target: str = Field(default="", max_length=2048, description="Only for SiteScope Data items: the public https:// URL to analyze")
 
 class _TopUpArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -639,7 +639,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 return JSONResponse(status_code=402, headers={"X-AgentTab-Price": str(amount)}, content={
                     "error": "payment_required", "price_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
                     **({"auto_topup": why} if why else {}),
-                    "topup": {"method": "POST", "endpoint": "/api/me/topup-request", "body": {"amount_usd": 5.0},
+                    "topup": {"method": "POST", "endpoint": "/api/me/topup-request", "body": {"amount_usd": float(max(amount - ledger.balance(aid), Decimal("1")).quantize(Decimal("1"), rounding=ROUND_UP))},
                               "note": "Returns a PayPal approval link for your human owner."}})
             if not needs_approval and amount > balance and not auto:  # check before spending an LLM call
                 return payment_required()
@@ -906,7 +906,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     def call_tool(name: str, body: ToolCall, request: Request, a=Depends(agent_from_key)):
         if name not in TOOLS:
             raise HTTPException(404, "unknown tool; see /api/catalog")
-        return do_purchase(a, pr.Purchase("webintel-data", name, 1, body.purpose, body.url), request)
+        return do_purchase(a, pr.Purchase("sitescope-data", name, 1, body.purpose, body.url), request)
 
     @app.post("/api/purchases")
     def create_purchase(body: PurchaseReq, request: Request, a=Depends(agent_from_key)):
@@ -1465,7 +1465,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.post("/api/demo/session")
     def demo_session(request: Request):
         """Anyone can start a demo: a fresh agent with a fixed policy and tight caps,
-        funded with $1.00 of PayPal *sandbox* money (test card, real sandbox capture)."""
+        funded with $100.00 of PayPal *sandbox* money (test card, real sandbox capture)."""
         if not s.demo_mode:
             raise HTTPException(404, "demo mode is off")
         ip = client_ip(request)
@@ -1478,10 +1478,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                                  pr.SHOP_APPROVAL_THRESHOLD, pr.SHOP_REFUND_WINDOW_DAYS, is_demo=True)
         paypal_budget()
         try:
-            cap = paypal.sandbox_card_topup(Decimal("1.00"), ag["agent_id"], op_id=f"demo-{ag['agent_id']}")
+            cap = paypal.sandbox_card_topup(pr.SHOP_DEMO_FUNDING, ag["agent_id"], op_id=f"demo-{ag['agent_id']}")
         except PayPalError as e:
             raise HTTPException(502, f"PayPal sandbox top-up failed: {e}")
-        ledger.add_order(cap["order_id"], ag["agent_id"], Decimal("1.00"))
+        ledger.add_order(cap["order_id"], ag["agent_id"], pr.SHOP_DEMO_FUNDING)
         ledger.mark_order(cap["order_id"], "CAPTURED")
         ledger.add_entry(ag["agent_id"], "fund", cap["amount"], paypal_ref=cap["capture_id"],
                          reason=f"PayPal sandbox order {cap['order_id']} (demo, test card)")

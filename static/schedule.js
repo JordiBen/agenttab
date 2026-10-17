@@ -9,12 +9,12 @@
     topup: 'fa-circle-plus', paypal_refund: 'fa-paypal', webhook: 'fa-bolt', denied: 'fa-ban',
     declined: 'fa-circle-xmark', voided: 'fa-circle-minus'};
 
-  // Event names come from the server ("Stoneware mug sample $0.20 · refundable"); the bar shows a version that fits
+  // Event names come from the server ("Stoneware mug sample $18.00 · refundable"); the bar shows a version that fits
   // (item names trimmed first, the amount kept), and the tooltip always has the full text.
   function shortLabel(e, max) {
     const name = String(e.name || '');
     if (name.length <= max) return name;
-    const m = name.match(/^(.*?)(\s\$\d+\.\d\d)(.*)$/);           // keep "$0.20", trim the words before it
+    const m = name.match(/^(.*?)(\s\$\d+\.\d\d)(.*)$/);           // keep "$18.00", trim the words before it
     if (m && (m[1] + m[2]).length <= max) return m[1] + m[2];     // drop the suffix ("· refundable") first
     if (m && max > m[2].length + 3) {
       const head = m[1].slice(0, Math.max(1, max - m[2].length - 1)).replace(/\s+\S*$/, '') || m[1].slice(0, max - m[2].length - 1);
@@ -94,7 +94,7 @@
       if (r.status === 401 && opts.onUnauthorized) { opts.onUnauthorized(); return; }
       if (!r.ok) return;
       const j = await r.json();
-      // Each vendor's 30-day budget figure goes into its row header ("$0.20 of $0.60 · 33%").
+      // Each vendor's 30-day budget figure goes into its row header ("$18.00 of $200.00 · 9%").
       const bud = {};
       for (const e of j.events) if (e.type === 'budget') bud[e.resourceId] = {percent: e.percent || 0,
         text: String(e.name).replace(/^30-day budget:\s*/, '') + ' · ' + (e.percent || 0) + '%'};
