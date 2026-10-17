@@ -1,0 +1,36 @@
+# GitHub Actions workflow. To enable it, copy this file to .github/workflows/ci.yml
+# (pushing workflow files needs a token with the `workflow` scope).
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Tests (offline: mock PayPal, no LLM; live tests skip without keys)
+        run: pytest -q
+      - name: Offline eval (no guard + keyword modes, no API calls)
+        run: python -m eval.run_eval --modes none,keyword --out /tmp/eval.json
+      - name: Offline eval matches the committed scorecard
+        run: |
+          python - <<'PY'
+          import json
+          new, old = json.load(open("/tmp/eval.json")), json.load(open("eval/results.json"))
+          for m in ("none", "keyword"):
+              for k in ("attacks_stopped", "attacks_total", "legit_correct", "legit_total"):
+                  assert new["modes"][m][k] == old["modes"][m][k], (m, k, new["modes"][m][k], old["modes"][m][k])
+          print("offline eval matches eval/results.json")
+          PY
