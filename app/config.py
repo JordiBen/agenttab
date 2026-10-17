@@ -52,13 +52,16 @@ class Settings:
     # Separate daily LLM budgets: spend-guard checks can't be starved by report requests.
     llm_calls_per_day: int = _env_int("LLM_CALLS_PER_DAY", 400)            # guard; then purchases need approval
     llm_report_calls_per_day: int = _env_int("LLM_REPORT_CALLS_PER_DAY", 60)  # reports; then a template
+    # Per visitor IP, across guard checks and the Gauntlet: one visitor can't spend the shared Gemini quota.
+    llm_calls_per_ip_day: int = _env_int("LLM_CALLS_PER_IP_DAY", 30)
+    verdict_cache_ttl_s: float = field(default_factory=lambda: float(os.getenv("VERDICT_CACHE_TTL_S", "600")))
     paypal_calls_per_day: int = _env_int("PAYPAL_CALLS_PER_DAY", 120)  # orders/captures/refunds
     # A purchase waits at most this long for the same agent's previous purchase, then gets 429 (busy).
     agent_lock_timeout_s: float = field(default_factory=lambda: float(os.getenv("AGENT_LOCK_TIMEOUT_S", "2.5")))
     # Live Gauntlet: a sampled attack run through the real guard (dry run, no money). Own LLM budget.
-    gauntlet_runs_per_ip_hour: int = _env_int("GAUNTLET_RUNS_PER_IP_HOUR", 3)
-    gauntlet_runs_per_day: int = _env_int("GAUNTLET_RUNS_PER_DAY", 30)
-    gauntlet_llm_calls_per_day: int = _env_int("GAUNTLET_LLM_CALLS_PER_DAY", 150)
+    gauntlet_runs_per_ip_hour: int = _env_int("GAUNTLET_RUNS_PER_IP_HOUR", 2)
+    gauntlet_runs_per_day: int = _env_int("GAUNTLET_RUNS_PER_DAY", 12)
+    gauntlet_llm_calls_per_day: int = _env_int("GAUNTLET_LLM_CALLS_PER_DAY", 60)
     # Offline mock PayPal is for localhost only. Tests set this to run mock + demo mode together.
     allow_insecure_mock: bool = field(default_factory=lambda: os.getenv("ALLOW_INSECURE_MOCK", "0") == "1")
 

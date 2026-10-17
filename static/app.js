@@ -223,7 +223,7 @@ async function demoStart() { show('Funding your agent through PayPal sandbox…'
   toast('ok', 'Funded ' + usd(j.balance_usd) + ' via PayPal sandbox', 'Capture ' + j.paypal_capture_id);
   show(`Agent ${j.name} funded: ${usd(j.balance_usd)}\nPayPal sandbox order ${j.paypal_order_id}\nCapture ${j.paypal_capture_id}`); dload(); }
 async function demoBuy(vendor, item, target, purpose) { if (!DK()) { toast('info', 'Start a demo session first', 'Step 1 funds your agent with $1.00 of sandbox money.'); return show('Start a demo session first.'); }
-  show('Guard is checking the purchase…'); verdict(pill('approval', 'checking'));
+  show('Guard is checking the purchase…'); verdict(pill('approval', 'checking')); $('dbusy').style.display = 'none';
   let r; try { r = await dfetch('/api/purchases', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Agent-Key': DK()}, body: JSON.stringify({vendor, item, quantity: 1, target, purpose})}); } catch (e) { return show(''); }
   const j = await r.json(); const g = j.guard || (j.detail && j.detail.layer ? j.detail : null);
   const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` + (g.model ? `<span class="pill blue">${enc(g.model)}</span>` : '') : '';
@@ -231,6 +231,11 @@ async function demoBuy(vendor, item, target, purpose) { if (!DK()) { toast('info
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
   if (r.status === 200) { verdict(pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
+  else if (r.status === 202 && j.ai_unavailable) {   // fail closed: no AI verdict means a human decides, never auto-approve
+    verdict(pill('approval', 'AI guard busy · waiting for you') + who); live('approval');
+    toast('warn', 'AI guard is busy', 'Purchase is waiting for human approval, by design.');
+    $('dbusy').textContent = j.message; $('dbusy').style.display = '';
+    show(`${j.message}.\n\n${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or reject it.`); }
   else if (r.status === 202) { verdict(pill('approval', 'Needs your approval') + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
     show(`${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or right-click it on the schedule. The approval link expires in 24 h.`); }
   else if (r.status === 403) { verdict(pill('deny', 'Blocked') + who); live('block'); toast('bad', 'Blocked by the guard', g.reason); show(g.reason); }

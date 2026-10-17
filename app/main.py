@@ -11,6 +11,7 @@ on first access, so importing this module has no side effects).
 """
 from __future__ import annotations
 
+import contextvars
 import hmac
 import html
 import json
@@ -35,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import llm
 from . import mcp as mcpp
 from .config import Settings, get_settings
-from .guard import SpendGuard
+from .guard import SpendGuard, VerdictCache
 from .ledger import Ledger, from_micro, to_micro
 from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import SIMULATABLE, PayPalClient, PayPalError
@@ -45,6 +46,9 @@ from . import schedule as sched
 
 log = logging.getLogger("agenttab")
 DEMO_POLICY = pr.SHOP_POLICY
+AI_BUSY_MESSAGE = "AI guard is busy, purchase is waiting for human approval, by design"
+# Client IP of the request being handled (set per request in the worker thread), for the per-IP LLM budget.
+CURRENT_IP: contextvars.ContextVar[str] = contextvars.ContextVar("agenttab_client_ip", default="")
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -148,7 +152,16 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     ledger = Ledger(s.db_path)
     paypal = PayPalClient(s)
     # The guard has its own daily LLM budget, separate from reports, so reports can't starve purchases.
-    guard = SpendGuard(s, ai_allowed=lambda: limiter.allow("llm-guard", s.llm_calls_per_day, DAY))
+    verdicts = VerdictCache(ttl_s=s.verdict_cache_ttl_s)   # shared by the purchase guard and the Gauntlet
+
+    def llm_budget(key: str, per_day: int) -> bool:
+        """One LLM call may go out: the visitor's own daily budget first (per IP, shared by purchases and the
+        Gauntlet), then the shared daily budget for this use. Called only on a verdict-cache miss."""
+        ip = CURRENT_IP.get()
+        if ip and not limiter.allow("llm-ip:" + ip, s.llm_calls_per_ip_day, DAY):
+            return False
+        return limiter.allow(key, per_day, DAY)
+    guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-guard", s.llm_calls_per_day), cache=verdicts)
     guard_mode = "ai" if llm.enabled(s) else "keyword"   # keyword only when no LLM is configured at all
     app.state.ledger, app.state.paypal, app.state.guard, app.state.settings = ledger, paypal, guard, s
     app.state.limiter = limiter
@@ -597,6 +610,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return time.time() + days * 86400
 
     def do_purchase(a, p: pr.Purchase, request: Request):
+        CURRENT_IP.set(client_ip(request))   # the guard's LLM call counts against this visitor's daily budget
         limit("tools:" + client_ip(request), s.tool_calls_per_ip_hour, HOUR, "too many purchases from your IP; try again later")
         limit("purchases:" + a["id"], s.purchases_per_agent_hour, HOUR, "too many purchases for this agent; try again later")
         amount = pr.price_of(p)
@@ -650,8 +664,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                                           paypal_order=o["id"])
                 ledger.add_entry(aid, "approval", Decimal(0), f"{p.vendor}:{p.item}", p.target, p.purpose,
                                  "approval", tag, o["id"])
+                busy = {"ai_unavailable": True, "message": AI_BUSY_MESSAGE} if out.layer == "policy-unavailable" else {}
                 return JSONResponse(status_code=202, content={
-                    "status": "approval_required", "purchase_id": pid, "amount_usd": float(amount),
+                    "status": "approval_required", "purchase_id": pid, "amount_usd": float(amount), **busy,
                     "approve_url": o["approve_url"], "approval_expires_at": expires, "guard": out.as_dict(),
                     "note": "Forward approve_url to your human. Approving places a PayPal hold; it is captured only "
                             "after the vendor delivers, and voided (never charged) if delivery fails."})
@@ -1516,7 +1531,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "decisions": out}
 
     # ---------------- live Gauntlet: sampled attacks through the real guard ----------------
-    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: limiter.allow("llm-gauntlet", s.gauntlet_llm_calls_per_day, DAY))
+    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-gauntlet", s.gauntlet_llm_calls_per_day),
+                                cache=verdicts)
     GAUNTLET_CATS = ("direct_injection", "indirect_injection", "personal_use", "social_target", "lookalike_unsafe",
                      "forbidden_vendor", "caps", "vague")
 
@@ -1531,6 +1547,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         is never called. Rate-limited, with its own daily LLM budget."""
         limit("gauntlet:" + client_ip(request), s.gauntlet_runs_per_ip_hour, HOUR, "Gauntlet limit for your IP reached; try again in an hour")
         limit("gauntlet:all", s.gauntlet_runs_per_day, DAY, "today's live Gauntlet runs are used up; the committed scorecard below has the full 67-case run")
+        CURRENT_IP.set(client_ip(request))
         cases, rng = gauntlet_cases(), secrets.SystemRandom()
         picked = [rng.choice([c for c in cases if c["category"] == cat]) for cat in GAUNTLET_CATS
                   if any(c["category"] == cat for c in cases)]

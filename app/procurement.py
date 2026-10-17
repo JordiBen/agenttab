@@ -104,12 +104,15 @@ class Outcome:
     layer: str          # catalog | unsafe_target | purpose | injection | allowlist | caps | policy-ai | policy-keyword | approval | none
     amount: Decimal = Decimal(0)
     model: str = ""
+    cached: bool = False   # the AI verdict came from the short-lived verdict cache (no new LLM call)
 
     def as_dict(self):
         d = {"outcome": self.outcome, "allow": self.outcome != "block", "reason": self.reason,
              "layer": self.layer, "source": self.layer, "amount_usd": float(self.amount)}
         if self.model:
             d["model"] = self.model
+        if self.cached:
+            d["cached"] = True
         return d
 
 
@@ -194,9 +197,10 @@ def decide(cfg: AgentConfig, p: Purchase, state: State, mode: str, guard: SpendG
         layer = "policy-ai" if d.source == "ai" else f"policy-{d.source}"
         if d.source == "unavailable":   # fail closed: a human decides, the heuristic never does in AI mode
             return Outcome("approval", f"{d.reason}; a human must approve this purchase", "policy-unavailable", amount)
+    cached = bool(getattr(d, "cached", False))
     if not d.allow:
-        return Outcome("block", d.reason, layer, amount, d.model)
+        return Outcome("block", d.reason, layer, amount, d.model, cached)
     if cfg.approval_threshold is not None and amount > cfg.approval_threshold:
         return Outcome("approval", f"${amount:.2f} is above the ${cfg.approval_threshold:.2f} approval threshold; "
-                                   f"policy check passed ({d.reason})", "approval", amount, d.model)
-    return Outcome("allow", d.reason, layer, amount, d.model)
+                                   f"policy check passed ({d.reason})", "approval", amount, d.model, cached)
+    return Outcome("allow", d.reason, layer, amount, d.model, cached)
