@@ -4,3 +4,4 @@ __pycache__/
 .env
 .venv/
 .admin_token
+submission/demo*.mp4
