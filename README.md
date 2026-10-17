@@ -6,14 +6,14 @@ Live demo: https://agenttab.onrender.com (PayPal sandbox only, no real money).
 
 **Lumen & Loom** is a 6-person online shop selling home textiles and ceramics. Its AI agent orders supplier samples,
 buys SaaS seats and pays for competitor research. Giving that agent a company card is reckless; approving every
-$0.20 sample by hand defeats the point.
+$18 sample by hand defeats the point.
 
 **AgentTab** gives the agent a prepaid tab and rules the owner writes in plain English:
 
 1. **Fund once with PayPal.** The owner tops up the tab through PayPal Checkout (Orders v2: create → approve → capture).
-2. **Approved vendors, each with its own 30-day budget.** SampleBox Wholesale $0.60, ShopSuite $1.00, WebIntel Data $0.30.
+2. **Approved vendors, each with its own 30-day budget.** SampleBox Wholesale $200, ShopSuite $300, SiteScope Data $150.
    Anything from a vendor that isn't on the list (follower sellers, gift cards) is blocked before any AI is asked.
-3. **Approval above a threshold.** A purchase over **$0.30** isn't charged to the tab. AgentTab returns `202` with a
+3. **Approval above a threshold.** A purchase over **$60** isn't charged to the tab. AgentTab returns `202` with a
    PayPal approval link (valid 24 h). Approving places a PayPal **hold** (Orders v2 `intent=AUTHORIZE`); AgentTab
    captures it only after the vendor delivers and voids it if delivery fails, so a failed purchase is never charged.
 4. **A refund window on goods and subscriptions.** For 7 days each sample or SaaS purchase has its own Refund button:
@@ -29,7 +29,9 @@ $0.20 sample by hand defeats the point.
 67 labeled purchases in [`eval/cases.json`](eval/cases.json): 20 legitimate shop purchases and
 47 attacks or rule violations (forbidden vendors, social-network targets, personal use, vague purposes,
 direct and indirect prompt injection, budget splitting, look-alike and internal URLs). Each runs through the same
-`decide()` the server uses, in three modes. Results: [`eval/results.json`](eval/results.json), also live at `/api/scorecard`
+`decide()` the server uses, in three modes. Prices are realistic sandbox prices (mug sample $18, napkin set $24, throw
+$32, SaaS seat $29 or $39 a month, research data $12 to $49; limits: $60 approval threshold, $120 per purchase, $250 a day).
+Results: [`eval/results.json`](eval/results.json), also live at `/api/scorecard`
 and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 
 | Mode | Attacks stopped | Legit handled right | False blocks | Latency p50 / p95 | LLM calls / tokens |
@@ -37,6 +39,13 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
 | Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
 | Rules + Gemini judge | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
+
+**Repricing note (branch feature/realistic-shop):** the catalog moved from cent prices to the realistic prices above and the
+vendor `webintel-data` was renamed `sitescope-data`. To keep each case testing the same thing, six cases changed quantity
+or prior spend (legit-15..18 now order 2-4 units so they still cross the $60 threshold; caps-01/06 order 4 and 5 seats so
+they still exceed $120; caps-02..05 carry rescaled prior spend). The no-guard and keyword rows were re-run on the new cases
+and match the old numbers exactly. The **Gemini row is from the previous catalog** (`stale_modes: ["ai"]` in
+`eval/results.json`, labelled "previous catalog" on the dashboard); its re-run is pending.
 
 | Category | Cases | No guard | Rules + keyword | Rules + Gemini |
 |---|---|---|---|---|
@@ -134,7 +143,7 @@ uvicorn app.main:create_app --factory     # `uvicorn app.main:app` works too
 ```
 The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. If Gemini is down or rate-limited, it tries the second model; if that fails too (or the daily AI budget is used up), the purchase is **held for human approval** instead of being decided by keywords, and the API and demo say so: "AI guard is busy, purchase is waiting for human approval, by design" (`ai_unavailable: true` on the `202`). The keyword check is only used when no LLM is configured at all (offline/dev).
 
-Complete verdicts from the primary model are cached for 10 minutes, keyed by a SHA-256 of the exact LLM input (policy, vendor, item and quantity, price, target, purpose) plus the model id, so an identical repeat check costs no Gemini call (`"cached": true`). Fallback-model answers, unparseable verdicts and unavailable results are never cached; changing one character of the input is a new check. Each visitor IP also has its own daily Gemini budget (30 calls, shared by purchases and the Gauntlet) on top of the shared daily budgets.
+Complete verdicts from the primary model are cached for 10 minutes, keyed by a SHA-256 of the exact LLM input (policy, vendor, item and quantity, price, target, purpose) plus the model id, so an identical repeat check costs no Gemini call (`"cached": true`). Fallback-model answers, unparseable verdicts and unavailable results are never cached; changing one character of the input is a new check. Each visitor IP also has its own daily Gemini budget (60 calls, shared by purchases and the Gauntlet) on top of the shared daily budgets.
 
 ### PayPal sandbox notes
 - `POST /api/agents/{id}/topup` creates a real Orders v2 order. The buyer approves it on sandbox.paypal.com (sandbox personal account, or "Pay with Debit or Credit Card" → **Pay now as guest** with a sandbox test card). On return, AgentTab captures it.
@@ -154,7 +163,7 @@ Complete verdicts from the primary model are cached for 10 minutes, keyed by a S
   hold. Either way the agent is frozen; a transient PayPal error leaves the credit for the next run.
 - **Saved card (Vault v3).** `POST /api/agents/{id}/saved-card` saves PayPal's sandbox test card (setup token → payment
   token; only brand and last 4 are shown). The owner can top up from it, or turn on auto top-up
-  (`PUT /api/agents/{id}/auto-topup`, e.g. $1 at a time, at most $5 per 30 days). Auto top-up only runs for purchases
+  (`PUT /api/agents/{id}/auto-topup`, e.g. $50 at a time, at most $200 per 30 days). Auto top-up only runs for purchases
   the guard already allowed, and never for a frozen agent. It places a merchant-initiated hold on the card (stored
   credential, unscheduled), delivers the purchase, writes the top-up and the purchase in one ledger transaction, and only
   then captures the hold. A failed delivery or a lost commit voids the hold. A capture declined after delivery reverses
@@ -174,7 +183,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
    - Writes a brief.
 
 ## Public demo mode (`DEMO_MODE=1`)
-- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $0.30 approval threshold, $0.50 per purchase, $0.90 per day). It's funded with $1.00 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends a SaaS seat to approval and approves it with the sandbox card, watches a gift card and a prompt injection get blocked, and refunds individual purchases.
+- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $60 approval threshold, $120 per purchase, $250 per day). It's funded with $100 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends two SaaS seats ($78) to approval and approves it with the sandbox card, watches a gift card and a prompt injection get blocked, and refunds individual purchases.
 - Visitors only ever hold their own agent key. Only agents created by `/api/demo/session` (flagged as demo agents) may play
   "owner" of their own purchases (approve, reject, refund, demo clock, demo report). Regular agents can't, even on a demo
   server. All other owner endpoints need `ADMIN_TOKEN` (24+ random characters, required in demo mode, no default).
@@ -200,7 +209,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | GET | `/api/me` | agent | Balance and caps |
 | POST | `/api/me/topup-request` | agent | Ask its human for budget (PayPal link) |
 | POST | `/api/purchases` | agent | `{vendor, item, quantity, target, purpose}` → `200` bought, `202` needs approval (`approve_url`), `402` tab empty, `403` blocked |
-| POST | `/api/tools/{name}` | agent | Shortcut for WebIntel Data purchases: `{url, purpose}` |
+| POST | `/api/tools/{name}` | agent | Shortcut for SiteScope Data purchases: `{url, purpose}` |
 | GET | `/api/me/purchases` | agent | Its purchases with status and refund deadline |
 | GET | `/api/purchases?agent_id=` | owner | Purchases of an agent |
 | POST | `/api/purchases/{id}/refund` | owner | Refund one sample/SaaS purchase inside its window (to tab, or to PayPal if paid by approval); data is final |
@@ -218,14 +227,14 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | POST | `/api/purchases/{id}/used` | agent | Mark an item as used (no refund suggestion) |
 | POST | `/paypal/webhook` | PayPal | Signature-verified webhook events |
 | POST | `/mcp` | agent (MCP client) | MCP server: the agent's guarded tools (see above) |
-| POST | `/api/demo/session` | anyone (demo mode) | New demo agent funded with $1.00 of sandbox money |
+| POST | `/api/demo/session` | anyone (demo mode) | New demo agent funded with $100 of sandbox money |
 | GET/POST | `/api/demo/ledger` · `purchases` · `report` · `refund` · `fast-forward?days=6` | demo agent | Demo views and actions for your own demo agent |
 
 ## Safety: what the code does (and its limits)
 - Amounts are stored as integer micro-dollars; NaN/Infinity and out-of-range amounts are rejected.
 - **Purchases are serialized per agent.** Balance, caps and vendor budget are read, judged and charged under a per-agent
   lock, and the charge is re-checked inside one SQLite write transaction (`BEGIN IMMEDIATE`). A test fires 10 parallel
-  $0.20 buys at a $1.00 tab: exactly 5 succeed and the balance ends at $0.00. (The lock is per process; the app runs as one
+  $18 buys at a $90 tab: exactly 5 succeed and the balance ends at $0.00. (The lock is per process; the app runs as one
   instance, and the transaction re-check is the backstop.)
 - **State changes are claimed atomically.** Order capture (`CREATED → CAPTURING`), approval completion and refunds use
   conditional `UPDATE … WHERE status=…`, so the return URL, the webhook and a double click can't capture or fund twice.
@@ -245,7 +254,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-179 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+190 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,

@@ -60,7 +60,7 @@ def test_mcp_panel_masks_and_reveals_the_demo_key(page, server):
 
 
 def test_charge_declined_label_frozen_badge_and_423(page, server):
-    page.click("text=4. Inventory SaaS seat")
+    page.click("text=4. Inventory SaaS, 2 seats")
     page.wait_for_function("document.getElementById('dverdict').textContent.includes('approval')")
     key = page.evaluate("sessionStorage.dkey")
     pid = [p for p in httpx.get(server + "/api/demo/purchases", headers={"X-Agent-Key": key}).json()

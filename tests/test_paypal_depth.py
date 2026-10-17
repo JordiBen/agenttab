@@ -12,7 +12,7 @@ from app.paypal import PayPalClient, PayPalError
 from tests.test_agenttab import A, _demo_client, _wh, buy, fund, shop_agent
 from tests.test_hardening import _client
 
-SEAT = dict(vendor="shopsuite", item="inventory-seat", purpose="Inventory software to track stock across our two warehouses")
+SEAT = dict(vendor="shopsuite", item="inventory-seat", quantity=2, purpose="Inventory software to track stock across our two warehouses")
 MUG = dict(vendor="samplebox", item="ceramic-mug-sample")
 
 
@@ -42,7 +42,7 @@ def test_approval_link_authorizes_then_captures_after_delivery(tmp_path):
     assert kinds == ["charge", "fund"] and c.app.state.ledger.balance(ag["agent_id"]) == 0
     # refund goes back on the authorization's capture
     r = c.post(f"/api/purchases/{pid}/refund", headers=A).json()
-    assert r["to"] == "paypal" and pp.mock_refund_log == [(pu["paypal_capture"], Decimal("0.40"))]
+    assert r["to"] == "paypal" and pp.mock_refund_log == [(pu["paypal_capture"], Decimal("78.00"))]
 
 
 def test_vendor_failure_voids_hold_and_charges_nothing(tmp_path, monkeypatch):
@@ -70,7 +70,7 @@ def test_capture_decline_after_delivery_freezes_agent(tmp_path):
     assert _money(c, ag["agent_id"]) == []
     me = c.get("/api/me", headers={"X-Agent-Key": ag["api_key"]}).json()
     assert me["frozen"] and "TRANSACTION_REFUSED" in me["frozen_reason"]
-    fund(c, ag["agent_id"], 1)                                   # owner may still fund a frozen agent
+    fund(c, ag["agent_id"], 100)                                 # owner may still fund a frozen agent
     r = buy(c, ag["api_key"], **MUG)
     assert r.status_code == 423 and r.json()["detail"]["error"] == "agent_frozen"
     assert c.post("/api/me/topup-request", json={"amount_usd": 1}, headers={"X-Agent-Key": ag["api_key"]}).status_code == 423
@@ -119,7 +119,7 @@ def test_capture_webhook_for_authorize_order_does_not_complete_purchase(tmp_path
     c = _client(tmp_path)
     ag = shop_agent(c)
     pid, oid = _approval(c, ag)
-    ev = {"id": "CAP-FORGED", "amount": {"value": "0.40"}, "supplementary_data": {"related_ids": {"order_id": oid}}}
+    ev = {"id": "CAP-FORGED", "amount": {"value": "78.00"}, "supplementary_data": {"related_ids": {"order_id": oid}}}
     _wh(c, "PAYMENT.CAPTURE.COMPLETED", ev)
     assert c.app.state.ledger.purchase(pid)["status"] == "pending_approval" and _money(c, ag["agent_id"]) == []
 
@@ -139,7 +139,7 @@ def test_simulated_decline_is_owner_and_allowlist_only(tmp_path):
     s = c.post("/api/demo/session").json()
     k = {"X-Agent-Key": s["agent_key"]}
     pid = c.post("/api/purchases", json={"purpose": "Inventory software for our stock", "vendor": "shopsuite",
-                                         "item": "inventory-seat"}, headers=k).json()["purchase_id"]
+                                         "item": "inventory-seat", "quantity": 2}, headers=k).json()["purchase_id"]
     r = c.post(f"/api/purchases/{pid}/approve-sandbox-card", headers=k | {"X-Simulate-Decline": "TRANSACTION_REFUSED"})
     assert r.status_code == 403 and c.app.state.ledger.purchase(pid)["status"] == "pending_approval"
     adm = {"X-Admin-Token": "x" * 32}
@@ -178,7 +178,7 @@ def test_refund_decline_keeps_purchase_completed_then_retry_works(tmp_path):
     assert r.status_code == 502 and "REFUND_FAILED_INSUFFICIENT_FUNDS" in r.text
     assert c.app.state.ledger.purchase(pid)["status"] == "completed"
     assert [e["kind"] for e in _money(c, ag["agent_id"])].count("refund") == 0
-    assert c.post(f"/api/purchases/{pid}/refund", headers=A).json()["refunded_usd"] == 0.40
+    assert c.post(f"/api/purchases/{pid}/refund", headers=A).json()["refunded_usd"] == 78.0
 
 
 def test_mock_response_header_only_in_sandbox_and_fresh_request_id(monkeypatch):
@@ -261,13 +261,13 @@ def test_reversal_webhook_freezes_and_negative_balance_reported(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
     aid = ag["agent_id"]
-    fund(c, aid, 1)
+    fund(c, aid, 100)
     assert buy(c, ag["api_key"], **MUG).status_code == 200
     cap = c.app.state.ledger.captures(aid)[0]["paypal_ref"]
-    r = _wh(c, "PAYMENT.CAPTURE.REVERSED", {"id": cap, "amount": {"value": "1.00"}}).json()
+    r = _wh(c, "PAYMENT.CAPTURE.REVERSED", {"id": cap, "amount": {"value": "100.00"}}).json()
     assert "frozen" in r["effect"]
     a = c.get(f"/api/agents", headers=A).json()[0]
-    assert a["frozen"] and a["balance_usd"] == -0.20
+    assert a["frozen"] and a["balance_usd"] == -18.0
     rec = c.post(f"/api/agents/{aid}/reconcile", headers=A).json()
     assert any("negative" in m for m in rec["mismatches"])
 
@@ -276,10 +276,10 @@ def test_outside_topup_refund_into_negative_freezes(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
     aid = ag["agent_id"]
-    fund(c, aid, 1)
+    fund(c, aid, 100)
     buy(c, ag["api_key"], **MUG)
     cap = c.app.state.ledger.captures(aid)[0]["paypal_ref"]
-    _wh(c, "PAYMENT.CAPTURE.REFUNDED", {"id": "REF-OUT", "amount": {"value": "1.00"},
+    _wh(c, "PAYMENT.CAPTURE.REFUNDED", {"id": "REF-OUT", "amount": {"value": "100.00"},
         "links": [{"rel": "up", "href": f"https://api.sandbox.paypal.com/v2/payments/captures/{cap}"}]})
     assert c.get("/api/me", headers={"X-Agent-Key": ag["api_key"]}).json()["frozen"]
 
@@ -321,19 +321,19 @@ def test_saved_card_topup_and_token_never_exposed(tmp_path):
 
 def test_auto_topup_only_after_guard_allows_and_within_cap(tmp_path):
     c = _client(tmp_path)
-    ag = shop_agent(c, daily_cap_usd=5.0, vendor_budgets={"samplebox": 5.0, "shopsuite": 5.0})
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0, "shopsuite": 500.0})
     aid, k = ag["agent_id"], ag["api_key"]
-    assert c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 0.5, "monthly_cap_usd": 1}, headers=A).status_code == 409
+    assert c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 45, "monthly_cap_usd": 90}, headers=A).status_code == 409
     _saved(c, ag)
-    assert c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 2, "monthly_cap_usd": 1}, headers=A).status_code == 422
-    v = c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 0.5, "monthly_cap_usd": 1}, headers=A).json()
-    assert v["auto_topup"]["monthly_cap_usd"] == 1.0
+    assert c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 180, "monthly_cap_usd": 90}, headers=A).status_code == 422
+    v = c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 45, "monthly_cap_usd": 90}, headers=A).json()
+    assert v["auto_topup"]["monthly_cap_usd"] == 90.0
     # guard-blocked purchase: no money pulled
     r = buy(c, k, vendor="adboost-social", item="followers-1000", purpose="Boost my personal account")
     assert r.status_code == 403 and c.app.state.ledger.vault_topups_since(aid, 0) == 0
     seq = [buy(c, k, **MUG).status_code for _ in range(6)]
-    assert seq == [200, 200, 200, 200, 200, 402]              # 2 auto top-ups of $0.50 = cap $1.00
-    assert c.app.state.ledger.vault_topups_since(aid, 0) == Decimal("1.00")
+    assert seq == [200, 200, 200, 200, 200, 402]              # 2 auto top-ups of $45 = cap $90 (5 x $18 mugs)
+    assert c.app.state.ledger.vault_topups_since(aid, 0) == Decimal("90.00")
     r = buy(c, k, **MUG).json()
     assert r["error"] == "payment_required" and "cap" in r["auto_topup"]
 
@@ -343,7 +343,7 @@ def test_auto_topup_card_decline_is_402_and_credits_nothing(tmp_path):
     ag = shop_agent(c)
     aid = ag["agent_id"]
     _saved(c, ag)
-    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 1, "monthly_cap_usd": 3}, headers=A)
+    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 45, "monthly_cap_usd": 90}, headers=A)
     c.app.state.paypal.mock_fail["authorize_vault"] = "INSTRUMENT_DECLINED"
     r = buy(c, ag["api_key"], **MUG)
     assert r.status_code == 402 and "INSTRUMENT_DECLINED" in r.json()["auto_topup"]
@@ -355,7 +355,7 @@ def test_auto_topup_never_runs_for_frozen_agent_and_delete_turns_it_off(tmp_path
     ag = shop_agent(c)
     aid = ag["agent_id"]
     _saved(c, ag)
-    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 1, "monthly_cap_usd": 3}, headers=A)
+    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 45, "monthly_cap_usd": 135}, headers=A)
     c.post(f"/api/agents/{aid}/freeze", json={"reason": "x"}, headers=A)
     assert buy(c, ag["api_key"], **MUG).status_code == 423 and c.app.state.ledger.vault_topups_since(aid, 0) == 0
     v = c.delete(f"/api/agents/{aid}/saved-card", headers=A).json()
@@ -368,8 +368,8 @@ def test_manual_saved_card_topups_count_toward_cap(tmp_path):
     ag = shop_agent(c)
     aid = ag["agent_id"]
     _saved(c, ag)
-    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 1, "monthly_cap_usd": 2}, headers=A)
-    assert c.post(f"/api/agents/{aid}/topup-saved-card", json={"amount_usd": 2}, headers=A).status_code == 200
+    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 45, "monthly_cap_usd": 90}, headers=A)
+    assert c.post(f"/api/agents/{aid}/topup-saved-card", json={"amount_usd": 90}, headers=A).status_code == 200
     assert c.post(f"/api/agents/{aid}/topup-saved-card", json={"amount_usd": 0.01}, headers=A).status_code == 409
 
 
@@ -444,12 +444,12 @@ def test_return_url_and_webhook_race_authorizes_and_captures_once(tmp_path):
 def test_parallel_purchases_never_auto_topup_past_cap(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     c = _client(tmp_path)
-    ag = shop_agent(c, daily_cap_usd=50.0, vendor_budgets={"samplebox": 50.0})
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
     aid = ag["agent_id"]
     _saved(c, ag)
-    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 0.5, "monthly_cap_usd": 1}, headers=A)
+    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 45, "monthly_cap_usd": 90}, headers=A)
     with ThreadPoolExecutor(8) as ex:
         codes = list(ex.map(lambda _: buy(c, ag["api_key"], **MUG).status_code, range(10)))
     led = c.app.state.ledger
-    assert led.vault_topups_since(aid, 0) <= Decimal("1.00") and led.balance(aid) >= 0
+    assert led.vault_topups_since(aid, 0) <= Decimal("90.00") and led.balance(aid) >= 0
     assert codes.count(200) == 5 and set(codes) <= {200, 402, 429}

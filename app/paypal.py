@@ -129,7 +129,7 @@ class PayPalClient:
                 "amount": {"currency_code": "USD", "value": value},
             }],
             "payment_source": {"paypal": {"experience_context": {
-                "brand_name": "AgentTab by WebIntel Tools",
+                "brand_name": "AgentTab",
                 "user_action": "PAY_NOW",
                 "shipping_preference": "NO_SHIPPING",
                 "return_url": f"{self.s.public_url}/paypal/return",
