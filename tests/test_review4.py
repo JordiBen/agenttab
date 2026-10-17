@@ -18,7 +18,7 @@ POLICY = "Only buy supplier samples and shop software for our home-goods shop."
 TOOL = "vendor=SampleBox (category: samples); item=Stoneware mug sample x1"
 PURPOSE = "Quality-check a stoneware mug from a supplier before we stock it"
 OK = json.dumps({"target_allowed": True, "purpose_fits_policy": True, "injection_attempt": False, "reason": "fits"})
-S_AI = Settings(llm_base_url="http://llm.invalid", llm_api_key="k", llm_model="primary-model",
+S_AI = Settings(guard_provider="gemini", llm_base_url="http://llm.invalid", llm_api_key="k", llm_model="primary-model",
                 llm_fallback_model="fallback-model")
 
 
@@ -117,7 +117,7 @@ def test_cache_entries_expire_after_ten_minutes(monkeypatch):
 def test_repeated_identical_purchase_spends_one_llm_call_end_to_end(tmp_path, monkeypatch):
     fake = FakeLLM([(OK, "gemini-3.5-flash-lite")])
     monkeypatch.setattr(llm, "chat", fake)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_model="gemini-3.5-flash-lite")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_model="gemini-3.5-flash-lite")
     ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
     c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 200}, headers=A)
     body = dict(vendor="samplebox", item="ceramic-mug-sample", purpose=PURPOSE)
@@ -136,7 +136,7 @@ def test_gauntlet_caps_are_lower_by_default():
 def test_per_ip_llm_budget_sends_one_visitor_to_human_approval_but_not_others(tmp_path, monkeypatch):
     fake = FakeLLM([(OK, "gemini-3.5-flash-lite")])
     monkeypatch.setattr(llm, "chat", fake)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_calls_per_ip_day=2,
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_calls_per_ip_day=2,
                 tool_calls_per_ip_hour=100)
     ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
     c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 300}, headers=A)
@@ -155,7 +155,7 @@ def test_per_ip_llm_budget_sends_one_visitor_to_human_approval_but_not_others(tm
 def test_gauntlet_counts_against_the_same_per_ip_llm_budget(tmp_path, monkeypatch):
     fake = FakeLLM([(OK, "gemini-3.5-flash-lite")])
     monkeypatch.setattr(llm, "chat", fake)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_calls_per_ip_day=1,
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_calls_per_ip_day=1,
                 gauntlet_runs_per_ip_hour=5)
     j = c.post("/api/gauntlet", headers={"CF-Connecting-IP": "3.3.3.3"}).json()
     assert len(fake.calls) == 1                                     # only one LLM call allowed for this IP
@@ -168,7 +168,7 @@ def test_ai_unavailable_purchase_says_guard_busy_waiting_for_human(tmp_path, mon
     def down(*a, **k):
         raise llm.LLMError("gemini-3.5-flash-lite: HTTP 429; gemini-3.8-flash: HTTP 429")
     monkeypatch.setattr(llm, "chat", down)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     ag = shop_agent(c)
     c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 100}, headers=A)
     r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample", purpose=PURPOSE)

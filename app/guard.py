@@ -98,10 +98,15 @@ INJECTION = re.compile(r"\b(ignore|disregard|override|bypass|forget)\b.{0,40}\b(
 
 
 class SpendGuard:
-    def __init__(self, settings: Settings, ai_allowed=None, cache: VerdictCache | None = None):
+    def __init__(self, settings: Settings, ai_allowed=None, cache: VerdictCache | None = None, require_ai: bool = False):
         self.s = settings
         self.ai_allowed = ai_allowed or (lambda: True)  # daily LLM budget hook
         self.cache = cache
+        # Production (demo site or real PayPal) never falls back to keywords: with no AI provider configured,
+        # every policy verdict is "unavailable" and the purchase waits for a human.
+        self.require_ai = require_ai
+        self.last_ok_at = 0.0       # monotonic time of the last answered AI call
+        self.last_error_at = 0.0    # monotonic time of the last failed AI call (rate limit, API error, connection)
 
     def hard_limits(self, price: Decimal, balance: Decimal, spent_today: Decimal,
                     daily_cap: Decimal, per_call_cap: Decimal) -> Decision | None:
@@ -120,10 +125,13 @@ class SpendGuard:
         keyword heuristic. Keyword mode is only used when no LLM is configured at all (offline/dev)."""
         if not skip_prefilter and INJECTION.search(purpose or ""):  # cheap deterministic pre-filter, before any LLM call
             return Decision(False, "purpose contains instructions aimed at the guard (prompt injection)", "limit")
-        if not llm.enabled(self.s):
+        if not llm.guard_enabled(self.s):
+            if self.require_ai:
+                return Decision(False, "AI policy check unavailable (no AI provider configured)", "unavailable")
             return self._heuristic(policy, tool, target, purpose)
         user = self._user(policy, tool, target, purpose, price)
-        k = VerdictCache.key(SYSTEM, user, self.s.llm_model) if self.cache is not None else None
+        model_id = llm.guard_model(self.s)
+        k = VerdictCache.key(SYSTEM, user, model_id) if self.cache is not None else None
         if k and (hit := self.cache.get(k)):        # before the budget check: a cache hit costs no LLM call
             return hit
         if not self.ai_allowed():
@@ -131,11 +139,25 @@ class SpendGuard:
         try:
             d = self._ai(user)
         except Exception as e:  # LLM down / rate-limited: fail closed
+            self.last_error_at = time.monotonic()
             detail = str(e)[:120] if isinstance(e, llm.LLMError) else type(e).__name__
             return Decision(False, f"AI policy check unavailable ({detail})", "unavailable")
-        if k and d.source == "ai" and d.complete and d.model == self.s.llm_model:
+        self.last_ok_at = time.monotonic()
+        if k and d.source == "ai" and d.complete and d.model == model_id:
             self.cache.put(k, d)
         return d
+
+    def status(self, budget_left: bool = True, window_s: float = 600.0) -> str:
+        """Real guard state for /healthz: "live" (the AI judges purchases), "busy" (purchases wait for a human:
+        no provider in production, the daily AI budget is used up, or the last call within window_s failed and
+        none has succeeded since) or "off" (keyword mode, local/offline only)."""
+        if not llm.guard_enabled(self.s):
+            return "busy" if self.require_ai else "off"
+        if not budget_left:
+            return "busy"
+        if self.last_error_at > self.last_ok_at and time.monotonic() - self.last_error_at < window_s:
+            return "busy"
+        return "live"
 
     @staticmethod
     def _user(policy, tool, target, purpose, price) -> str:
@@ -143,6 +165,11 @@ class SpendGuard:
                                                           "price_usd": str(price), "purpose": purpose}})
 
     def _ai(self, user: str) -> Decision:
+        if self.s.guard_provider == "anthropic":
+            j, model, problem = llm.anthropic_verdict(self.s, SYSTEM, user)
+            if problem:   # e.g. stop_reason max_tokens/refusal, no text block, not JSON: fail closed, never cached
+                return Decision(False, f"AI verdict unusable ({problem}); denied by default", "ai", model, complete=False)
+            return self._verdict(j or {}, model)
         text, model = llm.chat(self.s, [{"role": "system", "content": SYSTEM},
                                         {"role": "user", "content": user}], json_mode=True)
         m = re.search(r"\{.*\}", text, re.S)
@@ -150,6 +177,10 @@ class SpendGuard:
             j = json.loads(m.group(0)) if m else {}
         except ValueError:
             j = {}
+        return self._verdict(j, model)
+
+    @staticmethod
+    def _verdict(j: dict, model: str) -> Decision:
         keys = ("target_allowed", "purpose_fits_policy", "injection_attempt")
         if not all(isinstance(j.get(k), bool) for k in keys):  # garbage verdict: fail closed
             return Decision(False, "guard could not parse AI verdict; denied by default", "ai", model, complete=False)

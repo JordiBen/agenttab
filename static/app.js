@@ -91,13 +91,19 @@ async function refund() { const a = sel(); if (!a) return;
 async function report() { const a = sel(); if (!a) return;
   const r = await fetch('/api/agents/' + a.agent_id + '/report', {headers: H()}); const j = await r.json(); $('report').textContent = j.report || JSON.stringify(j); }
 
-// ---- health: Live Gemini badge ----
+// ---- health: live AI guard badge (real state from /healthz; the model name is shown only in Proof) ----
+const LIVE_TXT = {live: 'Live AI guard', busy: 'AI busy, human approval', off: 'Keyword mode (no AI configured)'};
+const LIVE_TIP = {live: 'Every purchase that reaches the policy check is judged by the AI guard in real time. If it is unavailable, the purchase waits for a human.',
+  busy: 'The AI guard cannot judge right now (not configured, rate-limited or out of budget), so purchases that reach the policy check wait for human approval. By design.',
+  off: 'Local/offline mode: no AI provider configured, a transparent keyword check is used.'};
 function setLive(h) {
+  const st = h.ai_status || (h.ai_guard ? 'live' : 'off');
   for (const id of ['navlive', 'herolive']) {
-    const el = $(id); el.classList.toggle('off', !h.ai_guard);
-    el.querySelector('span').textContent = h.ai_guard ? 'Live Gemini · ' + h.models[0] : 'Keyword mode (no LLM configured)';
-    el.title = h.ai_guard ? 'Every purchase in the demo is judged by Gemini in real time. If Gemini is unavailable, the purchase is held for a human.' : '';
+    const el = $(id); el.classList.toggle('off', st === 'off'); el.classList.toggle('busy', st === 'busy'); el.dataset.status = st;
+    el.querySelector('span').textContent = LIVE_TXT[st] || LIVE_TXT.off; el.title = LIVE_TIP[st] || '';
   }
+  const pm = $('proofmodel');
+  if (pm) pm.textContent = h.models && h.models.length ? `AI guard model: ${h.models.join(', ')} (${h.guard_provider === 'anthropic' ? 'Anthropic' : h.guard_provider})` : 'AI guard model: none configured';
 }
 
 // ---- hero feed: real decisions, typed out like a log ----
@@ -108,7 +114,7 @@ function feedEntry(d, live) {
   const req = `<span class="m">POST</span> /api/purchases <span>${enc(d.vendor)}:${enc(d.item)}</span>` + (d.amount_usd != null ? ` <span class="amt">${usd(d.amount_usd)}</span>` : '');
   el.innerHTML = `<div class="req"></div><div class="pur">${d.target ? '→ ' + enc(d.target) + '  ' : ''}"${enc(d.purpose)}"</div>
     <div class="res" hidden>${live ? '<span class="tag livetag">LIVE</span>' : ''}<span class="tag ${enc(d.outcome)}">${OUT[d.outcome] || enc(d.outcome)}</span>
-    <span class="meta">${enc(d.layer)}${d.model ? ' · ' + enc(d.model) : ''}${d.latency_ms ? ' · ' + Math.round(d.latency_ms) + ' ms' : ''}</span>
+    <span class="meta">${enc(d.layer)}${d.latency_ms ? ' · ' + Math.round(d.latency_ms) + ' ms' : ''}</span>
     <span class="why">${enc(d.reason)}</span></div>`;
   return {el, req};
 }
@@ -226,12 +232,13 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
   show('Guard is checking the purchase…'); verdict(pill('approval', 'checking')); $('dbusy').style.display = 'none';
   let r; try { r = await dfetch('/api/purchases', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Agent-Key': DK()}, body: JSON.stringify({vendor, item, quantity, target, purpose})}); } catch (e) { return show(''); }
   const j = await r.json(); const g = j.guard || (j.detail && j.detail.layer ? j.detail : null);
-  const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` + (g.model ? `<span class="pill blue">${enc(g.model)}</span>` : '') : '';
+  const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` : '';   // model name only in Proof
   const unit = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.price_usd; const amt = unit == null ? null : unit * quantity;
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
   if (r.status === 200) { verdict(pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
   else if (r.status === 202 && j.ai_unavailable) {   // fail closed: no AI verdict means a human decides, never auto-approve
+    refreshLive();
     verdict(pill('approval', 'AI guard busy · waiting for you') + who); live('approval');
     toast('warn', 'AI guard is busy', 'Purchase is waiting for human approval, by design.');
     $('dbusy').textContent = j.message; $('dbusy').style.display = '';
@@ -274,8 +281,8 @@ function fillItems() { const v = (CAT || []).find(x => x.vendor === $('dvendor')
   if (v) $('ditem').innerHTML = v.items.map(i => `<option value="${enc(i.item)}">${enc(i.name)} ($${i.price_usd})</option>`).join(''); }
 async function demoReport() { if (!DK()) return show('Start a demo session first.'); let r;
   try { r = await dfetch('/api/demo/report', {headers: {'X-Agent-Key': DK()}}); } catch (e) { return; }
-  const j = await r.json(); verdict(r.ok ? pill('charge', 'report · ' + (j.model || 'template')) : pill('deny', 'error')); show(j.report || j.detail || j);
-  r.ok ? toast('info', 'Spend report ready', 'Numbers from the ledger; commentary by ' + (j.model || 'template') + '.') : toast('bad', 'Report unavailable', typeof j.detail === 'string' ? j.detail : ''); }
+  const j = await r.json(); verdict(r.ok ? pill('charge', 'report · ' + (j.model ? 'AI commentary' : 'template')) : pill('deny', 'error')); show(j.report || j.detail || j);
+  r.ok ? toast('info', 'Spend report ready', 'Numbers from the ledger; ' + (j.model ? 'AI commentary.' : 'template commentary.')) : toast('bad', 'Report unavailable', typeof j.detail === 'string' ? j.detail : ''); }
 async function demoRefund() { if (!DK()) return show('Start a demo session first.'); let r;
   try { r = await dfetch('/api/demo/refund', {method: 'POST', headers: {'X-Agent-Key': DK()}}); } catch (e) { return; }
   const j = await r.json(); verdict(r.ok ? pill('refund', 'refunded ' + usd(j.refunded_usd) + ' to PayPal') : pill('deny', 'error')); show(j);
@@ -305,7 +312,7 @@ async function runGauntlet() { const b = $('gbtn'); b.disabled = true; b.textCon
   try { const r = await fetch('/api/gauntlet', {method: 'POST'}); const j = await r.json();
     if (!r.ok) { $('gsum').innerHTML = pill('deny', 'unavailable') + ` <span class="sub" style="margin:0">${enc(j.detail || 'error')}</span>`; toast('warn', 'Gauntlet unavailable', j.detail || ''); return; }
     $('gsum').innerHTML = pill('allow', `${j.attacks_stopped}/${j.attacks_total} attacks stopped`) + pill(j.legit_correct === j.legit_total ? 'allow' : 'approval', `${j.legit_correct}/${j.legit_total} legit handled right`) +
-      pill('gray', `no guard would buy ${j.unguarded_would_buy}/${j.attacks_total}`) + pill('blue', j.live_ai ? `${j.llm_calls} live Gemini calls` : 'keyword mode') + pill('gray', 'PayPal calls: 0');
+      pill('gray', `no guard would buy ${j.unguarded_would_buy}/${j.attacks_total}`) + pill('blue', j.live_ai ? `${j.llm_calls} live AI calls` : 'keyword mode') + pill('gray', 'PayPal calls: 0');
     toast(j.attacks_stopped === j.attacks_total ? 'ok' : 'warn', `${j.attacks_stopped}/${j.attacks_total} attacks stopped live`, `${j.legit_correct}/${j.legit_total} legitimate buys handled right · no money moved`);
     const out = {allow: 'Bought', block: 'Blocked', approval: 'Held for approval'};
     j.cases.forEach((c, i) => setTimeout(() => { $('glist').insertAdjacentHTML('beforeend', `<div class="g-row"><div class="top">
@@ -339,6 +346,7 @@ async function demoFF() { if (!DK()) return show('Start a demo session first.');
 
 // ---- boot ----
 initMotion();
+const refreshLive = () => fetch('/healthz').then(r => r.json()).then(setLive).catch(() => {}); setInterval(refreshLive, 30000);
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';
   if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); mcpPanel(); }
   else $('nodemo').style.display = ''; });

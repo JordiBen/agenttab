@@ -161,7 +161,8 @@ from decimal import Decimal as _D
 
 def _ai_settings(tmp_path):
     return Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "ai.db"), admin_token="adm",
-                    llm_base_url="https://llm.invalid/v1", llm_api_key="test", llm_model="m1", llm_fallback_model="m2")
+                    llm_base_url="https://llm.invalid/v1", llm_api_key="test", llm_model="m1", llm_fallback_model="m2",
+                    guard_provider="gemini")
 
 
 def _resp(content, status=200):

@@ -144,7 +144,7 @@ def test_guard_and_report_have_separate_llm_budgets(tmp_path, monkeypatch):
             return "All spending looks normal.", "m1"
         return '{"target_allowed": true, "purpose_fits_policy": true, "injection_attempt": false, "reason": "ok"}', "m1"
     monkeypatch.setattr(llm, "chat", fake_chat)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_report_calls_per_day=1,
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_report_calls_per_day=1,
                 llm_calls_per_day=50)
     ag = shop_agent(c)
     fund(c, ag["agent_id"], 100)
@@ -160,7 +160,7 @@ def test_ai_unavailable_routes_to_human_not_heuristic(tmp_path, monkeypatch):
     def down(*a, **k):
         raise llm.LLMError("m1: HTTP 429")
     monkeypatch.setattr(llm, "chat", down)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     ag = shop_agent(c)
     fund(c, ag["agent_id"], 100)
     r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample")    # $18, normally auto-approved
@@ -172,7 +172,7 @@ def test_ai_budget_exhausted_routes_to_human(tmp_path, monkeypatch):
     import app.llm as llm
     monkeypatch.setattr(llm, "chat", lambda *a, **k: ('{"target_allowed": true, "purpose_fits_policy": true, '
                                                       '"injection_attempt": false, "reason": "ok"}', "m1"))
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_calls_per_day=1)
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_calls_per_day=1)
     ag = shop_agent(c)
     fund(c, ag["agent_id"], 100)
     assert buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample").status_code == 200
@@ -454,7 +454,7 @@ def test_mock_approve_rejects_html(tmp_path):
 def test_report_numbers_come_from_ledger_not_model(tmp_path, monkeypatch):
     import app.llm as llm
     monkeypatch.setattr(llm, "chat", lambda s, m, **k: ("The agent spent $999 and everything was approved.", "m1"))
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     ag = shop_agent(c)
     rep = c.get(f"/api/agents/{ag['agent_id']}/report", headers=A).json()
     assert rep["report"].startswith(rep["summary"]) and "0 paid purchases for $0.00" in rep["summary"]
@@ -496,7 +496,7 @@ def test_gauntlet_ai_unavailable_is_held_not_allowed(tmp_path, monkeypatch):
     def down(*a, **k):
         raise llm.LLMError("quota")
     monkeypatch.setattr(llm, "chat", down)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     j = c.post("/api/gauntlet").json()
     assert j["live_ai"] and j["attacks_stopped"] == j["attacks_total"]
     assert all(r["outcome"] != "allow" for r in j["cases"] if r["attack"])
