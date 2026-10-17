@@ -14,6 +14,7 @@ from __future__ import annotations
 import hmac
 import html
 import json
+from contextlib import contextmanager
 import logging
 import os
 import re
@@ -158,6 +159,20 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """One lock per agent: a purchase's checks, guard decision and charge happen as one unit."""
         with _agent_locks_guard:
             return _agent_locks.setdefault(aid, threading.Lock())
+
+    @contextmanager
+    def agent_lock_or_busy(aid: str):
+        """The per-agent purchase lock, but never an unbounded wait: a purchase that can't get it within
+        agent_lock_timeout_s (the agent's previous purchase is still in its guard/vendor/PayPal step) gets
+        429 busy with Retry-After instead of tying up a server thread."""
+        lk = agent_lock(aid)
+        if not lk.acquire(timeout=s.agent_lock_timeout_s):
+            raise HTTPException(429, "this agent has another purchase in progress; retry in a moment",
+                                headers={"Retry-After": "2"})
+        try:
+            yield
+        finally:
+            lk.release()
 
     def limit(key: str, n: int, window: float, msg: str):
         if not limiter.allow(key, n, window):
@@ -597,8 +612,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         aid = a["id"]
         # Critical section: the balance/caps the guard decides on are the ones the charge is written against.
         # The per-agent lock serializes one agent's purchases in this process; commit_tab_purchase re-checks
-        # the limits inside a single SQLite write transaction as a second line of defence.
-        with agent_lock(aid):
+        # the limits inside a single SQLite write transaction as a second line of defence. Bounded wait: 429 busy.
+        with agent_lock_or_busy(aid):
             a = ledger.agent(aid)
             refuse_if_frozen(a)
             cfg = pr.AgentConfig.from_row(a)
@@ -640,49 +655,97 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                     "approve_url": o["approve_url"], "approval_expires_at": expires, "guard": out.as_dict(),
                     "note": "Forward approve_url to your human. Approving places a PayPal hold; it is captured only "
                             "after the vendor delivers, and voided (never charged) if delivery fails."})
+            hold = None
             if amount > ledger.balance(aid):
-                why = auto_topup(ledger.agent(aid), amount - ledger.balance(aid))
+                hold, why = auto_topup_hold(ledger.agent(aid), amount - ledger.balance(aid))
                 if why:
                     return payment_required(why)
             try:
                 result = fulfill(p)
             except Exception as e:  # failed calls are never charged
+                if hold:
+                    release_hold(hold, "vendor failed")
                 raise HTTPException(502, f"vendor failed, not charged: {type(e).__name__}")
             deadline = refund_deadline(a, p.vendor)
+            prefund = ({"amount": hold["amount"], "tool": "vault-auto",
+                        "reason": f"automatic saved-card top-up (PayPal order {hold['order_id']}; capturing)"} if hold else None)
             pid, why = ledger.commit_tab_purchase(
                 aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose, deadline, out.layer, out.reason,
                 json.dumps(result)[:4000], tag,
                 {"daily_cap": cfg.daily_cap,
-                 "vendor_budget": (cfg.vendor_budgets or {}).get(p.vendor) if cfg.vendor_budgets is not None else None})
+                 "vendor_budget": (cfg.vendor_budgets or {}).get(p.vendor) if cfg.vendor_budgets is not None else None},
+                prefund=prefund)
             if not pid:
+                if hold:
+                    release_hold(hold, f"purchase not committed ({why})")
                 raise HTTPException(409, f"not charged: {why}")
-            return {"purchase_id": pid, "charged_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
+            body = {"purchase_id": pid, "charged_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
                     "refund_deadline": deadline, "refundable": deadline is not None, "guard": out.as_dict(),
                     "result": result}
+            if hold:
+                body["auto_topup"] = capture_hold(aid, pid, hold, prefund["entry_id"])
+                body["balance_usd"] = float(ledger.balance(aid))
+            return body
 
-    def auto_topup(a, shortfall: Decimal) -> str:
-        """Charge the owner's saved (Vault) sandbox card so an already-guard-approved purchase can go through.
-        Only within the owner's rolling-30-day cap and at most 5 times a day. Returns "" on success, or why not."""
+    def auto_topup_hold(a, shortfall: Decimal) -> tuple[dict | None, str]:
+        """Place a HOLD (authorization) on the owner's saved (Vault) sandbox card so an already-guard-approved
+        purchase can go through. Only within the owner's rolling-30-day cap and at most 5 times a day. The card is
+        captured only after the purchase commits (capture_hold), and voided if delivery or the commit fails
+        (release_hold). Returns (hold, "") or (None, why not)."""
         aid = a["id"]
         if not (a["vault_id"] and a["auto_topup_micro"] and a["auto_topup_cap_micro"]):
-            return "no saved card / auto top-up configured"
+            return None, "no saved card / auto top-up configured"
         size = max(from_micro(a["auto_topup_micro"]), shortfall).quantize(Decimal("0.01"), rounding=ROUND_UP)
         cap = from_micro(a["auto_topup_cap_micro"])
         used = ledger.vault_topups_since(aid, time.time() - 30 * 86400)
         if used + size > cap:
-            return f"saved-card top-ups would exceed the owner's 30-day cap (${used:.2f} of ${cap:.2f} used)"
+            return None, f"saved-card top-ups would exceed the owner's 30-day cap (${used:.2f} of ${cap:.2f} used)"
         if not limiter.allow("autotopup:" + aid, 5, DAY):
-            return "auto top-up limit (5 per day) reached"
+            return None, "auto top-up limit (5 per day) reached"
         try:
             paypal_budget()
-            cap_ = paypal.charge_vault(a["vault_id"], size, aid, op_id=f"auto-{aid}-{secrets.token_hex(6)}")
+            h = paypal.authorize_vault(a["vault_id"], size, aid, op_id=f"auto-{aid}-{secrets.token_hex(6)}")
         except (PayPalError, HTTPException) as e:
-            return f"saved card was not charged: {getattr(e, 'issue', '') or getattr(e, 'detail', '') or 'PayPal error'}"
-        ledger.add_order(cap_["order_id"], aid, size)
-        ledger.mark_order(cap_["order_id"], "CAPTURED")
-        ledger.add_entry(aid, "fund", cap_["amount"], "vault-auto", paypal_ref=cap_["capture_id"],
-                         reason=f"automatic saved-card top-up (PayPal order {cap_['order_id']})")
-        return ""
+            return None, f"saved card was not charged: {getattr(e, 'issue', '') or getattr(e, 'detail', '') or 'PayPal error'}"
+        if Decimal(h["amount"]).quantize(Decimal("0.01")) != size:
+            release_hold(h, f"authorized ${h['amount']}, asked for ${size}")
+            return None, "saved card was not charged: authorization amount mismatch"
+        ledger.add_order(h["order_id"], aid, size, intent="AUTHORIZE")
+        log.info("auto top-up hold %s for %s: $%s", h["authorization_id"], aid, size)
+        return {**h, "amount": size}, ""
+
+    def release_hold(h: dict, why: str) -> None:
+        """Void an auto top-up hold: the owner's card is never charged."""
+        try:
+            paypal.void_authorization(h["authorization_id"])
+            ledger.mark_order(h["order_id"], "VOIDED")
+            log.info("auto top-up hold %s voided: %s", h["authorization_id"], why)
+        except PayPalError:
+            log.exception("void of auto top-up hold %s failed (%s); it expires on its own", h["authorization_id"], why)
+
+    def capture_hold(aid: str, pid: str, h: dict, entry_id: int) -> dict:
+        """The purchase committed (its fund entry is in the ledger): capture the hold. If PayPal declines the
+        capture, the credit is reversed in the ledger and the agent frozen for the owner to reconcile."""
+        try:
+            cap = paypal.capture_authorization(h["authorization_id"], h["amount"])
+        except PayPalError as e:
+            issue = e.issue or "PayPal error"
+            ledger.add_entry(aid, "fund_reversal", h["amount"], "vault-auto",
+                             reason=f"saved-card capture declined after delivery ({issue}); top-up reversed",
+                             capture_ref=pid)
+            ledger.mark_order(h["order_id"], "CAPTURE_DECLINED")
+            ledger.update_purchase(pid, flag="topup_capture_declined")
+            release_hold(h, f"capture declined ({issue})")        # don't leave a hold on the owner's card
+            freeze(aid, f"auto top-up capture declined ({issue}) for purchase {pid}")
+            log.warning("auto top-up capture declined for %s (%s): agent frozen", aid, issue)
+            return {"status": "capture_declined", "amount_usd": float(h["amount"]), "issue": issue,
+                    "note": "The purchase was delivered but the saved card declined; the top-up was reversed "
+                            "and the agent frozen until the owner reconciles."}
+        ledger.set_entry_paypal_ref(entry_id, cap["capture_id"],
+                                    reason=f"automatic saved-card top-up (PayPal order {h['order_id']})")
+        ledger.mark_order(h["order_id"], "CAPTURED")
+        log.info("auto top-up captured %s for %s: $%s", cap["capture_id"], aid, h["amount"])
+        return {"status": "captured", "amount_usd": float(h["amount"]), "paypal_capture_id": cap["capture_id"]}
 
     def complete_authorized(pu, auth_id: str, amount: Decimal, ref: str, frm: str = "pending_approval",
                             simulate: str = "") -> bool:

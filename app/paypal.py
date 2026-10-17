@@ -367,6 +367,33 @@ class PayPalClient:
         return {"order_id": j["id"], "status": "COMPLETED", "amount": Decimal(caps[0]["amount"]["value"]),
                 "agent_id": agent_id, "capture_id": caps[0]["id"]}
 
+    def authorize_vault(self, vault_id: str, amount: Decimal, agent_id: str, op_id: str, simulate: str = "") -> dict:
+        """Merchant-initiated HOLD on the saved card (intent=AUTHORIZE, stored credential, unscheduled). Nothing
+        moves until capture_authorization(); void_authorization() releases it. Returns {order_id,
+        authorization_id, amount}. Used by auto top-up so the card is only charged after the purchase commits."""
+        if self.mock:
+            if vault_id not in self._mock_vault:
+                raise PayPalError("unknown vault token", "PERMISSION_DENIED", 403)
+            self._mock_check("authorize_vault", simulate)
+            oid = "MOCK-" + uuid.uuid4().hex[:12].upper()
+            aid = "AUTH-" + oid[5:]
+            self.mock_authorize_count += 1
+            self._mock_auths[aid] = {"amount": Decimal(amount), "status": "CREATED"}
+            return {"order_id": oid, "authorization_id": aid, "amount": Decimal(amount)}
+        if not self.is_sandbox:
+            raise PayPalError("vaulted test-card charges are only allowed in the PayPal sandbox")
+        body = {"intent": "AUTHORIZE",
+                "purchase_units": [{"reference_id": agent_id, "custom_id": agent_id,
+                                    "description": f"AgentTab automatic top-up for {agent_id}"[:127],
+                                    "amount": {"currency_code": "USD", "value": f"{amount:.2f}"}}],
+                "payment_source": {"card": {"vault_id": vault_id, "stored_credential": {
+                    "payment_initiator": "MERCHANT", "payment_type": "UNSCHEDULED", "usage": "SUBSEQUENT"}}}}
+        j = self._req("POST", "/v2/checkout/orders", body, request_id=f"vaultauth-{op_id}", simulate=simulate)
+        auths = j["purchase_units"][0].get("payments", {}).get("authorizations", [])
+        if j.get("status") != "COMPLETED" or not auths or auths[0].get("status") != "CREATED":
+            raise PayPalError(f"saved-card authorization not created: {j.get('status')}")
+        return {"order_id": j["id"], "authorization_id": auths[0]["id"], "amount": Decimal(auths[0]["amount"]["value"])}
+
     def delete_vault_token(self, vault_id: str) -> None:
         if self.mock:
             self._mock_vault.pop(vault_id, None)

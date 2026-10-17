@@ -36,7 +36,7 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 | Authorize → capture / void | **Real, sandbox** | Approvals place a hold; captured after delivery, voided if delivery fails. |
 | Forced declines | **Real, sandbox** | PayPal's `PayPal-Mock-Response` negative testing, via the owner-only `X-Simulate-Decline` header. |
 | Reconciliation + freeze | **Real, sandbox** | Ledger vs `GET /v2/payments/captures/{id}`; mismatches freeze the agent. |
-| Saved card (Vault v3) + auto top-up | **Real, sandbox** | PayPal's generic sandbox test Visa saved in Vault; merchant-initiated charges within an owner cap. |
+| Saved card (Vault v3) + auto top-up | **Real, sandbox** | PayPal's generic sandbox test Visa saved in Vault; merchant-initiated holds within an owner cap, captured only after the purchase commits. |
 | Refunds | **Real, sandbox** | Payments v2 refund of the specific capture (tab refunds, approval-funded purchases). Tab-funded purchase refunds are ledger credits back to the tab. |
 | Webhooks | **Real, sandbox** | `POST /paypal/webhook`, every event checked with PayPal's `verify-webhook-signature`; unverified events are rejected. |
 | AI spend guard | **Real** | Live Gemini (`gemini-3.5-flash-lite`, then a second model). If Gemini is unavailable the purchase is held for a human. |

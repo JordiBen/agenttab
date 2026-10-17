@@ -53,6 +53,8 @@ class Settings:
     llm_calls_per_day: int = _env_int("LLM_CALLS_PER_DAY", 400)            # guard; then purchases need approval
     llm_report_calls_per_day: int = _env_int("LLM_REPORT_CALLS_PER_DAY", 60)  # reports; then a template
     paypal_calls_per_day: int = _env_int("PAYPAL_CALLS_PER_DAY", 120)  # orders/captures/refunds
+    # A purchase waits at most this long for the same agent's previous purchase, then gets 429 (busy).
+    agent_lock_timeout_s: float = field(default_factory=lambda: float(os.getenv("AGENT_LOCK_TIMEOUT_S", "2.5")))
     # Live Gauntlet: a sampled attack run through the real guard (dry run, no money). Own LLM budget.
     gauntlet_runs_per_ip_hour: int = _env_int("GAUNTLET_RUNS_PER_IP_HOUR", 3)
     gauntlet_runs_per_day: int = _env_int("GAUNTLET_RUNS_PER_DAY", 30)
