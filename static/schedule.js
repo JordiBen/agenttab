@@ -8,6 +8,20 @@
   const ICON = {delivered: 'fa-check', budget: 'fa-wallet', refund_window: 'fa-rotate-left', approval: 'fa-user-check', renewal: 'fa-repeat',
     topup: 'fa-circle-plus', paypal_refund: 'fa-paypal', webhook: 'fa-bolt', denied: 'fa-ban'};
 
+  // Event names come from the server ("Stoneware mug sample $0.20 · refundable"); the bar shows a version that fits
+  // (item names trimmed first, the amount kept), and the tooltip always has the full text.
+  function shortLabel(e, max) {
+    const name = String(e.name || '');
+    if (name.length <= max) return name;
+    const m = name.match(/^(.*?)(\s\$\d+\.\d\d)(.*)$/);           // keep "$0.20", trim the words before it
+    if (m && (m[1] + m[2]).length <= max) return m[1] + m[2];     // drop the suffix ("· refundable") first
+    if (m && max > m[2].length + 3) {
+      const head = m[1].slice(0, Math.max(1, max - m[2].length - 1)).replace(/\s+\S*$/, '') || m[1].slice(0, max - m[2].length - 1);
+      return head + '…' + m[2];
+    }
+    return name.slice(0, Math.max(1, max - 1)) + '…';
+  }
+
   window.makeSchedule = function (el, opts) {
     // opts: {url, headers(), act(path) -> Promise, listEl}
     if (!S) { el.textContent = 'Bryntum Scheduler failed to load.'; return null; }
@@ -16,21 +30,24 @@
       static fields = ['type', 'purchaseId', 'amount', 'status', 'reason', 'funding', 'suggestion', 'confirmed',
         'flag', 'used', 'percent'];
     }
-    class AtResource extends ResourceModel { static fields = ['kind', 'detail', 'agent']; }
+    class AtResource extends ResourceModel { static fields = ['kind', 'detail', 'agent', 'budget']; }
     const now = new Date();
     const sch = new Scheduler({
       appendTo: el, autoHeight: true, minHeight: 300, rowHeight: 48, barMargin: 9, eventStyle: 'tonal',
       startDate: DateHelper.add(now, -8, 'day'), endDate: DateHelper.add(now, 31, 'day'),
-      viewPreset: {base: 'weekAndDay', tickWidth: 40,
+      viewPreset: {base: 'weekAndDay', tickWidth: 46,
         headers: [{unit: 'week', dateFormat: 'MMM D'}, {unit: 'day', dateFormat: 'D'}]},
       milestoneLayoutMode: 'estimate', milestoneTextPosition: 'always-outside',
       resourceStore: {modelClass: AtResource}, eventStore: {modelClass: AtEvent},
-      columns: [{text: 'Agent / vendor', field: 'name', width: 230, htmlEncode: false,
+      columns: [{text: 'Agent / vendor', field: 'name', width: innerWidth < 800 ? 124 : 250, htmlEncode: false,
         renderer: ({record}) => `<div class="sch-res ${record.kind}"><i class="fa ${record.kind === 'agent' ? 'fa-robot' : record.kind === 'paypal' ? 'fa-bolt' : 'fa-store'}"></i>
-           <div><b>${enc(record.name)}</b><div class="sch-sub">${enc(record.detail)}</div></div></div>`}],
+           <div style="min-width:0;flex:1"><b>${enc(record.name)}</b>${record.budget ? `<div class="sch-bud"><span class="sch-bud-bar"><i style="width:${Math.min(100, record.budget.percent)}%"></i></span><span>${enc(record.budget.text)}</span></div>`
+             : `<div class="sch-sub">${enc(record.detail)}</div>`}</div></div>`}],
       features: {
-        eventDrag: false, eventResize: false, eventEdit: false, eventDragCreate: false, scheduleMenu: false,
+        stickyEvents: false, eventDrag: false, eventResize: false, eventEdit: false, eventDragCreate: false, scheduleMenu: false,
         timeRanges: {showCurrentTimeLine: true},
+        // Short events (a 24 h approval is one day wide) carry their label to the right instead of clipping it.
+        labels: {right: {renderer: ({eventRecord: e}) => e.type === 'approval' ? shortLabel(e, 44) : ''}},
         eventTooltip: {
           template: ({eventRecord: e}) => `<div class="sch-tip"><b>${enc(e.name)}</b>
             <div>${DateHelper.format(e.startDate, 'MMM D HH:mm')}${+e.endDate !== +e.startDate ? ' → ' + DateHelper.format(e.endDate, 'MMM D HH:mm') : ''}</div>
@@ -64,8 +81,11 @@
       eventRenderer({eventRecord: e, renderData}) {
         renderData.iconCls = 'fa ' + (e.suggestion ? 'fa-lightbulb' : (ICON[e.type] || 'fa-circle'));
         if (e.suggestion) renderData.cls['sch-has-sugg'] = 1;
-        if (e.type === 'budget') return `${enc(e.name)} <span class="sch-pct">${e.percent}%</span>`;
-        return enc(e.name) + (e.confirmed ? ' ✓' : '');
+        if (e.type === 'budget') return '';   // the figure is shown in the vendor's row header; the bar keeps the tooltip
+        if (e.type === 'approval') return '';                 // label is drawn to the right (labels feature)
+        // Fit the label to the bar: ~7 px per character after the icon; milestones get a fixed budget outside.
+        const room = e.isMilestone ? 34 : Math.max(4, Math.floor(((renderData.width || 120) - 36) / 8.2));
+        return enc(shortLabel(e, room)) + (e.confirmed ? ' ✓' : '');
       }
     });
     async function refresh() {
@@ -73,8 +93,15 @@
       if (r.status === 401 && opts.onUnauthorized) { opts.onUnauthorized(); return; }
       if (!r.ok) return;
       const j = await r.json();
-      sch.resourceStore.data = j.resources;
+      // Each vendor's 30-day budget figure goes into its row header ("$0.20 of $0.60 · 33%").
+      const bud = {};
+      for (const e of j.events) if (e.type === 'budget') bud[e.resourceId] = {percent: e.percent || 0,
+        text: String(e.name).replace(/^30-day budget:\s*/, '') + ' · ' + (e.percent || 0) + '%'};
+      sch.resourceStore.data = j.resources.map(r => bud[r.id] ? {...r, budget: bud[r.id]} : r);
       sch.eventStore.data = j.events;
+      // Open the timeline 3 days before "now", so today's events and their labels are in view (once per page load).
+      if (!sch._atScrolled && j.events.length) { sch._atScrolled = true;
+        Promise.resolve(sch.scrollToDate(DateHelper.add(new Date(), innerWidth < 800 ? -1 : -3, 'day'), {block: 'start', animate: false})).catch(() => {}); }
       if (opts.listEl) {
         opts.listEl.innerHTML = j.suggestions.length
           ? '<b>Refund suggestions from the scheduling agent</b> (nothing is refunded until you confirm):' + j.suggestions.map(s =>

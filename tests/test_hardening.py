@@ -522,3 +522,29 @@ def test_dashboard_has_no_inline_admin_token_storage(tmp_path):
     html, js = c.get("/").text, c.get("/static/app.js").text
     assert "localStorage.tok=" not in html + js and "sessionStorage.tok" in html + js
     assert 'integrity="sha384-' in html and "@33/" not in html
+
+
+def test_replay_feed_is_real_eval_data_without_side_effects(tmp_path):
+    import json
+    from pathlib import Path
+    c = _client(tmp_path)
+    j = c.get("/api/replay").json()
+    res = json.loads((Path(__file__).resolve().parent.parent / "eval" / "results.json").read_text())["modes"]["ai"]["rows"]
+    assert len(j["decisions"]) == len(res) == 67
+    by_id = {r["id"]: r for r in res}
+    for d in j["decisions"]:                       # every replayed verdict is exactly the committed one
+        assert d["outcome"] == by_id[d["id"]]["got"] and d["layer"] == by_id[d["id"]]["layer"]
+    assert c.app.state.ledger.entries() == [] and c.app.state.paypal.mock_capture_count == 0
+
+
+def test_dashboard_assets_self_hosted_or_sri_pinned(tmp_path):
+    import re
+    c = _client(tmp_path)
+    html = c.get("/").text
+    assert c.get("/static/vendor/ag-grid-community-33.3.2.min.js").status_code == 200
+    assert c.get("/static/vendor/ag-grid-LICENSE.txt").status_code == 200
+    for tag in re.findall(r"<(?:script|link)\b[^>]*>", html):
+        src = re.search(r'(?:src|href)="([^"]+)"', tag)
+        if src and src.group(1).startswith("http"):
+            assert 'integrity="sha384-' in tag and 'crossorigin="anonymous"' in tag, tag
+    assert "fonts.googleapis" not in html and "unpkg.com" not in html

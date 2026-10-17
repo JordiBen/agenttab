@@ -26,6 +26,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -119,6 +120,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         allow_private_targets = os.getenv("ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV") == "1"
     app = FastAPI(title="AgentTab", version="1.0.0",
                   description="PayPal-funded spending tabs for AI agents, guarded by AI.")
+    app.add_middleware(GZipMiddleware, minimum_size=1024)     # the self-hosted AG Grid bundle is ~1.7 MB raw
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
@@ -282,14 +284,17 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return FileResponse(STATIC / "dashboard.html")
 
     STATIC_FILES = {"schedule.js": "application/javascript", "app.css": "text/css", "app.js": "application/javascript",
-                    "fonts/InterVariable.woff2": "font/woff2", "fonts/Inter-OFL.txt": "text/plain"}
+                    "fonts/InterVariable.woff2": "font/woff2", "fonts/Inter-OFL.txt": "text/plain",
+                    "vendor/ag-grid-community-33.3.2.min.js": "application/javascript",
+                    "vendor/ag-grid-LICENSE.txt": "text/plain"}
 
     @app.get("/static/{path:path}", include_in_schema=False)
     def static_file(path: str):
         if path not in STATIC_FILES:          # explicit allowlist: nothing else under static/ is served
             raise HTTPException(404)
         return FileResponse(STATIC / path, media_type=STATIC_FILES[path],
-                            headers={"Cache-Control": "public, max-age=86400" if path.startswith("fonts/") else "no-cache"})
+                            headers={"Cache-Control": "public, max-age=604800, immutable" if path.startswith(("fonts/", "vendor/"))
+                                     else "no-cache"})
 
     @app.get("/healthz")
     def healthz():
@@ -1373,6 +1378,31 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(404, "no eval results yet")
         j = json.loads(f.read_text())
         return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "notes") if k in j}
+
+    @app.get("/api/replay")
+    def replay():
+        """Real decisions from the committed Gemini eval run (eval/results.json joined with eval/cases.json), for
+        the landing page's feed. Read from files: no LLM or PayPal calls."""
+        root = Path(__file__).resolve().parent.parent / "eval"
+        try:
+            rows = json.loads((root / "results.json").read_text())["modes"]["ai"]["rows"]
+            cases = {c["id"]: c for c in json.loads((root / "cases.json").read_text())}
+        except (OSError, KeyError, ValueError):
+            raise HTTPException(404, "no eval results yet")
+        out = []
+        for r in rows:
+            c = cases.get(r["id"])
+            if not c:
+                continue
+            p = pr.Purchase(c["vendor"], c["item"], c.get("quantity", 1), c["purpose"], c.get("target", ""))
+            price = pr.price_of(p)
+            out.append({"id": r["id"], "category": r["category"], "attack": r["attack"], "vendor": c["vendor"],
+                        "item": c["item"], "amount_usd": float(price) if price is not None else None,
+                        "purpose": c["purpose"][:240], "target": c.get("target", "")[:200], "outcome": r["got"],
+                        "layer": r["layer"], "model": r.get("model"), "latency_ms": r.get("latency_ms"),
+                        "reason": (r.get("reason") or "")[:240]})
+        return {"source": "eval/results.json (Gemini mode)", "run_at": json.loads((root / "results.json").read_text())["modes"]["ai"].get("run_at"),
+                "decisions": out}
 
     # ---------------- live Gauntlet: sampled attacks through the real guard ----------------
     gauntlet_guard = SpendGuard(s, ai_allowed=lambda: limiter.allow("llm-gauntlet", s.gauntlet_llm_calls_per_day, DAY))
