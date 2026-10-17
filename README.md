@@ -70,6 +70,8 @@ A plan on this branch ([`docs/vendor-payouts-plan.md`](docs/vendor-payouts-plan.
 straight to each vendor's sandbox business account (Orders v2 with a `payee`), with a hold created up front so held amounts count
 toward the caps. AgentTab would then hold no money. This is a sandbox demo design. **A real product would use PayPal multiparty
 (Complete Payments Platform) with vendor onboarding** (https://developer.paypal.com/docs/multiparty/). None of this is in the code yet.
+A sandbox spike confirmed why: charging a saved card to a plain vendor business account is refused with
+`PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING` (details and debug id in the plan).
 
 ## Use AgentTab from any MCP client
 
