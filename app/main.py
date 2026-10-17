@@ -87,8 +87,12 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return a
 
     def client_ip(request: Request) -> str:
+        # Edge-set headers first (Cloudflare in front of Render overwrites these, clients can't spoof them),
+        # then the last X-Forwarded-For hop (appended by the proxy), then the socket peer.
+        for h in ("cf-connecting-ip", "true-client-ip"):
+            if request.headers.get(h):
+                return request.headers[h].strip()
         fwd = request.headers.get("x-forwarded-for", "")
-        # Render's proxy appends the real client IP last; earlier entries are client-controlled.
         return (fwd.split(",")[-1].strip() if fwd else (request.client.host if request.client else "?"))
 
     def paypal_budget():
@@ -149,6 +153,12 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                              money(body.daily_cap_usd) if body.daily_cap_usd is not None else None,
                              money(body.per_call_cap_usd) if body.per_call_cap_usd is not None else None)
         return agent_view(ledger.agent(aid))
+
+    @app.get("/api/admin/client-ip", dependencies=[Depends(admin)])
+    def admin_client_ip(request: Request):
+        """Owner diagnostic: which IP the rate limiter sees (header names only + resolved IP)."""
+        return {"resolved": client_ip(request),
+                "ip_headers": [h for h in request.headers if "ip" in h or "forwarded" in h]}
 
     @app.get("/api/ledger", dependencies=[Depends(admin)])
     def get_ledger(agent_id: str | None = None):
