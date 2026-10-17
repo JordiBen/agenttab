@@ -51,6 +51,10 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
   all three modes once. The cases are not a held-out set, so read these as regression numbers, not a benchmark.
 - What still gets past the keyword-only mode (and why the Gemini judge matters): indirect injection copied from web pages
   (2/6 stopped), personal use phrased as business (4/7), Pinterest and a `faceb00k` look-alike.
+- **Run it live:** the dashboard's **Gauntlet** button (`POST /api/gauntlet`) sends one random attack from each of 8
+  categories plus 2 legitimate buys through the same `decide()`, with live Gemini, and shows each verdict, layer and latency.
+  It's a dry run (nothing is charged, PayPal isn't called), limited to 3 runs per IP per hour and 30 per day, with its own
+  daily Gemini budget.
 - Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 Gemini calls).
 
 ![dashboard](docs/dashboard.png)
@@ -154,6 +158,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | POST | `/api/purchases/{id}/approve-sandbox-card` | owner | Approve a pending purchase and pay it with the sandbox test card |
 | POST | `/api/purchases/{id}/reject` | owner | Reject a pending purchase |
 | GET | `/api/scorecard` | anyone | Safety eval results |
+| POST | `/api/gauntlet` | anyone (rate-limited) | Live dry run of 10 sampled eval cases through the guard |
 | GET | `/api/me/schedule` · `/api/schedule?agent_id=` | agent · owner | Bryntum resources/events + open refund suggestions |
 | POST | `/api/suggestions/{id}/confirm` · `/dismiss` | owner | Human decision on a refund the scheduler proposed |
 | POST | `/api/purchases/{id}/used` | agent | Mark an item as used (no refund suggestion) |
@@ -183,11 +188,11 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 
 ## Tests
 ```bash
-pip install pytest && pytest -q     # 83 tests (+2 live): concurrency (parallel buys, capture/webhook races, double approval), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap), per-capture refunds, procurement, webhooks, schedule, eval runner
+pip install pytest && pytest -q     # 88 tests (+2 live): concurrency (parallel buys, capture/webhook races, double approval), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap), per-capture refunds, procurement, webhooks, schedule, eval runner
 ```
 
 ## Built with
-PayPal Orders v2, Payments v2 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, any OpenAI-compatible LLM
+PayPal Orders v2, Payments v2 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Inter (SIL OFL), any OpenAI-compatible LLM
 (Gemini 3.5 Flash-Lite by default), and Render (one-click `render.yaml`).
 
 MIT License · © WebIntel Tools
