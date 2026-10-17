@@ -190,6 +190,18 @@
    <div id="dsched" class="sched"></div><div id="dsugg" style="margin-top:10px"></div></div>
   <div class="card glass"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h"></div></div>
   <div class="card glass"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h"></div></div>
+  <div class="card glass" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue" style="vertical-align:2px">MCP 2026-07-28</span></h3></div>
+   <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
+   <div class="mcp-grid">
+    <div><label>Endpoint (Streamable HTTP)</label><code class="mcp-val" id="mcpurl"></code></div>
+    <div id="mcpbox" style="display:none"><label>Agent key (header <span class="mono">X-Agent-Key</span>)</label>
+     <div class="mcp-row"><code class="mcp-val" id="mcpkey"></code><button class="btn btn-ghost btn-sm" id="mcpreveal" onclick="mcpToggle()">Reveal</button><button class="btn btn-ghost btn-sm" onclick="mcpCopy('key')">Copy key</button></div></div>
+    <p id="mcpnone" class="sub" style="margin:0">Start a demo session to get this agent's key.</p>
+   </div>
+   <pre class="console mcp-cfg" id="mcpcfg"></pre>
+   <div class="row" style="margin-top:10px"><button class="btn btn-light btn-sm" onclick="mcpCopy('config')">Copy client config</button>
+    <a class="btn btn-ghost btn-sm" href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client" target="_blank" rel="noopener">stdio bridge &amp; docs</a></div>
+  </div>
  </div>
  <div id="nodemo" class="card glass" style="display:none"><h3>Public demo is off on this server</h3><p class="sub">Use the owner console below with your admin token.</p></div>
 
@@ -206,7 +218,8 @@
    <div class="row" style="margin-top:10px"><div style="flex:0 1 110px"><input id="amt" value="5.00" aria-label="Amount in USD"></div>
     <button class="btn btn-glow" onclick="topup()">Fund selected with PayPal</button>
     <button class="btn btn-ghost" id="cardbtn" style="display:none" onclick="cardTopup()">Sandbox test-card top-up</button>
-    <button class="btn btn-ghost" onclick="refund()">Refund unused credit</button><button class="btn btn-ghost" onclick="report()">AI spend report</button></div>
+    <button class="btn btn-ghost" onclick="refund()">Refund unused credit</button><button class="btn btn-ghost" onclick="report()">AI spend report</button>
+    <button class="btn btn-ghost" onclick="reconcile()">Reconcile with PayPal</button><button class="btn btn-ghost" onclick="unfreeze()">Unfreeze</button></div>
    <p id="report"></p></div>
   <div><h3>Schedule of selected agent</h3><div id="osched" class="sched" style="margin-top:8px"></div><div id="osugg" style="margin-top:6px"></div></div>
   <div><h3>Purchases of selected agent</h3><div id="opurch" class="grid-h" style="margin-top:8px"></div></div>
