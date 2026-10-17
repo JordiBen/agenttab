@@ -1,25 +1,50 @@
-# AgentTab: PayPal-funded spending tabs for AI agents, guarded by AI
+# AgentTab: a purchasing agent for small shops, with a PayPal-funded tab
 
-AI agents increasingly need to **buy things** (data, API calls, compute), but giving an agent a card is
-reckless and approving every $0.02 purchase by hand defeats the point of an agent.
+**Lumen & Loom** is a 6-person online shop selling home textiles and ceramics. Its AI agent orders supplier samples,
+buys SaaS seats and pays for competitor research. Giving that agent a company card is reckless; approving every
+$0.20 sample by hand defeats the point.
 
-**AgentTab** sits in the middle:
+**AgentTab** gives the agent a prepaid tab and rules the owner writes in plain English:
 
-1. **Fund once with PayPal.** The owner tops up an agent's tab through PayPal Checkout (Orders v2:
-   create → buyer approves → capture). The agent can also *ask* for more budget: on HTTP `402` it calls
-   `/api/me/topup-request` and forwards a PayPal approval link to its human.
-2. **The agent spends on its own.** Each paid call (`/api/tools/*`) is metered from the prepaid balance.
-   Failed calls are never charged.
-3. **An AI spend guard checks every purchase.** The owner writes the policy in plain English
-   ("only competitor research, never social media"). Hard limits run first (per-call cap, daily cap,
-   balance), then an LLM judges whether the tool, target and the agent's stated purpose fit the policy.
-   Denials are logged with the reason.
-4. **Full visibility, one-click exit.** A live **AG Grid** dashboard shows every charge, denial, top-up and
-   refund. Owners edit policies and caps inline. **Refund unused credit** sends the remaining balance back
-   to the payer through the PayPal Payments v2 refund API. An AI spend report summarises behaviour and flags risks.
+1. **Fund once with PayPal.** The owner tops up the tab through PayPal Checkout (Orders v2: create → approve → capture).
+2. **Approved vendors, each with its own 30-day budget.** SampleBox Wholesale $0.60, ShopSuite $1.00, WebIntel Data $0.30.
+   Anything from a vendor that isn't on the list (follower sellers, gift cards) is blocked before any AI is asked.
+3. **Approval above a threshold.** A purchase over **$0.30** isn't charged to the tab. AgentTab returns `202` with a
+   PayPal approval link (valid 24 h). The owner pays that one purchase directly, or rejects it.
+4. **A refund window on every purchase.** For 7 days each purchase has its own Refund button: tab-funded purchases go
+   back to the tab; approval-funded purchases are refunded to PayPal (Payments v2 refund of that capture).
+5. **An AI judge for what rules can't express.** Gemini checks whether the target, the purpose and the item fit the
+   owner's policy, and whether the agent is relaying an injected instruction. Every decision is logged with the layer that made it.
 
-The paid resources are small web-intelligence tools (page → Markdown, tech-stack detection, SEO audit),
-priced from $0.01 to $0.03 per call and published at `/api/catalog` so agents can plan purchases.
+## Safety scorecard (measured, not claimed)
+
+67 labeled purchases in [`eval/cases.json`](eval/cases.json): 20 legitimate shop purchases and
+47 attacks or rule violations (forbidden vendors, social-network targets, personal use, vague purposes,
+direct and indirect prompt injection, budget splitting, look-alike and internal URLs). Each runs through the same
+`decide()` the server uses, in three modes. Results: [`eval/results.json`](eval/results.json), also live at `/api/scorecard`
+and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
+
+| Mode | Attacks stopped | Legit handled right | False blocks | Latency p50 / p95 | LLM calls / tokens |
+|---|---|---|---|---|---|
+| No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
+| Rules + keyword check | **36/47** (76.6%) | 20/20 | 0 | 0.0 / 0.1 ms | 0 / 0 |
+| Rules + Gemini judge | **45/47** (95.7%) | 20/20 | 0 | 739.4 / 1130.9 ms | 48 / 19846 |
+
+| Category | Cases | No guard | Rules + keyword | Rules + Gemini |
+|---|---|---|---|---|
+| legit | 20 | 16 | 20 | 20 |
+| forbidden vendor | 6 | 0 | 6 | 6 |
+| social target | 6 | 0 | 5 | 6 |
+| personal use | 7 | 0 | 4 | 7 |
+| vague | 5 | 0 | 4 | 3 |
+| direct injection | 6 | 0 | 5 | 6 |
+| indirect injection | 6 | 0 | 2 | 6 |
+| caps | 6 | 0 | 6 | 6 |
+| lookalike unsafe | 5 | 0 | 4 | 5 |
+
+Gemini model: gemini-3.5-flash-lite; 0 fallbacks to the keyword check during the run.
+Known misses (Gemini mode): vague-03, vague-04: purchases with an empty or one-word purpose that Gemini let through.
+Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 48 Gemini calls).
 
 ![dashboard](submission/dashboard.png)
 
@@ -61,7 +86,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
    - Writes a brief.
 
 ## Public demo mode (`DEMO_MODE=1`)
-- **Start demo session** gives a visitor their own agent with a fixed policy and caps ($0.05 per call, $0.50 per day). It's funded with $1.00 through a real PayPal **sandbox** capture using a test card. The visitor then buys lookups, sees the Gemini guard block Facebook, reads the AI report and refunds to PayPal.
+- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $0.30 approval threshold, $0.50 per purchase, $0.90 per day). It's funded with $1.00 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends a SaaS seat to approval and approves it with the sandbox card, watches a gift card and a prompt injection get blocked, and refunds individual purchases.
 - Visitors only ever hold their own agent key. Owner endpoints need `ADMIN_TOKEN` (24+ random characters, required in demo mode, no default).
 - Rate limits, set by env vars:
   - Demo sessions: 3 per IP per hour, 40 per day.
@@ -73,7 +98,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | Method | Path | Who | What |
 |---|---|---|---|
 | GET | `/api/catalog` | anyone | Tools and prices |
-| POST | `/api/agents` | owner | Create agent (policy, caps) → `api_key` |
+| POST | `/api/agents` | owner | Create agent (policy, caps, `vendor_budgets`, `approval_threshold_usd`, `refund_window_days`) → `api_key` |
 | PATCH | `/api/agents/{id}` | owner | Edit policy and caps |
 | POST | `/api/agents/{id}/topup` | owner | Create PayPal order → `approve_url` |
 | GET | `/paypal/return?token=` | PayPal | Capture (idempotent) → credit |
@@ -82,18 +107,25 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | GET | `/api/ledger` | owner | All entries |
 | GET | `/api/me` | agent | Balance and caps |
 | POST | `/api/me/topup-request` | agent | Ask its human for budget (PayPal link) |
-| POST | `/api/tools/{name}` | agent | Paid call: `{url, purpose}`. Returns `402`, `403` (guard) or `200` |
+| POST | `/api/purchases` | agent | `{vendor, item, quantity, target, purpose}` → `200` bought, `202` needs approval (`approve_url`), `402` tab empty, `403` blocked |
+| POST | `/api/tools/{name}` | agent | Shortcut for WebIntel Data purchases: `{url, purpose}` |
+| GET | `/api/me/purchases` | agent | Its purchases with status and refund deadline |
+| GET | `/api/purchases?agent_id=` | owner | Purchases of an agent |
+| POST | `/api/purchases/{id}/refund` | owner | Refund one purchase inside its window (to tab, or to PayPal if paid by approval) |
+| POST | `/api/purchases/{id}/approve-sandbox-card` | owner | Approve a pending purchase and pay it with the sandbox test card |
+| POST | `/api/purchases/{id}/reject` | owner | Reject a pending purchase |
+| GET | `/api/scorecard` | anyone | Safety eval results |
 
 ## Safety
 - Amounts are stored as integer micro-dollars.
 - Capture is idempotent, and an unapproved order is never credited.
 - SSRF guard blocks private and metadata IPs.
 - Admin and agent keys are separate.
-- Every guard decision is logged with its source (`limit`, `ai`, `heuristic`).
+- Decision layers, in order: catalog → unsafe target → injection filter → vendor allowlist → per-purchase / daily caps → vendor budget → policy judge (Gemini, or keyword fallback) → approval threshold. Every decision is logged with its layer.
 
 ## Tests
 ```bash
-pip install pytest && pytest -q     # 13 tests (+1 live: LIVE_AI=1): 402 flow, AI verdicts/fallback/injection, capture idempotency, guard, caps, refunds, SSRF, no-charge-on-failure
+pip install pytest && pytest -q     # 31 tests (+2 live: LIVE_AI=1, LIVE_PAYPAL=1): procurement (allowlist, budgets, approvals, refund windows), 402 flow, AI verdicts/fallback/injection, capture idempotency, SSRF, demo limits, eval runner
 ```
 
 ## Built with

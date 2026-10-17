@@ -6,6 +6,9 @@ import httpx
 from .config import Settings
 
 
+LAST_USAGE: dict = {}  # token usage of the most recent successful call (for the eval)
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -34,7 +37,10 @@ def chat(s: Settings, messages: list[dict], json_mode: bool = False, temperature
             errors.append(f"{model}: HTTP {r.status_code}")
             continue
         try:
-            text = r.json()["choices"][0]["message"]["content"] or ""
+            j = r.json()
+            text = j["choices"][0]["message"]["content"] or ""
+            LAST_USAGE.clear()
+            LAST_USAGE.update(j.get("usage") or {})
         except (ValueError, KeyError, IndexError):
             errors.append(f"{model}: bad response shape")
             continue

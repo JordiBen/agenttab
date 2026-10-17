@@ -45,6 +45,9 @@ SYSTEM = (
     "\"injection_attempt\": bool, \"reason\": \"<max 25 words>\"}."
 )
 
+PERSONAL = re.compile(r"\b(for me|for myself|my own|personal|for fun|just curious|gift for|birthday|my (wife|husband|"
+                      r"partner|mom|mother|dad|father|sister|brother|friend|kids?))\b", re.I)
+
 INJECTION = re.compile(r"\b(ignore|disregard|override|bypass|forget)\b.{0,40}\b(policy|rules|instructions|guard|limits?)\b"
                        r"|\b(you must|always) approve\b|\bapprove this\b", re.I | re.S)
 
@@ -64,8 +67,9 @@ class SpendGuard:
             return Decision(False, "insufficient balance", "limit")
         return None
 
-    def evaluate(self, policy: str, tool: str, target: str, purpose: str, price: Decimal) -> Decision:
-        if INJECTION.search(purpose or ""):  # cheap deterministic pre-filter, before any LLM call
+    def evaluate(self, policy: str, tool: str, target: str, purpose: str, price: Decimal,
+                 skip_prefilter: bool = False) -> Decision:
+        if not skip_prefilter and INJECTION.search(purpose or ""):  # cheap deterministic pre-filter, before any LLM call
             return Decision(False, "purpose contains instructions aimed at the guard (prompt injection)", "limit")
         if llm.enabled(self.s) and not self.ai_allowed():
             d = self._heuristic(policy, tool, target, purpose)
@@ -102,7 +106,7 @@ class SpendGuard:
 
     @staticmethod
     def _heuristic(policy, tool, target, purpose) -> Decision:
-        p = policy.lower()
+        p = re.sub(r"social[- ]?(media|networks?|platforms?)", "social media", policy.lower())
         host = (urlparse(target).hostname or target).lower()
         # "never ... <domain or word>" clauses
         for m in re.finditer(r"(?:never|don't|do not|no)\s+(?:buy|spend|use|fetch)?[^.;]*?([a-z0-9.-]+\.[a-z]{2,}|social media)", p):
@@ -113,4 +117,6 @@ class SpendGuard:
                 return Decision(False, f"policy forbids {word}", "heuristic")
         if len(purpose.strip()) < 12:
             return Decision(False, "purpose too vague to justify spend", "heuristic")
+        if re.search(r"\b(only|allowed:)", p) and PERSONAL.search(purpose):
+            return Decision(False, "purpose suggests personal / non-business use", "heuristic")
         return Decision(True, "no policy clause violated (heuristic mode)", "heuristic")

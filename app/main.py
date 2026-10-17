@@ -28,10 +28,10 @@ from .ledger import Ledger, from_micro
 from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
+from . import procurement as pr
 
 log = logging.getLogger("agenttab")
-DEMO_POLICY = ("Only buy data about public websites of competitors for market research. "
-               "Never spend on social media sites. Never fetch facebook.com.")
+DEMO_POLICY = pr.SHOP_POLICY
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
@@ -40,12 +40,25 @@ class NewAgent(BaseModel):
     owner_email: str = ""
     policy: str = Field(min_length=5, max_length=2000)
     daily_cap_usd: float = 2.0
-    per_call_cap_usd: float = 0.10
+    per_call_cap_usd: float = 0.10          # hard per-purchase maximum
+    vendor_budgets: dict[str, float] | None = None   # {vendor_id: rolling 30-day budget}; None = any vendor
+    approval_threshold_usd: float | None = None      # above this a human approves via PayPal
+    refund_window_days: int = Field(default=7, ge=0, le=180)
 
 class PolicyUpdate(BaseModel):
     policy: str | None = None
     daily_cap_usd: float | None = None
     per_call_cap_usd: float | None = None
+    vendor_budgets: dict[str, float] | None = None
+    approval_threshold_usd: float | None = None
+    refund_window_days: int | None = Field(default=None, ge=0, le=180)
+
+class PurchaseReq(BaseModel):
+    vendor: str = Field(max_length=64)
+    item: str = Field(max_length=64)
+    quantity: int = Field(default=1, ge=1, le=100)
+    purpose: str = Field(default="", max_length=500)
+    target: str = Field(default="", max_length=2048)
 
 class TopUp(BaseModel):
     amount_usd: float = 5.0
@@ -113,7 +126,21 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "policy": a["policy"], "daily_cap_usd": float(from_micro(a["daily_cap_micro"])),
                 "per_call_cap_usd": float(from_micro(a["per_call_cap_micro"])),
                 "balance_usd": float(ledger.balance(a["id"])),
-                "spent_24h_usd": float(ledger.spent_since(a["id"], time.time() - 86400))}
+                "spent_24h_usd": float(ledger.spent_since(a["id"], time.time() - 86400)),
+                "approval_threshold_usd": float(from_micro(a["approval_threshold_micro"])) if a["approval_threshold_micro"] is not None else None,
+                "refund_window_days": a["refund_window_days"] if a["refund_window_days"] is not None else 7,
+                "vendor_budgets": [{"vendor": vid, "name": pr.VENDORS.get(vid, {}).get("name", vid),
+                                    "budget_usd": float(b),
+                                    "spent_30d_usd": float(ledger.vendor_spent_since(a["id"], vid, time.time() - 30 * 86400))}
+                                   for vid, b in (pr.AgentConfig.from_row(a).vendor_budgets or {}).items()]}
+
+    def vendor_budgets_in(d: dict[str, float] | None) -> dict | None:
+        if d is None:
+            return None
+        unknown = [k for k in d if k not in pr.VENDORS]
+        if unknown:
+            raise HTTPException(422, f"unknown vendor(s): {unknown}; see /api/catalog")
+        return {k: Decimal(str(v)).quantize(Decimal("0.01")) for k, v in d.items()}
 
     # ---------------- public ----------------
     @app.get("/", include_in_schema=False)
@@ -131,14 +158,23 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return {"currency": "USD", "tools": [
             {"name": n, "price_usd": float(PRICES[n]), "description": DESCRIPTIONS[n],
              "endpoint": f"/api/tools/{n}", "body": {"url": "https://...", "purpose": "why you need it"}}
-            for n in TOOLS]}
+            for n in TOOLS],
+            "vendors": [{"vendor": vid, "name": v["name"], "category": v["category"], "fulfillment": v["fulfillment"],
+                         "items": [{"item": iid, "name": it["name"], "price_usd": float(it["price"])}
+                                   for iid, it in v["items"].items()]} for vid, v in pr.VENDORS.items()],
+            "purchase_endpoint": {"method": "POST", "path": "/api/purchases",
+                                  "body": {"vendor": "samplebox", "item": "ceramic-mug-sample", "quantity": 1,
+                                           "purpose": "why the business needs it", "target": "(data items only) https://..."}}}
 
     # ---------------- owner (admin) ----------------
 
     @app.post("/api/agents", dependencies=[Depends(admin)])
     def create_agent(body: NewAgent):
         return ledger.create_agent(body.name, body.owner_email, body.policy,
-                                   money(body.daily_cap_usd), money(body.per_call_cap_usd))
+                                   money(body.daily_cap_usd), money(body.per_call_cap_usd),
+                                   vendor_budgets_in(body.vendor_budgets),
+                                   money(body.approval_threshold_usd) if body.approval_threshold_usd is not None else None,
+                                   body.refund_window_days)
 
     @app.get("/api/agents", dependencies=[Depends(admin)])
     def list_agents():
@@ -152,6 +188,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         ledger.update_policy(aid, body.policy,
                              money(body.daily_cap_usd) if body.daily_cap_usd is not None else None,
                              money(body.per_call_cap_usd) if body.per_call_cap_usd is not None else None)
+        if body.vendor_budgets is not None or body.approval_threshold_usd is not None or body.refund_window_days is not None:
+            ledger.set_agent_procurement(aid, vendor_budgets_in(body.vendor_budgets),
+                                         money(body.approval_threshold_usd) if body.approval_threshold_usd is not None else None,
+                                         body.refund_window_days)
         return agent_view(ledger.agent(aid))
 
     @app.get("/api/admin/client-ip", dependencies=[Depends(admin)])
@@ -207,7 +247,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         facts = {"agent": a["name"], "policy": a["policy"], "balance_usd": float(ledger.balance(aid)),
                  "charges": len(charges), "spent_usd": round(sum(r["amount_usd"] for r in charges), 4),
                  "denied": [{"tool": d["tool"], "target": d["target"], "reason": d["reason"]} for d in denies[:10]],
-                 "top_targets": sorted({c["target"] for c in charges})[:10]}
+                 "top_targets": sorted({c["target"] for c in charges})[:10],
+                 "purchases": [{"vendor": p["vendor"], "item": p["item"], "usd": p["amount_usd"], "status": p["status"]}
+                               for p in ledger.purchases(aid, 30)]}
         text, model = None, None
         if llm.enabled(s) and limiter.allow("llm", s.llm_calls_per_day, DAY):
             try:
@@ -281,6 +323,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if cap["status"] != "COMPLETED":
             raise HTTPException(402, f"capture status {cap['status']}")
         ledger.mark_order(token, "CAPTURED")
+        pu = ledger.purchase_by_order(token)
+        if pu:  # this order was the approval link for one purchase
+            complete_approved(pu, cap["capture_id"], cap["amount"], f"PayPal order {token}")
+            return RedirectResponse("/?approved=" + pu["id"])
         ledger.add_entry(o["agent_id"], "fund", cap["amount"], paypal_ref=cap["capture_id"],
                          reason=f"PayPal order {token}")
         return RedirectResponse("/?funded=" + o["agent_id"])
@@ -307,42 +353,191 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return agent_view(a)
 
 
+    def fulfill(p: pr.Purchase):
+        v = pr.VENDORS[p.vendor]
+        if v["fulfillment"] == "live":
+            return TOOLS[p.item](p.target)
+        return {"vendor_order": "SIM-" + secrets.token_hex(4).upper(), "vendor": v["name"],
+                "item": v["items"][p.item]["name"], "quantity": p.quantity,
+                "note": "sandbox vendor: fulfillment is simulated"}
+
+    def state_for(aid: str) -> pr.State:
+        now = time.time()
+        return pr.State(ledger.spent_since(aid, now - 86400),
+                        {vid: ledger.vendor_spent_since(aid, vid, now - 30 * 86400) for vid in pr.VENDORS})
+
+    def refund_deadline(a) -> float:
+        days = a["refund_window_days"] if a["refund_window_days"] is not None else 7
+        return time.time() + days * 86400
+
+    def do_purchase(a, p: pr.Purchase, request: Request):
+        if not limiter.allow("tools:" + client_ip(request), s.tool_calls_per_ip_hour, HOUR):
+            raise HTTPException(429, "too many purchases from your IP; try again later")
+        amount = pr.price_of(p)
+        if amount is None:
+            raise HTTPException(404, "unknown vendor, item or quantity; see /api/catalog")
+        if p.target:
+            try:
+                check_url(p.target, allow_private=allow_private_targets)
+            except UnsafeTarget as e:
+                raise HTTPException(422, str(e))
+        aid = a["id"]
+        cfg = pr.AgentConfig.from_row(a)
+        needs_approval = cfg.approval_threshold is not None and amount > cfg.approval_threshold
+        balance = ledger.balance(aid)
+        if not needs_approval and amount > balance:  # check before spending an LLM call
+            return JSONResponse(status_code=402, headers={"X-AgentTab-Price": str(amount)}, content={
+                "error": "payment_required", "price_usd": float(amount), "balance_usd": float(balance),
+                "topup": {"method": "POST", "endpoint": "/api/me/topup-request", "body": {"amount_usd": 5.0},
+                          "note": "Returns a PayPal approval link for your human owner."}})
+        with ledger.lock:
+            st = state_for(aid)
+        out = pr.decide(cfg, p, st, "ai", guard, allow_private_targets)
+        tag = f"[{out.layer}] {out.reason}"
+        if out.outcome == "block":
+            ledger.add_entry(aid, "deny", Decimal(0), f"{p.vendor}:{p.item}", p.target, p.purpose, "deny", tag)
+            ledger.add_purchase(aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose, "denied", "",
+                                None, None, out.layer, out.reason)
+            raise HTTPException(403, {"error": "denied_by_guard", **out.as_dict()})
+        if out.outcome == "approval":
+            paypal_budget()
+            try:
+                o = paypal.create_order(amount, aid, f"Approve: {pr.VENDORS[p.vendor]['name']} {p.item} x{p.quantity}")
+            except PayPalError as e:
+                raise HTTPException(502, str(e))
+            ledger.add_order(o["id"], aid, amount)
+            expires = time.time() + 86400
+            pid = ledger.add_purchase(aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose,
+                                      "pending_approval", "direct", None, expires, out.layer, out.reason,
+                                      paypal_order=o["id"])
+            ledger.add_entry(aid, "approval", Decimal(0), f"{p.vendor}:{p.item}", p.target, p.purpose,
+                             "approval", tag, o["id"])
+            return JSONResponse(status_code=202, content={
+                "status": "approval_required", "purchase_id": pid, "amount_usd": float(amount),
+                "approve_url": o["approve_url"], "approval_expires_at": expires, "guard": out.as_dict(),
+                "note": "Forward approve_url to your human. Paying it approves and funds this one purchase."})
+        try:
+            result = fulfill(p)
+        except Exception as e:  # failed calls are never charged
+            raise HTTPException(502, f"vendor failed, not charged: {type(e).__name__}")
+        deadline = refund_deadline(a)
+        pid = ledger.add_purchase(aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose, "completed",
+                                  "tab", deadline, None, out.layer, out.reason, fulfillment=json.dumps(result)[:4000])
+        ledger.add_entry(aid, "charge", amount, f"{p.vendor}:{p.item}", p.target, p.purpose, "allow", tag, pid)
+        return {"purchase_id": pid, "charged_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
+                "refund_deadline": deadline, "guard": out.as_dict(), "result": result}
+
+    def complete_approved(pu, capture_id: str, amount: Decimal, ref: str):
+        aid = pu["agent_id"]
+        p = pr.Purchase(pu["vendor"], pu["item"], pu["quantity"], pu["purpose"], pu["target"])
+        ledger.add_entry(aid, "fund", amount, "approval", paypal_ref=capture_id, reason=f"approval for {pu['id']}: {ref}")
+        try:
+            result = fulfill(p)
+        except Exception as e:
+            paypal_budget()
+            paypal.refund_capture(capture_id, amount)
+            ledger.add_entry(aid, "refund", amount, "approval", reason=f"vendor failed ({type(e).__name__}); auto-refunded")
+            ledger.update_purchase(pu["id"], status="failed_refunded", paypal_capture=capture_id)
+            return
+        a = ledger.agent(aid)
+        ledger.add_entry(aid, "charge", amount, f"{p.vendor}:{p.item}", p.target, p.purpose, "allow",
+                         f"[approval] approved by owner via PayPal ({ref})", pu["id"])
+        ledger.update_purchase(pu["id"], status="completed", paypal_capture=capture_id,
+                               refund_deadline=refund_deadline(a), fulfillment=json.dumps(result)[:4000])
+
+    def purchase_for(pid: str, x_admin_token: str, x_agent_key: str, demo_owner_ok: bool):
+        pu = ledger.purchase(pid)
+        if not pu:
+            raise HTTPException(404, "no such purchase")
+        if x_admin_token and hmac.compare_digest(x_admin_token.encode(), admin_token.encode()):
+            return pu
+        a = ledger.agent_by_key(x_agent_key) if x_agent_key else None
+        if a and a["id"] == pu["agent_id"] and demo_owner_ok:
+            return pu
+        raise HTTPException(401, "admin token (or, in demo mode, the demo agent key) required")
+
     @app.post("/api/tools/{name}")
     def call_tool(name: str, body: ToolCall, request: Request, a=Depends(agent_from_key)):
-        if not limiter.allow("tools:" + client_ip(request), s.tool_calls_per_ip_hour, HOUR):
-            raise HTTPException(429, "too many tool calls from your IP; try again later")
         if name not in TOOLS:
             raise HTTPException(404, "unknown tool; see /api/catalog")
-        price = PRICES[name]
+        return do_purchase(a, pr.Purchase("webintel-data", name, 1, body.purpose, body.url), request)
+
+    @app.post("/api/purchases")
+    def create_purchase(body: PurchaseReq, request: Request, a=Depends(agent_from_key)):
+        """Agent buys from a vendor. 200 = bought from the tab, 202 = needs owner approval (PayPal link),
+        402 = tab empty, 403 = blocked by the guard."""
+        return do_purchase(a, pr.Purchase(body.vendor, body.item, body.quantity, body.purpose, body.target), request)
+
+    @app.get("/api/me/purchases")
+    def my_purchases(a=Depends(agent_from_key)):
+        return ledger.purchases(a["id"])
+
+    @app.get("/api/purchases", dependencies=[Depends(admin)])
+    def list_purchases(agent_id: str):
+        return ledger.purchases(agent_id)
+
+    @app.post("/api/purchases/{pid}/refund")
+    def refund_purchase(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        """Refund one purchase inside its refund window. Tab-funded: credit returns to the tab.
+        Approval-funded: the purchase's own PayPal capture is refunded."""
+        pu = purchase_for(pid, x_admin_token, x_agent_key, demo_owner_ok=s.demo_mode)
+        if pu["status"] != "completed":
+            raise HTTPException(409, f"purchase is {pu['status']}, not refundable")
+        if pu["refund_deadline"] is None or time.time() > pu["refund_deadline"]:
+            raise HTTPException(409, "refund window has closed")
+        amount = from_micro(pu["amount_micro"])
+        aid = pu["agent_id"]
+        if pu["funding"] == "direct":
+            paypal_budget()
+            try:
+                r = paypal.refund_capture(pu["paypal_capture"], amount)
+            except PayPalError as e:
+                raise HTTPException(502, str(e))
+            ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=f"purchase {pid} refunded")
+            ledger.add_entry(aid, "refund", amount, "approval", paypal_ref=r["id"],
+                             reason=f"purchase {pid}: PayPal capture {pu['paypal_capture']} refunded")
+            ref = r["id"]
+        else:
+            ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=f"purchase {pid} refunded to tab")
+            ref = "tab-credit"
+        ledger.update_purchase(pid, status="refunded")
+        return {"purchase_id": pid, "refunded_usd": float(amount), "to": "paypal" if pu["funding"] == "direct" else "tab",
+                "paypal_refund": ref if pu["funding"] == "direct" else None, "balance_usd": float(ledger.balance(aid))}
+
+    @app.post("/api/purchases/{pid}/approve-sandbox-card")
+    def approve_sandbox_card(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        """Owner approves a pending purchase and pays it with PayPal's sandbox test card (no browser step).
+        In demo mode the visitor plays the owner of their own demo agent."""
+        pu = purchase_for(pid, x_admin_token, x_agent_key, demo_owner_ok=s.demo_mode)
+        if pu["status"] != "pending_approval":
+            raise HTTPException(409, f"purchase is {pu['status']}")
+        if time.time() > (pu["approval_expires"] or 0):
+            ledger.update_purchase(pid, status="expired")
+            raise HTTPException(409, "approval has expired")
+        if not (paypal.mock or paypal.is_sandbox):
+            raise HTTPException(403, "only available in PayPal sandbox")
+        amount = from_micro(pu["amount_micro"])
+        paypal_budget()
         try:
-            check_url(body.url, allow_private=allow_private_targets)
-        except UnsafeTarget as e:
-            raise HTTPException(422, str(e))
-        aid = a["id"]
-        with ledger.lock:  # serialise the reserve step per process
-            balance = ledger.balance(aid)
-            spent = ledger.spent_since(aid, time.time() - 86400)
-        hard = guard.hard_limits(price, balance, spent, from_micro(a["daily_cap_micro"]),
-                                 from_micro(a["per_call_cap_micro"]))
-        if hard and hard.reason == "insufficient balance":
-            return JSONResponse(status_code=402, headers={"X-AgentTab-Price": str(price)}, content={
-                "error": "payment_required", "price_usd": float(price), "balance_usd": float(balance),
-                "topup": {"method": "POST", "endpoint": "/api/me/topup-request",
-                          "body": {"amount_usd": 5.0},
-                          "note": "Returns a PayPal approval link for your human owner."}})
-        decision = hard or guard.evaluate(a["policy"], name, body.url, body.purpose, price)
-        if not decision.allow:
-            ledger.add_entry(aid, "deny", Decimal(0), name, body.url, body.purpose, "deny",
-                             f"[{decision.source}] {decision.reason}")
-            raise HTTPException(403, {"error": "denied_by_guard", **decision.as_dict()})
-        try:
-            result = TOOLS[name](body.url)
-        except Exception as e:  # failed calls are never charged
-            raise HTTPException(502, f"tool failed, not charged: {type(e).__name__}")
-        ledger.add_entry(aid, "charge", price, name, body.url, body.purpose, "allow",
-                         f"[{decision.source}] {decision.reason}")
-        return {"charged_usd": float(price), "balance_usd": float(ledger.balance(aid)),
-                "guard": decision.as_dict(), "result": result}
+            cap = paypal.sandbox_card_topup(amount, pu["agent_id"])
+        except PayPalError as e:
+            raise HTTPException(502, str(e))
+        if pu["paypal_order"]:
+            ledger.mark_order(pu["paypal_order"], "SUPERSEDED")
+        complete_approved(pu, cap["capture_id"], cap["amount"], f"PayPal order {cap['order_id']} (sandbox test card)")
+        pu = ledger.purchase(pid)
+        return {"purchase_id": pid, "status": pu["status"], "paypal_order_id": cap["order_id"],
+                "paypal_capture_id": cap["capture_id"], "refund_deadline": pu["refund_deadline"]}
+
+    @app.post("/api/purchases/{pid}/reject")
+    def reject_purchase(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        pu = purchase_for(pid, x_admin_token, x_agent_key, demo_owner_ok=s.demo_mode)
+        if pu["status"] != "pending_approval":
+            raise HTTPException(409, f"purchase is {pu['status']}")
+        ledger.update_purchase(pid, status="rejected")
+        if pu["paypal_order"]:
+            ledger.mark_order(pu["paypal_order"], "CANCELLED")
+        return {"purchase_id": pid, "status": "rejected"}
 
     # ---------------- public sandboxed demo ----------------
     @app.post("/api/demo/session")
@@ -356,7 +551,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(429, "demo session limit for your IP reached; try again in an hour")
         if not limiter.allow("demo:all", s.demo_sessions_per_day, DAY):
             raise HTTPException(429, "today's demo sessions are used up; try tomorrow")
-        ag = ledger.create_agent("demo-" + secrets.token_hex(3), "", DEMO_POLICY, Decimal("0.50"), Decimal("0.05"))
+        ag = ledger.create_agent("demo-" + secrets.token_hex(3), "", DEMO_POLICY, pr.SHOP_DAILY_CAP,
+                                 pr.SHOP_PER_PURCHASE_MAX, dict(pr.SHOP_VENDOR_BUDGETS),
+                                 pr.SHOP_APPROVAL_THRESHOLD, pr.SHOP_REFUND_WINDOW_DAYS)
         paypal_budget()
         try:
             cap = paypal.sandbox_card_topup(Decimal("1.00"), ag["agent_id"])
@@ -372,6 +569,19 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.get("/api/demo/ledger")
     def demo_ledger(a=Depends(agent_from_key)):
         return ledger.entries(a["id"], 200)
+
+    @app.get("/api/demo/purchases")
+    def demo_purchases(a=Depends(agent_from_key)):
+        return ledger.purchases(a["id"])
+
+    @app.get("/api/scorecard")
+    def scorecard():
+        """Safety eval results (eval/results.json, committed). Served from file: no LLM or PayPal calls."""
+        f = Path(__file__).resolve().parent.parent / "eval" / "results.json"
+        if not f.exists():
+            raise HTTPException(404, "no eval results yet")
+        j = json.loads(f.read_text())
+        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "notes") if k in j}
 
     @app.post("/api/demo/refund")
     def demo_refund(a=Depends(agent_from_key)):

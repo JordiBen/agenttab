@@ -103,7 +103,7 @@ def test_guard_denies_policy_violation_and_logs(client, site):
     # SSRF check passes for public host only when resolvable; either way it must not be charged
     assert r.status_code in (403, 422)
     r = client.post("/api/tools/page_markdown", json={"url": site, "purpose": "x"}, headers=k)
-    assert r.status_code == 403 and r.json()["detail"]["source"] == "heuristic"
+    assert r.status_code == 403 and r.json()["detail"]["source"] in ("heuristic", "policy-heuristic")
     led = client.get("/api/ledger", headers=A).json()
     assert any(e["kind"] == "deny" for e in led)
     assert client.get("/api/me", headers=k).json()["balance_usd"] == 5.0
@@ -259,7 +259,7 @@ def test_demo_flow(tmp_path, site):
     c = _demo_client(tmp_path)
     j = c.post("/api/demo/session").json()
     k = {"X-Agent-Key": j["agent_key"]}
-    assert j["balance_usd"] == 1.0 and j["per_call_cap_usd"] == 0.05
+    assert j["balance_usd"] == 1.0 and j["approval_threshold_usd"] == 0.30 and len(j["vendor_budgets"]) == 3
     assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k).status_code == 200
     assert c.post("/api/tools/tech_detect", json={"url": "https://www.facebook.com/x", "purpose": "competitor tech research"}, headers=k).status_code in (403, 422)
     assert len(c.get("/api/demo/ledger", headers=k).json()) >= 2
@@ -297,3 +297,152 @@ def test_llm_daily_budget_falls_back(tmp_path, monkeypatch):
     g = SpendGuard(_ai_settings(tmp_path), ai_allowed=lambda: False)
     d = g.evaluate(POLICY, "tech_detect", "https://acme.example", "competitor tech research", _D("0.02"))
     assert d.source == "heuristic" and "budget" in d.reason and not calls
+
+
+# ---------- shop procurement: vendors, budgets, approvals, refund windows ----------
+from app import procurement as pr
+
+
+def shop_agent(c, **kw):
+    body = {"name": "lumen-loom-buyer", "policy": pr.SHOP_POLICY, "daily_cap_usd": 0.90, "per_call_cap_usd": 0.50,
+            "vendor_budgets": {"webintel-data": 0.30, "samplebox": 0.60, "shopsuite": 1.00},
+            "approval_threshold_usd": 0.30, "refund_window_days": 7} | kw
+    r = c.post("/api/agents", json=body, headers=A)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def buy(c, key, **body):
+    return c.post("/api/purchases", json={"purpose": "Evaluate supplier samples for our autumn catalog"} | body,
+                  headers={"X-Agent-Key": key})
+
+
+def test_catalog_lists_vendors(client):
+    j = client.get("/api/catalog").json()
+    assert {v["vendor"] for v in j["vendors"]} >= {"samplebox", "shopsuite", "adboost-social"}
+
+
+def test_unknown_vendor_in_budgets_rejected(client):
+    r = client.post("/api/agents", json={"name": "x", "policy": "hello world", "vendor_budgets": {"nope": 1}}, headers=A)
+    assert r.status_code == 422
+
+
+def test_vendor_allowlist_and_budget(client):
+    ag = shop_agent(client)
+    fund(client, ag["agent_id"], 5)
+    k = ag["api_key"]
+    r = buy(client, k, vendor="adboost-social", item="followers-1000", purpose="Grow brand awareness before launch")
+    assert r.status_code == 403 and r.json()["detail"]["layer"] == "allowlist"
+    assert buy(client, k, vendor="samplebox", item="linen-napkin-samples").status_code == 200
+    assert buy(client, k, vendor="samplebox", item="linen-napkin-samples").status_code == 200
+    r = buy(client, k, vendor="samplebox", item="ceramic-mug-sample")       # 0.50 + 0.20 > 0.60 budget
+    assert r.status_code == 403 and "30-day budget" in r.json()["detail"]["reason"]
+    me = client.get("/api/me", headers={"X-Agent-Key": k}).json()
+    sb = next(v for v in me["vendor_budgets"] if v["vendor"] == "samplebox")
+    assert sb["spent_30d_usd"] == 0.50 and sb["budget_usd"] == 0.60
+
+
+def test_approval_flow_card_and_direct_refund(client):
+    ag = shop_agent(client)
+    k = ag["api_key"]
+    r = buy(client, k, vendor="shopsuite", item="inventory-seat", purpose="Inventory software to track stock across our two warehouses")
+    assert r.status_code == 202, r.text            # $0.40 > $0.30 threshold, no balance needed
+    j = r.json()
+    assert j["approve_url"] and j["status"] == "approval_required"
+    pid = j["purchase_id"]
+    assert client.post(f"/api/purchases/{pid}/approve-sandbox-card", headers={"X-Agent-Key": k}).status_code == 401  # demo off
+    r = client.post(f"/api/purchases/{pid}/approve-sandbox-card", headers=A).json()
+    assert r["status"] == "completed" and r["refund_deadline"]
+    assert client.get("/api/me", headers={"X-Agent-Key": k}).json()["balance_usd"] == 0.0  # funded directly, net zero
+    r = client.post(f"/api/purchases/{pid}/refund", headers=A).json()
+    assert r["to"] == "paypal" and r["paypal_refund"] and r["refunded_usd"] == 0.40
+    assert client.post(f"/api/purchases/{pid}/refund", headers=A).status_code == 409   # only once
+
+
+def test_approval_via_paypal_return(client):
+    ag = shop_agent(client)
+    j = buy(client, ag["api_key"], vendor="shopsuite", item="inventory-seat", purpose="Inventory software for our stock").json()
+    oid = j["approve_url"].rsplit("/", 1)[1]
+    client.get(f"/mock-paypal/approve/{oid}")
+    assert client.get(f"/paypal/return?token={oid}", follow_redirects=False).status_code in (302, 307)
+    pu = client.get(f"/api/purchases?agent_id={ag['agent_id']}", headers=A).json()[0]
+    assert pu["status"] == "completed" and pu["funding"] == "direct" and pu["paypal_capture"]
+
+
+def test_reject_and_expiry(client):
+    ag = shop_agent(client)
+    k = ag["api_key"]
+    pid = buy(client, k, vendor="shopsuite", item="inventory-seat", purpose="Inventory software for our stock").json()["purchase_id"]
+    assert client.post(f"/api/purchases/{pid}/reject", headers=A).json()["status"] == "rejected"
+    pid = buy(client, k, vendor="shopsuite", item="inventory-seat", purpose="Inventory software for our stock").json()["purchase_id"]
+    client.app.state.ledger.update_purchase(pid, approval_expires=time.time() - 1)
+    r = client.post(f"/api/purchases/{pid}/approve-sandbox-card", headers=A)
+    assert r.status_code == 409 and "expired" in r.text
+
+
+def test_tab_refund_inside_and_outside_window(client):
+    ag = shop_agent(client)
+    fund(client, ag["agent_id"], 2)
+    k = ag["api_key"]
+    pid = buy(client, k, vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]
+    assert client.get("/api/me", headers={"X-Agent-Key": k}).json()["balance_usd"] == 1.80
+    r = client.post(f"/api/purchases/{pid}/refund", headers=A).json()
+    assert r["to"] == "tab" and r["balance_usd"] == 2.0
+    pid = buy(client, k, vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]
+    client.app.state.ledger.update_purchase(pid, refund_deadline=time.time() - 1)
+    r = client.post(f"/api/purchases/{pid}/refund", headers=A)
+    assert r.status_code == 409 and "window" in r.text
+    # unused credit refund ignores approval captures and returns only the tab balance
+    assert client.post(f"/api/agents/{ag['agent_id']}/refund", headers=A).json()["refunded_usd"] == 1.80
+
+
+def test_demo_owner_actions_scoped_to_own_agent(tmp_path):
+    c = _demo_client(tmp_path)
+    a1 = c.post("/api/demo/session").json()
+    a2 = c.post("/api/demo/session").json()
+    r = c.post("/api/purchases", json={"vendor": "samplebox", "item": "ceramic-mug-sample",
+                                       "purpose": "Evaluate supplier samples for our autumn catalog"},
+               headers={"X-Agent-Key": a1["agent_key"]})
+    pid = r.json()["purchase_id"]
+    assert c.post(f"/api/purchases/{pid}/refund", headers={"X-Agent-Key": a2["agent_key"]}).status_code == 401
+    assert c.post(f"/api/purchases/{pid}/refund", headers={"X-Agent-Key": a1["agent_key"]}).json()["to"] == "tab"
+    r = c.post("/api/purchases", json={"vendor": "shopsuite", "item": "inventory-seat",
+                                       "purpose": "Inventory software for our stock"}, headers={"X-Agent-Key": a1["agent_key"]})
+    pid = r.json()["purchase_id"]
+    assert c.post(f"/api/purchases/{pid}/approve-sandbox-card", headers={"X-Agent-Key": a1["agent_key"]}).json()["status"] == "completed"
+    assert len(c.get("/api/demo/purchases", headers={"X-Agent-Key": a1["agent_key"]}).json()) == 2
+
+
+def test_decide_modes_offline():
+    cfg = pr.AgentConfig(pr.SHOP_POLICY, dict(pr.SHOP_VENDOR_BUDGETS), pr.SHOP_APPROVAL_THRESHOLD,
+                         pr.SHOP_PER_PURCHASE_MAX, pr.SHOP_DAILY_CAP)
+    bad = pr.Purchase("webintel-data", "tech_detect", 1, "Competitor research on their tech", "https://www.facebook.com/x")
+    assert pr.decide(cfg, bad, pr.State(), "none", None).outcome == "allow"
+    assert pr.decide(cfg, bad, pr.State(), "keyword", None).outcome == "block"
+    meta = pr.Purchase("webintel-data", "tech_detect", 1, "Competitor research", "http://169.254.169.254/latest")
+    assert pr.decide(cfg, meta, pr.State(), "keyword", None).layer == "unsafe_target"
+    seat = pr.Purchase("shopsuite", "inventory-seat", 1, "Inventory software to track our stock levels")
+    assert pr.decide(cfg, seat, pr.State(), "keyword", None).outcome == "approval"
+    gift = pr.Purchase("samplebox", "ceramic-mug-sample", 1, "A birthday gift for my sister")
+    assert pr.decide(cfg, gift, pr.State(), "keyword", None).outcome == "block"
+
+
+def test_eval_cases_file_and_scorecard(client):
+    import json as _json
+    from pathlib import Path as _P
+    cases = _json.loads((_P(__file__).parent.parent / "eval" / "cases.json").read_text())
+    assert len(cases) >= 55 and {c["expected"] for c in cases} == {"allow", "approval", "block"}
+    assert len({c["id"] for c in cases}) == len(cases)
+    for c in cases:
+        assert pr.price_of(pr.Purchase(c["vendor"], c["item"], c.get("quantity", 1))) is not None, c["id"]
+    r = client.get("/api/scorecard")
+    assert r.status_code == 200 and set(r.json()["modes"]) == {"none", "keyword", "ai"}
+
+
+def test_eval_runner_offline(tmp_path, monkeypatch):
+    from eval import run_eval
+    res = run_eval.main(["--modes", "none,keyword", "--out", str(tmp_path / "r.json")])
+    assert res["modes"]["none"]["attacks_stopped"] == 0
+    kw = res["modes"]["keyword"]
+    assert kw["attacks_stopped"] > 25 and kw["false_blocks"] == 0 and kw["llm_calls"] == 0
+    assert (tmp_path / "r.json").exists()
