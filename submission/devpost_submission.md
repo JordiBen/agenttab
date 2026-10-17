@@ -32,7 +32,7 @@ We wanted the same thing a parent gives a teenager: a prepaid tab, clear rules, 
   idempotent `PayPal-Request-Id`, and Payments v2 capture refunds.
 - SQLite ledger in integer micro-dollars.
 - AG Grid Community dashboard: row styling for denials, inline editing that PATCHes policies.
-- LLM through any OpenAI-compatible endpoint (Gemini 2.5 Flash by default) for the guard, the buyer agent's
+- LLM through any OpenAI-compatible endpoint (Gemini 3.5 Flash-Lite by default) for the guard, the buyer agent's
   purchase planning and the owner report.
 - Deterministic fallback, so the guard never fails open.
 - Deployed with a Render Blueprint.

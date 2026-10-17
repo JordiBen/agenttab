@@ -16,9 +16,7 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         generateValue: true
-      - key: LLM_BASE_URL
-        value: https://generativelanguage.googleapis.com/v1beta/openai
-      - key: LLM_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
       - key: LLM_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3.5-flash-lite

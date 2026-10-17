@@ -14,20 +14,23 @@ import sys
 
 import httpx
 
+from app import llm as llm_client
+from app.config import get_settings
+
 BASE = os.getenv("AGENTTAB_URL", "http://localhost:8000")
-LLM_BASE, LLM_KEY = os.getenv("LLM_BASE_URL", ""), os.getenv("LLM_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+SETTINGS = get_settings()  # same LLM config as the server (Gemini when GEMINI_API_KEY is set)
 
 
 def llm(system: str, user: str) -> str | None:
-    if not (LLM_BASE and LLM_KEY):
+    if not llm_client.enabled(SETTINGS):
         return None
-    r = httpx.post(LLM_BASE.rstrip("/") + "/chat/completions", headers={"Authorization": f"Bearer {LLM_KEY}"},
-                   json={"model": LLM_MODEL, "temperature": 0.2,
-                         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
-                   timeout=60)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    try:
+        text, _model = llm_client.chat(SETTINGS, [{"role": "system", "content": system},
+                                                  {"role": "user", "content": user}], temperature=0.2, timeout=60)
+        return text
+    except llm_client.LLMError as e:
+        print(f"  (LLM unavailable, using fallback: {e})")
+        return None
 
 
 def plan(goal: str, urls: list[str], catalog: dict) -> list[dict]:
@@ -70,7 +73,7 @@ def run(key: str, goal: str, urls: list[str], log=print) -> dict:
             log(f"  guard denied {s['tool']} on {s['url']}: {r.json()['detail'].get('reason')}")
         else:
             log(f"  {s['tool']} failed ({r.status_code}), not charged")
-    brief = llm("Write a concise research brief (max 8 bullet points) answering the goal from this purchased data.",
+    brief = None if not results else llm("Write a concise research brief (max 8 bullet points) answering the goal from this purchased data.",
                 json.dumps({"goal": goal, "data": results})[:60000])
     if not brief:
         lines = []

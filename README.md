@@ -34,11 +34,12 @@ By default `PAYPAL_MODE=mock` simulates PayPal so anyone can try it offline. For
 ```bash
 export PAYPAL_MODE=sandbox PAYPAL_CLIENT_ID=... PAYPAL_CLIENT_SECRET=...   # developer.paypal.com → Apps & Credentials
 export PUBLIC_URL=http://localhost:8000
-# AI guard: any OpenAI-compatible endpoint (Gemini, Groq, OpenRouter, Ollama)
-export LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai LLM_API_KEY=... LLM_MODEL=gemini-2.5-flash
+# AI guard: just set GEMINI_API_KEY (free tier). Defaults: gemini-3.5-flash-lite, falling back to gemini-3.8-flash.
+# Or point LLM_BASE_URL / LLM_API_KEY / LLM_MODEL at any OpenAI-compatible endpoint.
+export GEMINI_API_KEY=...
 uvicorn app.main:app
 ```
-Without an LLM key the guard falls back to a transparent keyword heuristic, so it never fails open.
+The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. If Gemini is down or rate-limited, it tries the second model, then a transparent keyword heuristic.
 
 ### Try the demo agent
 1. Open the dashboard, create an agent, and copy its key.
@@ -77,11 +78,11 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 
 ## Tests
 ```bash
-pip install pytest && pytest -q     # 9 tests: 402 flow, capture idempotency, guard, caps, refunds, SSRF, no-charge-on-failure
+pip install pytest && pytest -q     # 13 tests (+1 live: LIVE_AI=1): 402 flow, AI verdicts/fallback/injection, capture idempotency, guard, caps, refunds, SSRF, no-charge-on-failure
 ```
 
 ## Built with
 PayPal Orders v2 and Payments v2 (sandbox), FastAPI, AG Grid Community, any OpenAI-compatible LLM
-(Gemini 2.5 Flash by default), and Render (one-click `render.yaml`).
+(Gemini 3.5 Flash-Lite by default), and Render (one-click `render.yaml`).
 
 MIT License · © WebIntel Tools

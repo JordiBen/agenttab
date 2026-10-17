@@ -8,16 +8,17 @@ credit back to PayPal in one click.
 """
 from __future__ import annotations
 
+import json
 import os
 import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from . import llm
 from .config import Settings, get_settings
 from .guard import SpendGuard
 from .ledger import Ledger, from_micro
@@ -91,7 +92,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": bool(s.llm_base_url and s.llm_api_key)}
+        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.enabled(s),
+                "models": [s.llm_model, s.llm_fallback_model] if llm.enabled(s) else []}
 
     @app.get("/api/catalog")
     def catalog():
@@ -163,23 +165,20 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                  "charges": len(charges), "spent_usd": round(sum(r["amount_usd"] for r in charges), 4),
                  "denied": [{"tool": d["tool"], "target": d["target"], "reason": d["reason"]} for d in denies[:10]],
                  "top_targets": sorted({c["target"] for c in charges})[:10]}
-        text = None
-        if s.llm_base_url and s.llm_api_key:
+        text, model = None, None
+        if llm.enabled(s):
             try:
-                r = httpx.post(s.llm_base_url.rstrip("/") + "/chat/completions",
-                               headers={"Authorization": f"Bearer {s.llm_api_key}"},
-                               json={"model": s.llm_model, "temperature": 0.2, "messages": [
-                                   {"role": "system", "content": "Write a 4-sentence spending report for the owner of an AI agent. Flag anything risky. Plain English, no markdown."},
-                                   {"role": "user", "content": str(facts)}]}, timeout=30)
-                r.raise_for_status()
-                text = r.json()["choices"][0]["message"]["content"].strip()
-            except Exception:
+                text, model = llm.chat(s, [
+                    {"role": "system", "content": "Write a 4-sentence spending report for the owner of an AI agent. Flag anything risky. Plain English, no markdown."},
+                    {"role": "user", "content": json.dumps(facts)}], temperature=0.2)
+                text = text.strip() or None
+            except llm.LLMError:
                 text = None
         if not text:
             text = (f"{a['name']} made {facts['charges']} paid calls for ${facts['spent_usd']:.2f} and has "
                     f"${facts['balance_usd']:.2f} left. {len(denies)} purchase(s) were blocked by the guard"
                     + (f", most recently: {denies[0]['reason']}." if denies else "."))
-        return {"report": text, "facts": facts}
+        return {"report": text, "facts": facts, "model": model if text and model else "template"}
 
     # ---------------- funding via PayPal ----------------
 
