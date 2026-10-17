@@ -1,6 +1,6 @@
 # Plan: pay vendors directly (AgentTab holds no money)
 
-Status: **research and plan only, no code on this branch.** Every claim links to a PayPal developer page.
+Status: **research and plan only, no code on this branch.** Option A is approved in principle by the reviewer (2026-10-17). Every claim links to a PayPal developer page.
 Anything not yet exercised in our own sandbox is marked **UNSURE**.
 
 ## Goal
@@ -56,21 +56,37 @@ approval threshold) enforced by the same `procurement.decide()` pipeline, and no
 - Verdict: correct for a real marketplace, but too much for the hackathon. Keep it as the "production path" in the README.
   **UNSURE:** whether sandbox seller onboarding works end to end without a PayPal representative.
 
-## Proposed design (Option A)
+## Proposed design (Option A, approved in principle)
 1. **Vendor registry:** add `payee_merchant_id` per vendor. The values come from env (`VENDOR_PAYEE_SITESCOPE_DATA`, …) and are
    never committed. Mock mode uses fake 13-character ids.
-2. **Envelope instead of balance:** the agent's spendable amount is `envelope_budget − (held + captured)` in whole cents.
-   `decide()` and the reservation stay in one SQLite transaction (the existing atomic hold).
-3. **Charge:** the existing `charge_vault` / `authorize_vault` add `purchase_units[0].payee.merchant_id`, and the
-   `PayPal-Request-Id` stays derived from the action (`vault-{op_id}`).
-4. **Approval path:** an approval-required purchase authorizes (hold) toward the vendor payee and captures on approval. If PayPal
-   rejects AUTHORIZE with a payee (UNSURE above), fall back to "no PayPal call until approved, then a CAPTURE order".
-5. **Top-up removed** from the demo (or kept as "fund the envelope = raise the limit", with no money moving). This is a README change.
-6. **Failure handling:** a PayPal error releases the reservation, and the purchase becomes `failed` (never auto-approved).
-7. **Tests (failing first):** the body carries the correct payee per vendor; an unknown vendor has no payee and blocks; the envelope can't go
-   negative under parallel buys; a refund restores the envelope; mock mode never calls the network.
+2. **The envelope creates the order up front with a hold.** For every purchase that passes `decide()`, AgentTab creates the
+   Orders v2 order immediately with `intent: AUTHORIZE`, the owner's vaulted card, and `payee.merchant_id` = the vendor.
+   - The authorization is the hold, and **held amounts count toward every cap**: per-purchase max, daily cap, vendor 30-day
+     budget and the envelope budget all use `held + captured`, in whole cents.
+   - `decide()`, the cap check and the reservation row are written in one SQLite transaction. The PayPal authorize call is
+     keyed by `PayPal-Request-Id = vaultauth-{op_id}` (derived from the action), so a retry can never create a second hold.
+   - If the authorize fails, the reservation is released in the same code path and the purchase becomes `failed`
+     (never auto-approved, never retried silently).
+3. **Auto-approved purchases** (under the $60 threshold) are captured as soon as the vendor delivers. **Approval-required
+   purchases** stay on hold until the owner approves (capture) or rejects (void), and the hold counts toward the caps while it waits.
+   An authorization that expires releases its reservation.
+   - **UNSURE:** that `intent: AUTHORIZE` with a `payee` and a vault card is accepted in sandbox (spike step 2). If it isn't, the
+     fallback is a ledger-only reservation (no PayPal call until approval, then a CAPTURE order). That still counts toward the
+     caps, but no money is actually held.
+4. **No top-up into AgentTab:** "funding the tab" becomes "setting the envelope limit"; no money moves to AgentTab. This is a README change.
+5. **Tests (failing first):**
+   - the body carries the right payee per vendor; an unknown vendor has no payee and is blocked;
+   - held amounts count toward the daily, per-purchase and vendor caps;
+   - parallel buys can't exceed the envelope;
+   - a void or a refund restores the envelope;
+   - a failed authorize releases the reservation;
+   - the Request-Id is stable across retries;
+   - mock mode never calls the network.
+6. **README:** state plainly that this is a sandbox demo of direct-to-vendor payment, and that **a real product would use
+   PayPal multiparty (Complete Payments Platform) with vendor onboarding** (https://developer.paypal.com/docs/multiparty/,
+   https://developer.paypal.com/docs/multiparty/seller-onboarding/).
 
-## Sandbox spike (needs Yarden's go-ahead, about 3 calls, sandbox only, no live site)
+## Sandbox spike (approved, local only, sandbox only; runs once Yarden provides the 3 merchant ids; NOT run yet)
 1. Create one order with the vault test card and `payee.merchant_id` = vendor sandbox account → expect `COMPLETED`.
 2. The same with `intent: AUTHORIZE`, then capture.
 3. Refund the capture from step 1.
@@ -80,6 +96,6 @@ Record the results here and remove the UNSURE markers that they resolve.
 - Three sandbox **business** accounts (Developer Dashboard → Testing tools → Sandbox accounts), one per vendor
   (SiteScope Data, SampleBox, ShopSuite), and their **merchant ids** (Account ID). Put them in Render and `.secrets` as env vars, not in git.
 - Confirm the sandbox REST app still has **Vault** enabled (it does today, because the vault tests run against sandbox).
-- Approval to run the 3-call sandbox spike above locally.
+- (Done: the reviewer approved the 3-call spike, local only, once the merchant ids exist.)
 - Optional, only if we choose B: request Payouts access on the sandbox/live account.
 - Optional, only if we choose C: the multiparty contact form (https://developer.paypal.com/docs/multiparty/).

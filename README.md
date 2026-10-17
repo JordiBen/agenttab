@@ -64,6 +64,13 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 
 ![dashboard](docs/dashboard.png)
 
+## Planned: paying vendors directly (not built yet)
+
+A plan on this branch ([`docs/vendor-payouts-plan.md`](docs/vendor-payouts-plan.md)) would have approved purchases paid by PayPal
+straight to each vendor's sandbox business account (Orders v2 with a `payee`), with a hold created up front so held amounts count
+toward the caps. AgentTab would then hold no money. This is a sandbox demo design. **A real product would use PayPal multiparty
+(Complete Payments Platform) with vendor onboarding** (https://developer.paypal.com/docs/multiparty/). None of this is in the code yet.
+
 ## Use AgentTab from any MCP client
 
 `POST /mcp` is a Model Context Protocol server (Streamable HTTP, JSON responses, stateless). It speaks the current
