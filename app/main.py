@@ -161,8 +161,17 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if ip and not limiter.allow("llm-ip:" + ip, s.llm_calls_per_ip_day, DAY):
             return False
         return limiter.allow(key, per_day, DAY)
-    guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-guard", s.llm_calls_per_day), cache=verdicts)
-    guard_mode = "ai" if llm.enabled(s) else "keyword"   # keyword only when no LLM is configured at all
+    # Production = real PayPal, or a public demo (mock PayPal + demo mode only runs with the explicit local-test flag
+    # ALLOW_INSECURE_MOCK; without it create_app refuses to start). In production, a missing AI provider never means
+    # keyword decisions: every policy verdict goes to human approval.
+    production = s.paypal_mode != "mock" or (s.demo_mode and not s.allow_insecure_mock)
+    guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-guard", s.llm_calls_per_day), cache=verdicts,
+                       require_ai=production)
+    # keyword only when no AI provider is configured at all, and only outside production
+    guard_mode = "ai" if (llm.guard_enabled(s) or production) else "keyword"
+    if production and not llm.guard_enabled(s):
+        log.warning("no AI guard provider configured (%s): every purchase that reaches the policy check waits for "
+                    "human approval", s.guard_provider)
     app.state.ledger, app.state.paypal, app.state.guard, app.state.settings = ledger, paypal, guard, s
     app.state.limiter = limiter
     _agent_locks: dict[str, threading.Lock] = {}
@@ -329,8 +338,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.enabled(s), "demo_mode": s.demo_mode,
-                "models": [s.llm_model, s.llm_fallback_model] if llm.enabled(s) else [],
+        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.guard_enabled(s), "demo_mode": s.demo_mode,
+                "ai_status": guard.status(budget_left=limiter.count("llm-guard", DAY) < s.llm_calls_per_day),
+                "guard_provider": s.guard_provider, "models": llm.guard_models(s),
                 **({"demo_policy": DEMO_POLICY} if s.demo_mode else {})}
 
     @app.get("/api/catalog")
@@ -1510,7 +1520,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/api/replay")
     def replay():
-        """Real decisions from the committed Gemini eval run (eval/results.json joined with eval/cases.json), for
+        """Real decisions from the committed AI-mode eval run (eval/results.json joined with eval/cases.json), for
         the landing page's feed. Read from files: no LLM or PayPal calls."""
         root = Path(__file__).resolve().parent.parent / "eval"
         try:
@@ -1530,11 +1540,11 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                         "purpose": c["purpose"][:240], "target": c.get("target", "")[:200], "outcome": r["got"],
                         "layer": r["layer"], "model": r.get("model"), "latency_ms": r.get("latency_ms"),
                         "reason": (r.get("reason") or "")[:240]})
-        return {"source": "eval/results.json (Gemini mode)", "run_at": json.loads((root / "results.json").read_text())["modes"]["ai"].get("run_at"),
+        return {"source": "eval/results.json (AI mode)", "run_at": json.loads((root / "results.json").read_text())["modes"]["ai"].get("run_at"),
                 "decisions": out}
 
     # ---------------- live Gauntlet: sampled attacks through the real guard ----------------
-    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-gauntlet", s.gauntlet_llm_calls_per_day),
+    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-gauntlet", s.gauntlet_llm_calls_per_day), require_ai=production,
                                 cache=verdicts)
     GAUNTLET_CATS = ("direct_injection", "indirect_injection", "personal_use", "social_target", "lookalike_unsafe",
                      "forbidden_vendor", "caps", "vague")
@@ -1546,7 +1556,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.post("/api/gauntlet")
     def gauntlet(request: Request):
         """Run a random sample of the labeled attacks (one per category, plus two legitimate buys) through the
-        same decide() real purchases use, live (Gemini when configured). Dry run: nothing is charged and PayPal
+        same decide() real purchases use, live (the AI provider when configured). Dry run: nothing is charged and PayPal
         is never called. Rate-limited, with its own daily LLM budget."""
         limit("gauntlet:" + client_ip(request), s.gauntlet_runs_per_ip_hour, HOUR, "Gauntlet limit for your IP reached; try again in an hour")
         limit("gauntlet:all", s.gauntlet_runs_per_day, DAY, "today's live Gauntlet runs are used up; the committed scorecard below has the full 67-case run")

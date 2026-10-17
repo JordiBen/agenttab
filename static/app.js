@@ -93,15 +93,19 @@ async function refund() { const a = sel(); if (!a) return;
 async function report() { const a = sel(); if (!a) return;
   const r = await fetch('/api/agents/' + a.agent_id + '/report', {headers: H()}); const j = await r.json(); $('report').textContent = j.report || JSON.stringify(j); }
 
-// ---- health: live AI guard status (real state from /healthz; no model name in the badge) ----
+// ---- health: live AI guard badge (real state from /healthz; the model name is shown only in Proof) ----
 const LIVE_TXT = {live: 'Live AI guard', busy: 'AI busy, human approval', off: 'Keyword mode (no AI configured)'};
+const LIVE_TIP = {live: 'Every purchase that reaches the policy check is judged by the AI guard in real time. If it is unavailable, the purchase waits for a human.',
+  busy: 'The AI guard cannot judge right now (not configured, rate-limited or out of budget), so purchases that reach the policy check wait for human approval. By design.',
+  off: 'Local/offline mode: no AI provider configured, a transparent keyword check is used.'};
 function setLive(h) {
   const st = h.ai_status || (h.ai_guard ? 'live' : 'off');
   for (const id of ['navlive', 'herolive']) {
-    const el = $(id); el.classList.toggle('off', st === 'off'); el.classList.toggle('busy', st === 'busy');
-    el.querySelector('span').textContent = LIVE_TXT[st] || LIVE_TXT.off;
-    el.title = st === 'live' ? 'Every purchase in the demo is judged by the AI guard in real time. If it is unavailable, the purchase is held for a human.' : '';
+    const el = $(id); el.classList.toggle('off', st === 'off'); el.classList.toggle('busy', st === 'busy'); el.dataset.status = st;
+    el.querySelector('span').textContent = LIVE_TXT[st] || LIVE_TXT.off; el.title = LIVE_TIP[st] || '';
   }
+  const pm = $('proofmodel');
+  if (pm) pm.textContent = h.models && h.models.length ? `AI guard model: ${h.models.join(', ')} (${h.guard_provider === 'anthropic' ? 'Anthropic' : h.guard_provider})` : 'AI guard model: none configured';
 }
 
 // ---- hero feed: real decisions, typed out like a log ----
@@ -257,6 +261,7 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
   if (r.status === 200) { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
   else if (r.status === 202 && j.ai_unavailable) {   // fail closed: no AI verdict means a human decides, never auto-approve
+    refreshLive();
     verdict('<span class="stamp hold">Held</span> ' + pill('approval', 'AI guard busy · waiting for you') + who); live('approval');
     toast('warn', 'AI guard is busy', 'Purchase is waiting for human approval, by design.');
     $('dbusy').textContent = j.message; $('dbusy').style.display = '';
@@ -299,8 +304,8 @@ function fillItems() { const v = (CAT || []).find(x => x.vendor === $('dvendor')
   if (v) $('ditem').innerHTML = v.items.map(i => `<option value="${enc(i.item)}">${enc(i.name)} ($${i.price_usd})</option>`).join(''); }
 async function demoReport() { if (!DK()) return show('Start a demo session first.'); let r;
   try { r = await dfetch('/api/demo/report', {headers: {'X-Agent-Key': DK()}}); } catch (e) { return; }
-  const j = await r.json(); verdict(r.ok ? pill('charge', 'report · ' + (j.model || 'template')) : pill('deny', 'error')); show(j.report || j.detail || j);
-  r.ok ? toast('info', 'Spend report ready', 'Numbers from the ledger; commentary by ' + (j.model || 'template') + '.') : toast('bad', 'Report unavailable', typeof j.detail === 'string' ? j.detail : ''); }
+  const j = await r.json(); verdict(r.ok ? pill('charge', 'report · ' + (j.model ? 'AI commentary' : 'template')) : pill('deny', 'error')); show(j.report || j.detail || j);
+  r.ok ? toast('info', 'Spend report ready', 'Numbers from the ledger; ' + (j.model ? 'AI commentary.' : 'template commentary.')) : toast('bad', 'Report unavailable', typeof j.detail === 'string' ? j.detail : ''); }
 async function demoRefund() { if (!DK()) return show('Start a demo session first.'); let r;
   try { r = await dfetch('/api/demo/refund', {method: 'POST', headers: {'X-Agent-Key': DK()}}); } catch (e) { return; }
   const j = await r.json(); verdict(r.ok ? pill('refund', 'refunded ' + usd(j.refunded_usd) + ' to PayPal') : pill('deny', 'error')); show(j);
@@ -377,6 +382,7 @@ async function demoFF() { if (!DK()) return show('Start a demo session first.');
 
 // ---- boot ----
 initMotion();
+const refreshLive = () => fetch('/healthz').then(r => r.json()).then(setLive).catch(() => {}); setInterval(refreshLive, 30000);
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';
   if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); mcpPanel(); }
   else $('nodemo').style.display = ''; });

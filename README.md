@@ -19,7 +19,7 @@ $18 sample by hand defeats the point.
 4. **A refund window on goods and subscriptions.** For 7 days each sample or SaaS purchase has its own Refund button:
    tab-funded purchases go back to the tab; approval-funded purchases are refunded to PayPal (Payments v2 refund of that
    capture). Research data is delivered instantly, so it's final; a failed data call is never charged.
-5. **An AI judge for what rules can't express.** Gemini checks whether the target, the purpose and the item fit the
+5. **An AI judge for what rules can't express.** Claude (`claude-haiku-5-5`, official `anthropic` SDK, JSON-schema output) checks whether the target, the purpose and the item fit the
    owner's policy, and whether the agent is relaying an injected instruction. Every decision is logged with the layer that made it.
 6. **A schedule the agent keeps.** Budgets, approval expiries, refund deadlines and renewals on a Bryntum Scheduler timeline,
    updated by signature-verified PayPal webhooks, with refund suggestions before deadlines that a human confirms.
@@ -34,42 +34,61 @@ $32, SaaS seat $29 or $39 a month, research data $12 to $49; limits: $60 approva
 Results: [`eval/results.json`](eval/results.json), also live at `/api/scorecard`
 and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 
+<!-- scorecard:start -->
 | Mode | Attacks stopped | Legit handled right | False blocks | Latency p50 / p95 | LLM calls / tokens |
 |---|---|---|---|---|---|
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
 | Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + Gemini judge | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
+| Rules + Claude judge | **47/47** (100.0%) | 20/20 | 0 | 1116.1 / 1628.5 ms | 43 / 40574 |
+| Rules + Gemini judge (previous catalog, archived) | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
+<!-- scorecard:end -->
 
 **Repricing note (branch feature/realistic-shop):** the catalog moved from cent prices to the realistic prices above and the
 vendor `webintel-data` was renamed `sitescope-data`. To keep each case testing the same thing, six cases changed quantity
 or prior spend (legit-15..18 now order 2-4 units so they still cross the $60 threshold; caps-01/06 order 4 and 5 seats so
 they still exceed $120; caps-02..05 carry rescaled prior spend). The no-guard and keyword rows were re-run on the new cases
-and match the old numbers exactly. The **Gemini row is from the previous catalog** (`stale_modes: ["ai"]` in
-`eval/results.json`, labelled "previous catalog" on the dashboard); its re-run is pending.
+and match the old numbers exactly. The **Claude row** is a fresh local run of `claude-haiku-5-5` on the new prices and
+cases (not against the hosted site). The **Gemini row is the archived run on the previous catalog** (cent prices), kept
+for comparison in [`eval/archive/`](eval/archive/) together with the cases it ran on; it is not a run on the current cases.
+Both tables are generated from `eval/results.json` and the archive by `python -m eval.readme_tables`.
 
-| Category | Cases | No guard | Rules + keyword | Rules + Gemini |
-|---|---|---|---|---|
-| legit | 20 | 16 | 20 | 20 |
-| forbidden vendor | 6 | 0 | 6 | 6 |
-| social target | 6 | 0 | 5 | 6 |
-| personal use | 7 | 0 | 4 | 7 |
-| vague | 5 | 0 | 5 | 5 |
-| direct injection | 6 | 0 | 5 | 6 |
-| indirect injection | 6 | 0 | 2 | 6 |
-| caps | 6 | 0 | 6 | 6 |
-| lookalike unsafe | 5 | 0 | 4 | 5 |
+**What changed when the guard moved to Claude (branch feature/claude-guard):**
+- `GUARD_PROVIDER` defaults to `anthropic`; the guard calls `claude-haiku-5-5` through the official `anthropic` Python SDK
+  (pinned in `requirements.txt`) with a JSON-schema output format and `effort: "low"`. The key is `ANTHROPIC_API_KEY`
+  (a Render secret, `sync: false`; never in git). Gemini remains an optional provider (`GUARD_PROVIDER=gemini`).
+- The verdict-cache key includes the Claude model id. An unusable answer (`stop_reason` other than `end_turn`, e.g. `max_tokens` or
+  `refusal`; no text block; invalid JSON or missing verdict fields) is treated as "AI unavailable": the purchase is held for human
+  approval (`202`), never allowed and never cached. The SDK client uses `timeout=8.0, max_retries=1`.
+- In production without any AI provider, every policy verdict goes to human approval (the server does not refuse to start).
+- The badge shows only "Live AI guard" or "AI busy, human approval" from `/healthz`; the model name appears in Proof.
+- The previous Gemini results are archived in `eval/archive/`, not deleted; superseded ai runs are archived there automatically.
 
-- Gemini model: gemini-3.5-flash-lite; every ai-mode decision in the run got a Gemini verdict (no errors or quota hits).
+<!-- categories:start -->
+| Category | Cases | No guard | Rules + keyword check | Rules + Claude judge | Rules + Gemini judge (previous catalog, archived) |
+|---|---|---|---|---|---|
+| legit | 20 | 16 | 20 | 20 | 20 |
+| forbidden vendor | 6 | 0 | 6 | 6 | 6 |
+| social target | 6 | 0 | 5 | 6 | 6 |
+| personal use | 7 | 0 | 4 | 7 | 7 |
+| vague | 5 | 0 | 5 | 5 | 5 |
+| direct injection | 6 | 0 | 5 | 6 | 6 |
+| indirect injection | 6 | 0 | 2 | 6 | 6 |
+| caps | 6 | 0 | 6 | 6 | 6 |
+| lookalike unsafe | 5 | 0 | 4 | 5 | 5 |
+<!-- categories:end -->
+
+- In the Claude run every ai-mode decision got a complete Claude verdict: no `max_tokens` or `refusal` stops, no API errors
+  (`heuristic_fallbacks: 0` in `eval/results.json`). The archived Gemini run used gemini-3.5-flash-lite, also with no errors.
 - **Honest caveat:** the first run scored 45/47 with Gemini; both misses were purchases with an empty or one-word purpose.
   We then added a deterministic **purpose-required rule** (at least 4 words, no "as we discussed"-style references) and re-ran
   all three modes once. The cases are not a held-out set, so read these as regression numbers, not a benchmark.
-- What still gets past the keyword-only mode (and why the Gemini judge matters): indirect injection copied from web pages
+- What still gets past the keyword-only mode (and why the AI judge matters): indirect injection copied from web pages
   (2/6 stopped), personal use phrased as business (4/7), Pinterest and a `faceb00k` look-alike.
 - **Run it live:** the dashboard's **Gauntlet** button (`POST /api/gauntlet`) sends one random attack from each of 8
-  categories plus 2 legitimate buys through the same `decide()`, with live Gemini, and shows each verdict, layer and latency.
+  categories plus 2 legitimate buys through the same `decide()`, with the live AI guard, and shows each verdict, layer and latency.
   It's a dry run (nothing is charged, PayPal isn't called), limited to 2 runs per IP per hour and 12 per day, with its own
-  daily Gemini budget (60 calls) and the visitor's per-IP Gemini budget.
-- Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 Gemini calls).
+  daily AI budget (60 calls) and the visitor's per-IP AI budget.
+- Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 AI calls; needs `ANTHROPIC_API_KEY`; the previous ai run is archived to `eval/archive/` first), then `python -m eval.readme_tables` to regenerate the tables above.
 
 ![dashboard](docs/dashboard.png)
 
@@ -136,14 +155,15 @@ By default `PAYPAL_MODE=mock` simulates PayPal so anyone can try it offline. Moc
 ```bash
 export PAYPAL_MODE=sandbox PAYPAL_CLIENT_ID=... PAYPAL_CLIENT_SECRET=...   # developer.paypal.com → Apps & Credentials
 export PUBLIC_URL=http://localhost:8000
-# AI guard: just set GEMINI_API_KEY (free tier). Defaults: gemini-3.5-flash-lite, falling back to gemini-3.8-flash.
-# Or point LLM_BASE_URL / LLM_API_KEY / LLM_MODEL at any OpenAI-compatible endpoint.
-export GEMINI_API_KEY=...
+# AI guard: Claude by default (GUARD_PROVIDER=anthropic, model claude-haiku-5-5, official anthropic SDK).
+export ANTHROPIC_API_KEY=...
+# Optional: GUARD_PROVIDER=gemini with GEMINI_API_KEY (or LLM_BASE_URL / LLM_API_KEY / LLM_MODEL for any
+# OpenAI-compatible endpoint). The owner's spend report uses that OpenAI-compatible client when it is set.
 uvicorn app.main:create_app --factory     # `uvicorn app.main:app` works too
 ```
-The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. If Gemini is down or rate-limited, it tries the second model; if that fails too (or the daily AI budget is used up), the purchase is **held for human approval** instead of being decided by keywords, and the API and demo say so: "AI guard is busy, purchase is waiting for human approval, by design" (`ai_unavailable: true` on the `202`). The keyword check is only used when no LLM is configured at all (offline/dev).
+The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. With Claude, the call is `client.messages.create(model="claude-haiku-5-5", max_tokens=2000, system=..., messages=[...], output_config={"effort": "low", "format": {"type": "json_schema", ...}})` with no temperature and no thinking parameter; the first text block is parsed with `json.loads`, and any `stop_reason` other than `end_turn` (e.g. `max_tokens`, `refusal`), a missing text block or invalid JSON counts as "AI unavailable" (held for human approval, never cached). The client uses `timeout=8.0, max_retries=1`. A rate limit, API status error or connection error (or a used-up daily AI budget) means the purchase is **held for human approval** instead of being decided by keywords (with the optional Gemini provider, a second model is tried first), and the API and demo say so: "AI guard is busy, purchase is waiting for human approval, by design" (`ai_unavailable: true` on the `202`). The keyword check is only used when no AI provider is configured and the server is not in production. In production (real PayPal, or the public demo) with no AI provider configured, the server still starts, and every purchase that reaches the policy check is held for human approval. The live badge reads the real state from `/healthz` (`ai_status`): "Live AI guard" (green) or "AI busy, human approval" (orange: no provider, budget used up, or the last call failed and none succeeded since). The model name is shown only in the Proof section.
 
-Complete verdicts from the primary model are cached for 10 minutes, keyed by a SHA-256 of the exact LLM input (policy, vendor, item and quantity, price, target, purpose) plus the model id, so an identical repeat check costs no Gemini call (`"cached": true`). Fallback-model answers, unparseable verdicts and unavailable results are never cached; changing one character of the input is a new check. Each visitor IP also has its own daily Gemini budget (60 calls, shared by purchases and the Gauntlet) on top of the shared daily budgets.
+Complete verdicts from the primary model are cached for 10 minutes, keyed by a SHA-256 of the exact LLM input (policy, vendor, item and quantity, price, target, purpose) plus the model id, so an identical repeat check costs no AI call (`"cached": true`). Fallback-model answers (Gemini provider), unparseable verdicts and unavailable results are never cached; changing one character of the input is a new check. Each visitor IP also has its own daily AI budget (60 calls, shared by purchases and the Gauntlet) on top of the shared daily budgets.
 
 ### PayPal sandbox notes
 - `POST /api/agents/{id}/topup` creates a real Orders v2 order. The buyer approves it on sandbox.paypal.com (sandbox personal account, or "Pay with Debit or Credit Card" → **Pay now as guest** with a sandbox test card). On return, AgentTab captures it.
@@ -192,7 +212,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 - Rate limits, set by env vars (in-memory, per instance):
   - Demo sessions: 3 per IP per hour, 40 per day.
   - Purchases: 40 per IP and 30 per agent per hour. Top-up requests: 5 per agent per hour. Demo reports: 5 per agent per hour. Tab refunds: 3 per agent per hour.
-  - Gemini: 400 guard calls per day (then purchases are held for approval) and a separate 60 report calls per day (then reports use the template only).
+  - AI guard: 400 calls per day (then purchases are held for approval). Reports: a separate 60 calls per day on the OpenAI-compatible client, if one is configured (then reports use the template only).
   - PayPal sandbox calls: 120 per day. Webhook requests without PayPal's signature headers are rejected before they count.
 
 ## API
@@ -248,13 +268,13 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
   pinned to exact versions with Subresource Integrity.
 - Rate limits are in memory and per instance, and client IPs come from Cloudflare's `CF-Connecting-IP` (Render's edge);
   treat them as abuse damping, not as a security boundary.
-- Decision layers, in order: catalog → unsafe target → purpose required → injection filter → vendor allowlist → per-purchase / daily caps → vendor budget → policy judge (Gemini; held for approval if Gemini is unavailable; keyword check only without an LLM) → approval threshold. Every decision is logged with its layer.
+- Decision layers, in order: catalog → unsafe target → purpose required → injection filter → vendor allowlist → per-purchase / daily caps → vendor budget → policy judge (Claude by default; held for approval if it is unavailable or, in production, not configured; keyword check only offline without a provider) → approval threshold. Every decision is logged with its layer.
 
 ## Tests
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-205 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+221 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,
@@ -263,7 +283,7 @@ procurement, webhooks, schedule, eval runner, and a docs check that every test t
 them on Python 3.12 and 3.13, plus the offline eval, which must match the committed scorecard.
 
 ## Built with
-PayPal Orders v2, Payments v2, Vault v3 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Roundo by Indian Type Foundry (SIL OFL, self-hosted), any OpenAI-compatible LLM
-(Gemini 3.5 Flash-Lite by default), and Render (one-click `render.yaml`).
+PayPal Orders v2, Payments v2, Vault v3 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Roundo by Indian Type Foundry (SIL OFL, self-hosted), Anthropic Claude (`claude-haiku-5-5`, official `anthropic` Python SDK) for the guard,
+optionally any OpenAI-compatible LLM (e.g. Gemini) for the guard or the spend report, and Render (one-click `render.yaml`).
 
 MIT License · © WebIntel Tools

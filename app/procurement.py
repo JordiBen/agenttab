@@ -4,7 +4,7 @@ Decision pipeline (same code is used by the API and by the safety eval):
 
   mode "none"     naive agent: everything is bought (only the balance limits it)
   mode "keyword"  deterministic layers + keyword heuristic for the policy check
-  mode "ai"       deterministic layers + Gemini policy check (heuristic only if the LLM is down)
+  mode "ai"       deterministic layers + AI policy check (Claude by default; a human decides if the AI is unavailable)
 
 Deterministic layers, in order:
   1. unknown vendor / item           -> block
