@@ -41,6 +41,11 @@ uvicorn app.main:app
 ```
 The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. If Gemini is down or rate-limited, it tries the second model, then a transparent keyword heuristic.
 
+### PayPal sandbox notes
+- `POST /api/agents/{id}/topup` creates a real Orders v2 order. The buyer approves it on sandbox.paypal.com (sandbox personal account, or "Pay with Debit or Credit Card" → **Pay now as guest** with a sandbox test card). On return, AgentTab captures it.
+- `POST /api/agents/{id}/topup-sandbox-card` (sandbox only, refused against live PayPal) creates and captures in one call with PayPal's public sandbox test card. It's for judges and CI who can't click through checkout.
+- `agent/approve_sandbox.py` is an experimental headless guest-checkout helper for recordings.
+
 ### Try the demo agent
 1. Open the dashboard, create an agent, and copy its key.
 2. Run:

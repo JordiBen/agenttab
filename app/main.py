@@ -197,6 +197,25 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(404, "no such agent")
         return _topup(aid, money(body.amount_usd))
 
+    @app.post("/api/agents/{aid}/topup-sandbox-card", dependencies=[Depends(admin)])
+    def sandbox_card_topup(aid: str, body: TopUp):
+        """Sandbox/demo only: fund instantly with PayPal's test card (create+capture, no browser step)."""
+        if not ledger.agent(aid):
+            raise HTTPException(404, "no such agent")
+        if not (paypal.mock or paypal.is_sandbox):
+            raise HTTPException(403, "only available in PayPal sandbox")
+        amount = money(body.amount_usd)
+        try:
+            cap = paypal.sandbox_card_topup(amount, aid)
+        except PayPalError as e:
+            raise HTTPException(502, str(e))
+        ledger.add_order(cap["order_id"], aid, amount)
+        ledger.mark_order(cap["order_id"], "CAPTURED")
+        ledger.add_entry(aid, "fund", cap["amount"], paypal_ref=cap["capture_id"],
+                         reason=f"PayPal order {cap['order_id']} (sandbox test card)")
+        return {"order_id": cap["order_id"], "capture_id": cap["capture_id"], "amount_usd": float(cap["amount"]),
+                "balance_usd": float(ledger.balance(aid))}
+
     @app.post("/api/me/topup-request")
     def agent_topup_request(body: TopUp, a=Depends(agent_from_key)):
         """The agent asks its human for more budget: returns a PayPal approval link to forward."""

@@ -33,6 +33,7 @@
  <div class="card"><h3>Agents</h3><div id="agents"></div>
   <div class="row" style="margin-top:10px">
    <input id="amt" value="5.00" size="6"><button class="alt" onclick="topup()">Fund selected with PayPal</button>
+   <button class="alt" id="cardbtn" style="display:none" onclick="cardTopup()">Sandbox test-card top-up</button>
    <button onclick="refund()">Refund unused credit</button><button onclick="report()">AI spend report</button>
   </div><p id="report"></p></div>
  <div class="card"><h3>Live ledger: charges, denials, funding, refunds</h3><div id="ledger"></div></div>
@@ -69,6 +70,11 @@ async function createAgent(){
 async function topup(){const a=sel(); if(!a) return;
  const r=await fetch('/api/agents/'+a.agent_id+'/topup',{method:'POST',headers:H(),body:JSON.stringify({amount_usd:+amt.value})});
  const j=await r.json(); if(j.approve_url) location.href=j.approve_url; else alert(JSON.stringify(j));}
+async function cardTopup(){const a=sel(); if(!a) return;
+ const r=await fetch('/api/agents/'+a.agent_id+'/topup-sandbox-card',{method:'POST',headers:H(),body:JSON.stringify({amount_usd:+amt.value})});
+ document.getElementById('report').textContent=JSON.stringify(await r.json()); load();}
+fetch('/healthz').then(r=>r.json()).then(h=>{ if(h.paypal_mode!=="live") cardbtn.style.display='';
+ document.querySelector('header span').textContent+=' · PayPal: '+h.paypal_mode+(h.ai_guard?' · AI guard: '+h.models[0]:'');});
 async function refund(){const a=sel(); if(!a) return;
  const r=await fetch('/api/agents/'+a.agent_id+'/refund',{method:'POST',headers:H()}); document.getElementById('report').textContent=JSON.stringify(await r.json()); load();}
 async function report(){const a=sel(); if(!a) return;

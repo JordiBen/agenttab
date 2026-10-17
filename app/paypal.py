@@ -113,6 +113,35 @@ class PayPalClient:
         return {"status": j["status"], "amount": Decimal(cap["amount"]["value"]),
                 "agent_id": pu.get("reference_id") or cap.get("custom_id"), "capture_id": cap["id"]}
 
+    # PayPal's public sandbox test Visa (developer.paypal.com/tools/sandbox/card-testing). Fake money only.
+    SANDBOX_TEST_CARD = {"number": "4032039317984658", "expiry": "2030-12", "security_code": "123",
+                         "name": "AgentTab Sandbox Tester"}
+
+    @property
+    def is_sandbox(self) -> bool:
+        return self.s.paypal_mode == "sandbox" and "sandbox.paypal.com" in self.s.paypal_base
+
+    def sandbox_card_topup(self, amount: Decimal, agent_id: str) -> dict:
+        """Create + capture in one Orders v2 call with a sandbox test card (no browser approval).
+        Refuses to run against live PayPal. Returns the same shape as capture_order()."""
+        if self.mock:
+            oid = "MOCK-" + uuid.uuid4().hex[:12].upper()
+            return {"order_id": oid, "status": "COMPLETED", "amount": amount, "agent_id": agent_id,
+                    "capture_id": "CAP-" + oid[5:]}
+        if not self.is_sandbox:
+            raise PayPalError("test-card top-ups are only allowed in the PayPal sandbox")
+        body = {"intent": "CAPTURE",
+                "purchase_units": [{"reference_id": agent_id, "custom_id": agent_id,
+                                    "description": f"AgentTab credit for {agent_id}"[:127],
+                                    "amount": {"currency_code": "USD", "value": f"{amount:.2f}"}}],
+                "payment_source": {"card": dict(self.SANDBOX_TEST_CARD)}}
+        j = self._req("POST", "/v2/checkout/orders", body)
+        caps = j["purchase_units"][0].get("payments", {}).get("captures", [])
+        if j.get("status") != "COMPLETED" or not caps or caps[0].get("status") != "COMPLETED":
+            raise PayPalError(f"card capture not completed: {j.get('status')}")
+        return {"order_id": j["id"], "status": "COMPLETED", "amount": Decimal(caps[0]["amount"]["value"]),
+                "agent_id": agent_id, "capture_id": caps[0]["id"]}
+
     def refund_capture(self, capture_id: str, amount: Decimal) -> dict:
         if self.mock:
             return {"id": "REF-" + uuid.uuid4().hex[:10].upper(), "status": "COMPLETED"}
