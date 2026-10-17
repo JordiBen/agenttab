@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentTab: spending tabs for AI agents</title>
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33/dist/ag-grid-community.min.js"></script>
+<style>
+ body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#f6f8fb;color:#13203b}
+ header{background:#003087;color:#fff;padding:16px 28px;display:flex;align-items:center;gap:16px}
+ header h1{margin:0;font-size:22px} header span{opacity:.8}
+ main{padding:20px 28px;display:grid;gap:18px}
+ .card{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 3px #0001}
+ .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+ input,textarea{padding:8px;border:1px solid #c9d2e3;border-radius:6px;font:inherit}
+ textarea{width:420px;height:56px}
+ button{background:#0070e0;color:#fff;border:0;border-radius:6px;padding:9px 14px;cursor:pointer;font-weight:600}
+ button.alt{background:#ffc439;color:#003087}
+ #agents,#ledger{height:300px} #report{white-space:pre-wrap}
+ label{font-size:12px;color:#556;display:block}
+</style></head>
+<body>
+<header><h1>AgentTab</h1><span>PayPal-funded spending tabs for AI agents, guarded by AI · by WebIntel Tools</span></header>
+<main>
+ <div class="card">
+  <div class="row">
+   <div><label>Admin token</label><input id="tok" value="dev-admin" size="12"></div>
+   <div><label>Agent name</label><input id="name" value="research-agent"></div>
+   <div><label>Spending policy (plain English)</label><textarea id="policy">Only buy data about public websites of our competitors for market research. Never spend on social media sites. Never fetch facebook.com.</textarea></div>
+   <div><label>Daily cap $</label><input id="cap" value="2.00" size="5"></div>
+   <div><label>Per-call cap $</label><input id="pcap" value="0.10" size="5"></div>
+   <button onclick="createAgent()">Create agent</button>
+  </div>
+  <p id="newkey"></p>
+ </div>
+ <div class="card"><h3>Agents</h3><div id="agents"></div>
+  <div class="row" style="margin-top:10px">
+   <input id="amt" value="5.00" size="6"><button class="alt" onclick="topup()">Fund selected with PayPal</button>
+   <button onclick="refund()">Refund unused credit</button><button onclick="report()">AI spend report</button>
+  </div><p id="report"></p></div>
+ <div class="card"><h3>Live ledger: charges, denials, funding, refunds</h3><div id="ledger"></div></div>
+</main>
+<script>
+const T=()=>document.getElementById('tok').value;
+const H=()=>({'Content-Type':'application/json','X-Admin-Token':T()});
+const money=p=>p.value==null?'':'$'+Number(p.value).toFixed(4);
+const agentsGrid=agGrid.createGrid(document.getElementById('agents'),{
+ rowSelection:{mode:'singleRow'},
+ columnDefs:[{field:'name'},{field:'agent_id'},{field:'balance_usd',headerName:'Balance',valueFormatter:money},
+  {field:'spent_24h_usd',headerName:'Spent 24h',valueFormatter:money},{field:'daily_cap_usd',headerName:'Daily cap',valueFormatter:money,editable:true},
+  {field:'per_call_cap_usd',headerName:'Per-call cap',valueFormatter:money,editable:true},{field:'policy',flex:2,editable:true,tooltipField:'policy'}],
+ defaultColDef:{flex:1,sortable:true,filter:true,resizable:true},
+ onCellValueChanged:async e=>{await fetch('/api/agents/'+e.data.agent_id,{method:'PATCH',headers:H(),body:JSON.stringify({policy:e.data.policy,daily_cap_usd:+e.data.daily_cap_usd,per_call_cap_usd:+e.data.per_call_cap_usd})});load();}
+});
+const ledgerGrid=agGrid.createGrid(document.getElementById('ledger'),{
+ columnDefs:[{field:'ts',headerName:'Time',sort:'desc',valueFormatter:p=>new Date(p.value*1000).toLocaleTimeString()},
+  {field:'agent_id'},{field:'kind',cellStyle:p=>({color:{deny:'#c0392b',charge:'#13203b',fund:'#1e8449',refund:'#7d3c98'}[p.value],fontWeight:600})},
+  {field:'amount_usd',headerName:'Amount',valueFormatter:money},{field:'tool'},{field:'target',flex:2},
+  {field:'purpose',flex:2,tooltipField:'purpose'},{field:'reason',flex:2,tooltipField:'reason'},{field:'paypal_ref',headerName:'PayPal ref'}],
+ defaultColDef:{flex:1,sortable:true,filter:true,resizable:true},
+ getRowStyle:p=>p.data.kind==='deny'?{background:'#fdecea'}:null
+});
+async function load(){
+ const a=await fetch('/api/agents',{headers:H()}); if(a.ok) agentsGrid.setGridOption('rowData',await a.json());
+ const l=await fetch('/api/ledger',{headers:H()}); if(l.ok) ledgerGrid.setGridOption('rowData',await l.json());
+}
+const sel=()=>{const r=agentsGrid.getSelectedRows()[0]||agentsGrid.getDisplayedRowAtIndex(0)?.data; if(!r) alert('create an agent first'); return r;};
+async function createAgent(){
+ const r=await fetch('/api/agents',{method:'POST',headers:H(),body:JSON.stringify({name:name.value,policy:policy.value,daily_cap_usd:+cap.value,per_call_cap_usd:+pcap.value})});
+ const j=await r.json(); newkey.textContent=r.ok?('Agent key (give to your agent): '+j.api_key):JSON.stringify(j); load();
+}
+async function topup(){const a=sel(); if(!a) return;
+ const r=await fetch('/api/agents/'+a.agent_id+'/topup',{method:'POST',headers:H(),body:JSON.stringify({amount_usd:+amt.value})});
+ const j=await r.json(); if(j.approve_url) location.href=j.approve_url; else alert(JSON.stringify(j));}
+async function refund(){const a=sel(); if(!a) return;
+ const r=await fetch('/api/agents/'+a.agent_id+'/refund',{method:'POST',headers:H()}); document.getElementById('report').textContent=JSON.stringify(await r.json()); load();}
+async function report(){const a=sel(); if(!a) return;
+ const r=await fetch('/api/agents/'+a.agent_id+'/report',{headers:H()}); const j=await r.json(); document.getElementById('report').textContent=j.report||JSON.stringify(j);}
+load(); setInterval(load,3000);
+</script></body></html>

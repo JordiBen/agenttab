@@ -1,0 +1,121 @@
+"""PayPal REST client: Orders v2 (create / capture) and Payments v2 (refund).
+
+PAYPAL_MODE=sandbox talks to api-m.sandbox.paypal.com with client credentials.
+PAYPAL_MODE=mock keeps the same shapes in memory so tests and offline demos run
+without credentials.
+"""
+from __future__ import annotations
+
+import time
+import uuid
+from decimal import Decimal
+
+import httpx
+
+from .config import Settings
+
+
+class PayPalError(RuntimeError):
+    pass
+
+
+class PayPalClient:
+    def __init__(self, settings: Settings):
+        self.s = settings
+        self._token: str | None = None
+        self._token_exp = 0.0
+        self._mock_orders: dict[str, dict] = {}
+
+    # ---------- auth ----------
+    def _access_token(self) -> str:
+        if self._token and time.time() < self._token_exp - 60:
+            return self._token
+        r = httpx.post(
+            f"{self.s.paypal_base}/v1/oauth2/token",
+            auth=(self.s.paypal_client_id, self.s.paypal_client_secret),
+            data={"grant_type": "client_credentials"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            raise PayPalError(f"oauth failed: {r.status_code} {r.text[:200]}")
+        j = r.json()
+        self._token, self._token_exp = j["access_token"], time.time() + j.get("expires_in", 300)
+        return self._token
+
+    def _req(self, method: str, path: str, json: dict | None = None) -> dict:
+        r = httpx.request(
+            method,
+            f"{self.s.paypal_base}{path}",
+            json=json,
+            headers={
+                "Authorization": f"Bearer {self._access_token()}",
+                "Content-Type": "application/json",
+                "PayPal-Request-Id": str(uuid.uuid4()),  # idempotency
+                "Prefer": "return=representation",
+            },
+            timeout=30,
+        )
+        if r.status_code >= 400:
+            raise PayPalError(f"{method} {path}: {r.status_code} {r.text[:300]}")
+        return r.json()
+
+    @property
+    def mock(self) -> bool:
+        return self.s.paypal_mode != "sandbox"
+
+    # ---------- orders ----------
+    def create_order(self, amount: Decimal, agent_id: str, description: str) -> dict:
+        """Returns {id, approve_url, status}."""
+        value = f"{amount:.2f}"
+        if self.mock:
+            oid = "MOCK-" + uuid.uuid4().hex[:12].upper()
+            self._mock_orders[oid] = {"amount": value, "agent_id": agent_id, "status": "CREATED"}
+            return {"id": oid, "status": "PAYER_ACTION_REQUIRED",
+                    "approve_url": f"{self.s.public_url}/mock-paypal/approve/{oid}"}
+        body = {
+            "intent": "CAPTURE",
+            "purchase_units": [{
+                "reference_id": agent_id,
+                "custom_id": agent_id,
+                "description": description[:127],
+                "amount": {"currency_code": "USD", "value": value},
+            }],
+            "payment_source": {"paypal": {"experience_context": {
+                "brand_name": "AgentTab by WebIntel Tools",
+                "user_action": "PAY_NOW",
+                "shipping_preference": "NO_SHIPPING",
+                "return_url": f"{self.s.public_url}/paypal/return",
+                "cancel_url": f"{self.s.public_url}/paypal/cancel",
+            }}},
+        }
+        j = self._req("POST", "/v2/checkout/orders", body)
+        link = next((l["href"] for l in j.get("links", []) if l["rel"] in ("payer-action", "approve")), None)
+        return {"id": j["id"], "status": j["status"], "approve_url": link}
+
+    def mock_approve(self, order_id: str) -> None:
+        if order_id in self._mock_orders:
+            self._mock_orders[order_id]["status"] = "APPROVED"
+
+    def capture_order(self, order_id: str) -> dict:
+        """Returns {status, amount (Decimal), agent_id, capture_id}."""
+        if self.mock:
+            o = self._mock_orders.get(order_id)
+            if not o:
+                raise PayPalError("unknown order")
+            if o["status"] != "APPROVED":
+                raise PayPalError("ORDER_NOT_APPROVED")
+            o["status"] = "COMPLETED"
+            return {"status": "COMPLETED", "amount": Decimal(o["amount"]),
+                    "agent_id": o["agent_id"], "capture_id": "CAP-" + order_id[5:]}
+        j = self._req("POST", f"/v2/checkout/orders/{order_id}/capture", {})
+        pu = j["purchase_units"][0]
+        cap = pu["payments"]["captures"][0]
+        return {"status": j["status"], "amount": Decimal(cap["amount"]["value"]),
+                "agent_id": pu.get("reference_id") or cap.get("custom_id"), "capture_id": cap["id"]}
+
+    def refund_capture(self, capture_id: str, amount: Decimal) -> dict:
+        if self.mock:
+            return {"id": "REF-" + uuid.uuid4().hex[:10].upper(), "status": "COMPLETED"}
+        j = self._req("POST", f"/v2/payments/captures/{capture_id}/refund",
+                      {"amount": {"currency_code": "USD", "value": f"{amount:.2f}"}})
+        return {"id": j["id"], "status": j["status"]}
