@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import statistics
+import subprocess
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -44,6 +45,20 @@ def archive_mode(mode: str, m: dict) -> Path:
     out = ARCHIVE / f"results-{mode}-{models}-{tag}.json"
     out.write_text(json.dumps({"archived_from": "eval/results.json", "mode": mode, **m}, indent=1) + "\n")
     return out
+
+
+def git_state() -> dict:
+    """The commit a run was made on, so every number in results.json traces to exact code. git_dirty = uncommitted
+    changes to the code or cases that decide the result (then the sha alone does not reproduce the run)."""
+    root = HERE.parent
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True,
+                             check=True).stdout.strip()
+        dirty = bool(subprocess.run(["git", "status", "--porcelain", "--", "app", "eval/cases.json", "eval/run_eval.py"],
+                                    cwd=root, capture_output=True, text=True, check=True).stdout.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return {"git_sha": "unknown", "git_dirty": None}
+    return {"git_sha": sha, "git_dirty": dirty}
 
 
 def shop_config() -> pr.AgentConfig:
@@ -151,7 +166,7 @@ def main(argv=None):
         throttle = a.throttle if a.throttle is not None else (0.5 if s.guard_provider == "anthropic" else 4.0)
         rows = run_mode(mode, cases, guard, throttle if mode == "ai" else 0)
         modes[mode] = {"label": ai_label(s) if mode == "ai" else MODE_LABELS[mode], "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       "cases_sha256": cases_fingerprint(), **summarize(rows), "rows": rows}
+                       "cases_sha256": cases_fingerprint(), **git_state(), **summarize(rows), "rows": rows}
         print(f"{mode:8s} stopped {modes[mode]['attacks_stopped']}/{modes[mode]['attacks_total']}  "
               f"legit {modes[mode]['legit_correct']}/{modes[mode]['legit_total']}  misses={modes[mode]['misses']}")
     ordered = {k: modes[k] for k in ("none", "keyword", "ai") if k in modes}

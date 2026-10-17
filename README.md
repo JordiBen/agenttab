@@ -38,9 +38,11 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 | Mode | Attacks stopped | Legit handled right | False blocks | Latency p50 / p95 | LLM calls / tokens |
 |---|---|---|---|---|---|
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + Claude judge | **47/47** (100.0%) | 20/20 | 0 | 1116.1 / 1628.5 ms | 43 / 40574 |
+| Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.1 ms | 0 / 0 |
+| Rules + Claude judge | **47/47** (100.0%) | 20/20 | 0 | 978.2 / 1459.2 ms | 43 / 40840 |
 | Rules + Gemini judge (previous catalog, archived) | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
+
+Code each run used (from `eval/results.json`): No guard @ `f71590c`; Rules + keyword check @ `f71590c`; Rules + Claude judge @ `f71590c`.
 <!-- scorecard:end -->
 
 **Repricing note (branch feature/realistic-shop):** the catalog moved from cent prices to the realistic prices above and the
@@ -274,7 +276,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-221 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
+226 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,
