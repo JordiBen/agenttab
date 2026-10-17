@@ -93,7 +93,7 @@ def _anthropic_client(s: Settings):
     import anthropic
     c = _CLIENTS.get(s.anthropic_api_key)
     if c is None:
-        c = _CLIENTS[s.anthropic_api_key] = anthropic.Anthropic(api_key=s.anthropic_api_key, timeout=25.0)
+        c = _CLIENTS[s.anthropic_api_key] = anthropic.Anthropic(api_key=s.anthropic_api_key, timeout=8.0, max_retries=1)
     return c
 
 

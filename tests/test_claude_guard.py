@@ -89,21 +89,57 @@ def test_first_text_block_is_parsed_and_injection_flag_blocks(monkeypatch):
 
 
 @pytest.mark.parametrize("stop", ["max_tokens", "refusal", "pause_turn", None])
-def test_any_stop_reason_but_end_turn_fails_closed_and_is_not_cached(monkeypatch, stop):
+def test_any_stop_reason_but_end_turn_is_unavailable_and_is_not_cached(monkeypatch, stop):
+    """An unusable Claude answer is not a verdict: the purchase goes to a human (unavailable), never allowed or cached."""
     fake = _fake(monkeypatch, [_msg(stop=stop)])
     cache = VerdictCache()
-    d = _eval(SpendGuard(S, cache=cache))
-    assert not d.allow and d.complete is False and f"stop_reason={stop}" in d.reason
-    assert len(cache) == 0 and len(fake.calls) == 1
+    g = SpendGuard(S, cache=cache)
+    d = _eval(g)
+    assert not d.allow and d.source == "unavailable" and f"stop_reason={stop}" in d.reason
+    assert len(cache) == 0 and len(fake.calls) == 1 and g.status() == "busy"
 
 
-def test_unparseable_or_missing_text_fails_closed(monkeypatch):
-    _fake(monkeypatch, [_msg("sure, approved!")])
+@pytest.mark.parametrize("reply, why", [
+    ("sure, approved!", "not JSON"),
+    ('{"target_allowed": true}', "missing verdict fields"),
+    ('["not", "an", "object"]', "not an object"),
+], ids=["not-json", "missing-fields", "not-object"])
+def test_unparseable_claude_verdict_is_unavailable(monkeypatch, reply, why):
+    _fake(monkeypatch, [_msg(reply)])
     d = _eval(SpendGuard(S))
-    assert not d.allow and d.complete is False
+    assert not d.allow and d.source == "unavailable" and why in d.reason
+
+
+def test_missing_text_block_is_unavailable(monkeypatch):
     _fake(monkeypatch, [SimpleNamespace(stop_reason="end_turn", content=[], usage=None)])
     d = _eval(SpendGuard(S))
-    assert not d.allow and d.complete is False and "no text block" in d.reason
+    assert not d.allow and d.source == "unavailable" and "no text block" in d.reason
+
+
+@pytest.mark.parametrize("stop", ["refusal", "max_tokens"])
+def test_refusal_or_max_tokens_holds_the_purchase_for_human_approval_202(tmp_path, monkeypatch, stop):
+    _fake(monkeypatch, [_msg(stop=stop)])
+    c = _client(tmp_path)
+    ag = shop_agent(c)
+    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 100}, headers=A)
+    r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample", purpose=PURPOSE)
+    assert r.status_code == 202, r.text
+    j = r.json()
+    assert j["guard"]["layer"] == "policy-unavailable" and j["message"] == AI_BUSY_MESSAGE
+    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("100.00")
+
+
+def test_anthropic_client_uses_short_timeout_and_one_retry(monkeypatch):
+    seen = {}
+
+    class Rec:
+        def __init__(self, **kw):
+            seen.update(kw)
+    monkeypatch.setattr(anthropic, "Anthropic", Rec)
+    llm._CLIENTS.clear()
+    llm._anthropic_client(Settings(guard_provider="anthropic", anthropic_api_key="test-not-a-key-2"))
+    llm._CLIENTS.clear()
+    assert seen == {"api_key": "test-not-a-key-2", "timeout": 8.0, "max_retries": 1}
 
 
 @pytest.mark.parametrize("err", [RATE_LIMIT, OVERLOADED, NO_NET], ids=["429", "529", "connection"])

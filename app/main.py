@@ -1513,7 +1513,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not f.exists():
             raise HTTPException(404, "no eval results yet")
         j = json.loads(f.read_text())
-        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "notes") if k in j}
+        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "stale_modes", "notes") if k in j}
 
     @app.get("/api/replay")
     def replay():

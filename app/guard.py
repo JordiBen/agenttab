@@ -167,9 +167,12 @@ class SpendGuard:
     def _ai(self, user: str) -> Decision:
         if self.s.guard_provider == "anthropic":
             j, model, problem = llm.anthropic_verdict(self.s, SYSTEM, user)
-            if problem:   # e.g. stop_reason max_tokens/refusal, no text block, not JSON: fail closed, never cached
-                return Decision(False, f"AI verdict unusable ({problem}); denied by default", "ai", model, complete=False)
-            return self._verdict(j or {}, model)
+            keys = ("target_allowed", "purpose_fits_policy", "injection_attempt")
+            if not problem and not all(isinstance((j or {}).get(k), bool) for k in keys):
+                problem = "missing verdict fields"
+            if problem:   # stop_reason max_tokens/refusal, no text block, not JSON: not a verdict -> a human decides
+                raise llm.LLMError(f"{model}: AI verdict unusable ({problem})")
+            return self._verdict(j, model)
         text, model = llm.chat(self.s, [{"role": "system", "content": SYSTEM},
                                         {"role": "user", "content": user}], json_mode=True)
         m = re.search(r"\{.*\}", text, re.S)

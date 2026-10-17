@@ -39,7 +39,7 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 |---|---|---|---|---|---|
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
 | Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + Claude judge | **47/47** (100.0%) | 20/20 | 0 | 1167.2 / 1649.1 ms | 43 / 40504 |
+| Rules + Claude judge | **47/47** (100.0%) | 20/20 | 0 | 1116.1 / 1628.5 ms | 43 / 40574 |
 | Rules + Gemini judge (previous catalog, archived) | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
 <!-- scorecard:end -->
 
@@ -47,19 +47,21 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 vendor `webintel-data` was renamed `sitescope-data`. To keep each case testing the same thing, six cases changed quantity
 or prior spend (legit-15..18 now order 2-4 units so they still cross the $60 threshold; caps-01/06 order 4 and 5 seats so
 they still exceed $120; caps-02..05 carry rescaled prior spend). The no-guard and keyword rows were re-run on the new cases
-and match the old numbers exactly. The **Gemini row is from the previous catalog** (`stale_modes: ["ai"]` in
-`eval/results.json`, labelled "previous catalog" on the dashboard). The guard now runs on Claude (see below); the
-Claude ai-mode run on the new prices is **pending** until `ANTHROPIC_API_KEY` is set, and no Claude number is claimed here yet.
-The previous Gemini run and its cases are kept in [`eval/archive/`](eval/archive/).
+and match the old numbers exactly. The **Claude row** is a fresh local run of `claude-haiku-5-5` on the new prices and
+cases (not against the hosted site). The **Gemini row is the archived run on the previous catalog** (cent prices), kept
+for comparison in [`eval/archive/`](eval/archive/) together with the cases it ran on; it is not a run on the current cases.
+Both tables are generated from `eval/results.json` and the archive by `python -m eval.readme_tables`.
 
 **What changed when the guard moved to Claude (branch feature/claude-guard):**
 - `GUARD_PROVIDER` defaults to `anthropic`; the guard calls `claude-haiku-5-5` through the official `anthropic` Python SDK
   (pinned in `requirements.txt`) with a JSON-schema output format and `effort: "low"`. The key is `ANTHROPIC_API_KEY`
   (a Render secret, `sync: false`; never in git). Gemini remains an optional provider (`GUARD_PROVIDER=gemini`).
-- The verdict-cache key includes the Claude model id. Incomplete answers (`stop_reason` other than `end_turn`) are denied.
+- The verdict-cache key includes the Claude model id. An unusable answer (`stop_reason` other than `end_turn`, e.g. `max_tokens` or
+  `refusal`; no text block; invalid JSON or missing verdict fields) is treated as "AI unavailable": the purchase is held for human
+  approval (`202`), never allowed and never cached. The SDK client uses `timeout=8.0, max_retries=1`.
 - In production without any AI provider, every policy verdict goes to human approval (the server does not refuse to start).
 - The badge shows only "Live AI guard" or "AI busy, human approval" from `/healthz`; the model name appears in Proof.
-- The previous Gemini results are archived in `eval/archive/`, not deleted. The Claude eval run is pending (no key yet).
+- The previous Gemini results are archived in `eval/archive/`, not deleted; superseded ai runs are archived there automatically.
 
 <!-- categories:start -->
 | Category | Cases | No guard | Rules + keyword check | Rules + Claude judge | Rules + Gemini judge (previous catalog, archived) |
@@ -75,7 +77,8 @@ The previous Gemini run and its cases are kept in [`eval/archive/`](eval/archive
 | lookalike unsafe | 5 | 0 | 4 | 5 | 5 |
 <!-- categories:end -->
 
-- That previous-catalog run used gemini-3.5-flash-lite; every ai-mode decision in it got a Gemini verdict (no errors or quota hits).
+- In the Claude run every ai-mode decision got a complete Claude verdict: no `max_tokens` or `refusal` stops, no API errors
+  (`heuristic_fallbacks: 0` in `eval/results.json`). The archived Gemini run used gemini-3.5-flash-lite, also with no errors.
 - **Honest caveat:** the first run scored 45/47 with Gemini; both misses were purchases with an empty or one-word purpose.
   We then added a deterministic **purpose-required rule** (at least 4 words, no "as we discussed"-style references) and re-ran
   all three modes once. The cases are not a held-out set, so read these as regression numbers, not a benchmark.
@@ -85,7 +88,7 @@ The previous Gemini run and its cases are kept in [`eval/archive/`](eval/archive
   categories plus 2 legitimate buys through the same `decide()`, with the live AI guard, and shows each verdict, layer and latency.
   It's a dry run (nothing is charged, PayPal isn't called), limited to 2 runs per IP per hour and 12 per day, with its own
   daily AI budget (60 calls) and the visitor's per-IP AI budget.
-- Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 AI calls; needs `ANTHROPIC_API_KEY`; the previous ai run is archived to `eval/archive/` first).
+- Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 AI calls; needs `ANTHROPIC_API_KEY`; the previous ai run is archived to `eval/archive/` first), then `python -m eval.readme_tables` to regenerate the tables above.
 
 ![dashboard](docs/dashboard.png)
 
@@ -158,7 +161,7 @@ export ANTHROPIC_API_KEY=...
 # OpenAI-compatible endpoint). The owner's spend report uses that OpenAI-compatible client when it is set.
 uvicorn app.main:create_app --factory     # `uvicorn app.main:app` works too
 ```
-The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. With Claude, the call is `client.messages.create(model="claude-haiku-5-5", max_tokens=2000, system=..., messages=[...], output_config={"effort": "low", "format": {"type": "json_schema", ...}})` with no temperature and no thinking parameter; the first text block is parsed with `json.loads`, and any `stop_reason` other than `end_turn` is denied as an incomplete verdict (never cached). A rate limit, API status error or connection error (or a used-up daily AI budget) means the purchase is **held for human approval** instead of being decided by keywords (with the optional Gemini provider, a second model is tried first), and the API and demo say so: "AI guard is busy, purchase is waiting for human approval, by design" (`ai_unavailable: true` on the `202`). The keyword check is only used when no AI provider is configured and the server is not in production. In production (real PayPal, or the public demo) with no AI provider configured, the server still starts, and every purchase that reaches the policy check is held for human approval. The live badge reads the real state from `/healthz` (`ai_status`): "Live AI guard" (green) or "AI busy, human approval" (orange: no provider, budget used up, or the last call failed and none succeeded since). The model name is shown only in the Proof section.
+The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. With Claude, the call is `client.messages.create(model="claude-haiku-5-5", max_tokens=2000, system=..., messages=[...], output_config={"effort": "low", "format": {"type": "json_schema", ...}})` with no temperature and no thinking parameter; the first text block is parsed with `json.loads`, and any `stop_reason` other than `end_turn` (e.g. `max_tokens`, `refusal`), a missing text block or invalid JSON counts as "AI unavailable" (held for human approval, never cached). The client uses `timeout=8.0, max_retries=1`. A rate limit, API status error or connection error (or a used-up daily AI budget) means the purchase is **held for human approval** instead of being decided by keywords (with the optional Gemini provider, a second model is tried first), and the API and demo say so: "AI guard is busy, purchase is waiting for human approval, by design" (`ai_unavailable: true` on the `202`). The keyword check is only used when no AI provider is configured and the server is not in production. In production (real PayPal, or the public demo) with no AI provider configured, the server still starts, and every purchase that reaches the policy check is held for human approval. The live badge reads the real state from `/healthz` (`ai_status`): "Live AI guard" (green) or "AI busy, human approval" (orange: no provider, budget used up, or the last call failed and none succeeded since). The model name is shown only in the Proof section.
 
 Complete verdicts from the primary model are cached for 10 minutes, keyed by a SHA-256 of the exact LLM input (policy, vendor, item and quantity, price, target, purpose) plus the model id, so an identical repeat check costs no AI call (`"cached": true`). Fallback-model answers (Gemini provider), unparseable verdicts and unavailable results are never cached; changing one character of the input is a new check. Each visitor IP also has its own daily AI budget (60 calls, shared by purchases and the Gauntlet) on top of the shared daily budgets.
 
@@ -271,7 +274,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-212 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+221 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,
