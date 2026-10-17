@@ -5,8 +5,15 @@ const usd = v => '$' + Number(v || 0).toFixed(2);
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PILL = {completed: 'ok', allow: 'ok', fund: 'ok', charge: 'blue', denied: 'bad', deny: 'bad', block: 'bad',
   pending_approval: 'warn', approval: 'warn', refunded: 'violet', refund: 'violet', credit: 'violet', rejected: 'gray',
-  expired: 'gray', paying: 'warn', completing: 'warn', refunding: 'violet', failed_refunded: 'gray'};
-const pill = (v, label) => `<span class="pill ${PILL[v] || 'gray'}">${enc(label || String(v).replace(/_/g, ' '))}</span>`;
+  expired: 'gray', paying: 'warn', completing: 'warn', refunding: 'violet', failed_refunded: 'gray',
+  failed_voided: 'gray', capture_declined: 'bad', frozen: 'bad', active: 'ok', reconciled: 'ok', mismatch: 'bad'};
+// Purchase statuses from authorize-then-capture approvals, in plain words, with a hover explanation.
+const LABEL = {failed_voided: 'hold cancelled', capture_declined: 'charge declined'};
+const TIP = {failed_voided: 'The PayPal hold was voided, so nothing was charged (vendor failure, expiry, frozen agent or amount mismatch).',
+  capture_declined: 'PayPal declined the charge after delivery. The agent is frozen until the owner reconciles and unfreezes it.',
+  expired: 'The approval link expired before anyone paid.'};
+const pill = (v, label, tip) => `<span class="pill ${PILL[v] || 'gray'}"${(tip || TIP[v]) ? ` title="${enc(tip || TIP[v])}"` : ''}>${enc(label || LABEL[v] || String(v).replace(/_/g, ' '))}</span>`;
+const frozenBadge = a => a && a.frozen ? pill('frozen', 'frozen', 'Frozen: ' + (a.frozen_reason || 'no new spending until the owner unfreezes it')) : pill('active', 'active', 'Spending allowed');
 const pillCell = p => p.value == null ? '' : pill(p.value);
 
 // ---- toasts ----
@@ -36,7 +43,7 @@ const H = () => ({'Content-Type': 'application/json', 'X-Admin-Token': T()});
 const money = p => p.value == null ? '' : '$' + Number(p.value).toFixed(4);
 const agentsGrid = agGrid.createGrid($('agents'), {theme: gridTheme,
   rowSelection: {mode: 'singleRow'},
-  columnDefs: [{field: 'name'}, {field: 'agent_id'}, {field: 'balance_usd', headerName: 'Balance', valueFormatter: money},
+  columnDefs: [{field: 'name'}, {headerName: 'Status', field: 'frozen', cellRenderer: p => frozenBadge(p.data), minWidth: 105, maxWidth: 120, tooltipValueGetter: p => p.data.frozen_reason || ''}, {field: 'agent_id'}, {field: 'balance_usd', headerName: 'Balance', valueFormatter: money},
     {field: 'spent_24h_usd', headerName: 'Spent 24h', valueFormatter: money}, {field: 'daily_cap_usd', headerName: 'Daily cap', valueFormatter: money, editable: true},
     {field: 'per_call_cap_usd', headerName: 'Per-call cap', valueFormatter: money, editable: true}, {field: 'policy', flex: 2, editable: true, tooltipField: 'policy'}],
   defaultColDef: DEF,
@@ -62,6 +69,16 @@ async function createAgent() {
   const j = await r.json(); $('newkey').textContent = r.ok ? ('Agent key (give to your agent): ' + j.api_key) : JSON.stringify(j);
   r.ok ? toast('ok', 'Agent created', 'Copy its key from the console.') : toast('bad', 'Could not create agent', JSON.stringify(j.detail || j)); load();
 }
+async function reconcile() { const a = sel(); if (!a) return; $('report').textContent = 'Checking the newest captures with PayPal…';
+  const r = await fetch('/api/agents/' + a.agent_id + '/reconcile', {method: 'POST', headers: H()}); const j = await r.json();
+  if (!r.ok) { toast('bad', 'Reconcile failed', typeof j.detail === 'string' ? j.detail : ''); $('report').textContent = JSON.stringify(j.detail || j); return; }
+  $('report').innerHTML = (j.ok ? pill('reconciled', 'matches PayPal') : pill('mismatch', j.mismatches.length + ' mismatch(es)')) + ' ' + frozenBadge(j) +
+    ` <span class="dim">${j.checked} capture(s) checked${j.unverified ? ', ' + j.unverified + ' unverified' : ''} · balance ${usd(j.balance_usd)}</span>` +
+    (j.mismatches.length ? '<br>' + j.mismatches.map(enc).join('<br>') : '');
+  j.ok ? toast('ok', 'Ledger matches PayPal', j.checked + ' capture(s) checked') : toast('bad', 'Mismatch: agent frozen', j.mismatches[0] || ''); load(); }
+async function unfreeze() { const a = sel(); if (!a) return;
+  const r = await fetch('/api/agents/' + a.agent_id + '/unfreeze', {method: 'POST', headers: H()});
+  r.ok ? toast('ok', 'Agent unfrozen', 'Spending is allowed again.') : toast('bad', 'Could not unfreeze'); load(); }
 async function topup() { const a = sel(); if (!a) return;
   const r = await fetch('/api/agents/' + a.agent_id + '/topup', {method: 'POST', headers: H(), body: JSON.stringify({amount_usd: +$('amt').value})});
   const j = await r.json(); if (j.approve_url) location.href = j.approve_url; else toast('bad', 'Top-up failed', JSON.stringify(j.detail || j)); }
@@ -171,7 +188,7 @@ const verdict = html => { $('dverdict').innerHTML = html || ''; };
 function demoExpired() { if (!sessionStorage.dkey) return; delete sessionStorage.dkey;
   const n = $('dexpired'); n.textContent = 'Your demo session expired (the free demo server restarts now and then and resets its sandbox data). Press "1. Start demo session" to begin a new one.'; n.style.display = '';
   toast('warn', 'Demo session expired', 'Start a new one; the free server reset its sandbox data.');
-  dGrid.setGridOption('rowData', []); dPurch.setGridOption('rowData', []); $('dbudgets').innerHTML = '<p class="sub">Start a session to see the tab.</p>'; DS && DS.clear && DS.clear(); verdict(''); }
+  dGrid.setGridOption('rowData', []); dPurch.setGridOption('rowData', []); $('dbudgets').innerHTML = '<p class="sub">Start a session to see the tab.</p>'; DS && DS.clear && DS.clear(); verdict(''); mcpPanel(); }
 async function dfetch(url, opts = {}) { const r = await fetch(url, opts); if (r.status === 401 && DK()) { demoExpired(); throw new Error('expired'); } return r; }
 async function dload() { try { await dload_(); } catch (e) {} }
 async function dload_() { if (!DK()) return; const h = {'X-Agent-Key': DK()};
@@ -180,12 +197,24 @@ async function dload_() { if (!DK()) return; const h = {'X-Agent-Key': DK()};
   if (led) dGrid.setGridOption('rowData', led);
   if (pur) dPurch.setGridOption('rowData', pur);
   if (m.ok) { const j = await m.json();
-    $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#ffb35c')}</div>` + bars(j.vendor_budgets, pur || []);
+    $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#ffb35c')}</div>` + bars(j.vendor_budgets, pur || []);
     $('dpolicy').textContent = '"' + j.policy + '"'; } }
+// ---- MCP connect panel (demo key lives only in this tab's sessionStorage) ----
+let MCP_SHOW = false;
+function mcpPanel() { const k = DK(), url = location.origin + '/mcp';
+  $('mcpurl').textContent = url; $('mcpbox').style.display = k ? '' : 'none'; $('mcpnone').style.display = k ? 'none' : '';
+  if (!k) { $('mcpcfg').textContent = ''; return; } const shown = MCP_SHOW ? k : k.slice(0, 6) + '•'.repeat(10);
+  $('mcpkey').textContent = shown; $('mcpreveal').textContent = MCP_SHOW ? 'Hide' : 'Reveal';
+  $('mcpcfg').textContent = JSON.stringify({mcpServers: {agenttab: {url, headers: {'X-Agent-Key': shown}}}}, null, 1); }
+function mcpToggle() { MCP_SHOW = !MCP_SHOW; mcpPanel(); }
+async function mcpCopy(what) { const k = DK(); if (!k) return; const url = location.origin + '/mcp';
+  const txt = what === 'key' ? k : JSON.stringify({mcpServers: {agenttab: {url, headers: {'X-Agent-Key': k}}}}, null, 1);
+  try { await navigator.clipboard.writeText(txt); toast('ok', what === 'key' ? 'Agent key copied' : 'MCP config copied', 'Paste it into your MCP client.'); }
+  catch (e) { toast('warn', 'Copy blocked by the browser', 'Use Reveal and copy it by hand.'); } }
 async function demoStart() { show('Funding your agent through PayPal sandbox…'); verdict(pill('approval', 'working'));
   const r = await fetch('/api/demo/session', {method: 'POST'}); const j = await r.json();
   if (!r.ok) { verdict(pill('deny', 'error')); toast('bad', 'Could not start a session', j.detail || ''); return show(j.detail || j); }
-  sessionStorage.dkey = j.agent_key; $('dexpired').style.display = 'none';
+  sessionStorage.dkey = j.agent_key; $('dexpired').style.display = 'none'; MCP_SHOW = false; mcpPanel();
   DS && DS.refresh(); verdict(pill('fund', 'funded'));
   toast('ok', 'Funded ' + usd(j.balance_usd) + ' via PayPal sandbox', 'Capture ' + j.paypal_capture_id);
   show(`Agent ${j.name} funded: ${usd(j.balance_usd)}\nPayPal sandbox order ${j.paypal_order_id}\nCapture ${j.paypal_capture_id}`); dload(); }
@@ -201,6 +230,7 @@ async function demoBuy(vendor, item, target, purpose) { if (!DK()) { toast('info
   else if (r.status === 202) { verdict(pill('approval', 'Needs your approval') + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
     show(`${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or right-click it on the schedule. The approval link expires in 24 h.`); }
   else if (r.status === 403) { verdict(pill('deny', 'Blocked') + who); live('block'); toast('bad', 'Blocked by the guard', g.reason); show(g.reason); }
+  else if (r.status === 423) { verdict(pill('frozen', 'Agent frozen')); toast('bad', 'Agent frozen', 'No new spending until the owner reconciles and unfreezes it.'); show(j.detail || j); }
   else if (r.status === 402) { verdict(pill('deny', 'Tab empty')); toast('warn', 'Tab empty', 'The agent would now ask its human for a PayPal top-up.'); show(j); }
   else { verdict(pill('deny', 'Error ' + r.status)); toast('bad', 'Error ' + r.status, typeof j.detail === 'string' ? j.detail : ''); show(j.detail || j); }
   dload(); DS && DS.refresh(); }
@@ -301,7 +331,7 @@ async function demoFF() { if (!DK()) return show('Start a demo session first.');
 // ---- boot ----
 initMotion();
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';
-  if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); }
+  if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); mcpPanel(); }
   else $('nodemo').style.display = ''; });
 scorecard(); initFeed();
 window.addEventListener('load', initSchedules);

@@ -364,3 +364,10 @@ footer b{color:#fff} footer a{color:var(--ink2)}
  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
  .reveal{opacity:1;transform:none}
 }
+
+/* MCP connect panel */
+.mcp-grid{display:grid;gap:12px;margin-top:12px}
+.mcp-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.mcp-val{display:inline-block;max-width:100%;overflow-wrap:anywhere;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:6px 10px;font-size:13px;color:#dfe3ec}
+.mcp-cfg{margin-top:12px;max-height:180px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mcp-cfg:empty{display:none}
