@@ -299,3 +299,19 @@ def test_hero_receipt_has_no_empty_area(server, browser, w, h):
     g = pg.evaluate(gaps)
     assert g["top"] <= 1 and g["bottom"] <= 2, g
     pg.close()
+
+
+@pytest.mark.parametrize("direction", ["down", "up"])
+def test_agents_heading_is_never_covered_arriving_from_either_direction(server, browser, direction):
+    """Taste inspect: the owner console's 'Agents' heading was covered by the nav when it sat in the top band, notably
+    when scrolling back up. Nothing may cover it at any offset, from either direction."""
+    pg = _open(browser, server, 1440, 900)
+    pg.evaluate("document.getElementById('ownerhint').open = true"); pg.wait_for_timeout(800)
+    y0 = pg.evaluate("[...document.querySelectorAll('#ownerhint h3')].find(e => e.textContent.trim() === 'Agents').getBoundingClientRect().top + scrollY")
+    for off in (0, 10, 30, 50):
+        start = y0 - off + (600 if direction == "up" else -600)
+        pg.evaluate(f"document.documentElement.style.scrollBehavior = 'auto'; scrollTo(0, {start})"); pg.wait_for_timeout(250)
+        pg.evaluate(f"scrollTo(0, {y0 - off})"); pg.wait_for_timeout(450)
+        top, covered = pg.evaluate(_COVERED, ["#ownerhint h3", "Agents"])
+        assert covered == [], f"{direction} offset {off}: heading top={top} covered by {covered}"
+    pg.close()

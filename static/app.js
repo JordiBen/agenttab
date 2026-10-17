@@ -129,7 +129,7 @@ async function typeInto(node, html) {
   if (REDUCED) { node.innerHTML = html; return; }       // reduced motion: the receipt prints instantly
   const tmp = document.createElement('div'); tmp.innerHTML = html; const text = tmp.textContent; node.textContent = '';
   const caret = document.createElement('span'); caret.className = 'caret';
-  for (let k = 1; k <= text.length; k += 2) { node.textContent = text.slice(0, k); node.appendChild(caret); feedTrim($('feed')); await new Promise(r => setTimeout(r, 14)); }
+  for (let k = 1; k <= text.length; k += 2) { node.textContent = text.slice(0, k); node.appendChild(caret); feedFill($('feed')); await new Promise(r => setTimeout(r, 14)); }
   node.innerHTML = html;
 }
 async function feedNext() {
@@ -142,17 +142,21 @@ async function feedNext() {
     await new Promise(r => setTimeout(r, REDUCED ? 0 : 380));
     const res = el.querySelector('.res'); res.hidden = false;
     if (!REDUCED) res.querySelector('.stamp.block')?.classList.add('land');
-    feedTrim(box);
+    feedFill(box);
   } finally { FEED.busy = false; }
 }
 // The receipt prints at the bottom and older lines scroll up under the tear line, so the paper is always full:
 // a line is dropped only once it has scrolled completely out of view.
 function feedTrim(box) { const top = box.getBoundingClientRect().top;
-  while (box.children.length > 1 && box.firstElementChild.getBoundingClientRect().bottom <= top) box.firstElementChild.remove();
+  // drop a line only once the next one has reached the tear (bottom + row gap), or the gap itself would show as empty paper
+  const gap = parseFloat(getComputedStyle(box).rowGap) || 0;
+  while (box.children.length > 1 && box.firstElementChild.getBoundingClientRect().bottom + gap <= top) box.firstElementChild.remove();
   for (const e of box.children) e.classList.toggle('past', e.getBoundingClientRect().top < top - 1); }   // partly fed past the tear: dimmed
 function feedFill(box, min = 0) {    // top the paper up with replayed lines until no empty space is left
   for (let k = 0; k < 16 && FEED.replay.length && (box.children.length < min || !feedFull(box)); k++) {
-    const {el, req} = feedEntry(FEED.replay[FEED.i++ % FEED.replay.length], false); el.querySelector('.req').innerHTML = req; el.querySelector('.res').hidden = false; box.appendChild(el); }
+    const {el, req} = feedEntry(FEED.replay[FEED.i++ % FEED.replay.length], false); el.querySelector('.req').innerHTML = req; el.querySelector('.res').hidden = false;
+    box.insertBefore(el, box.firstElementChild);   // older lines go above: the line being printed stays at the bottom
+  }
   feedTrim(box); }
 const feedFull = box => !!box.firstElementChild && box.firstElementChild.getBoundingClientRect().top <= box.getBoundingClientRect().top + 1;
 function feedLive(d) { FEED.live.push(d); const m = $('feedmode'); m.textContent = 'live'; m.classList.add('on');
@@ -166,7 +170,9 @@ async function initFeed() {
     while (atk.length || ok.length) { if (atk.length) FEED.replay.push(atk.shift()); if (atk.length) FEED.replay.push(atk.shift()); if (ok.length) FEED.replay.push(ok.shift()); }
     const box = $('feed'); feedFill(box, 3);
     document.fonts?.ready.then(() => feedFill(box));            // the web font changes line heights: top up once it lands
-    new ResizeObserver(() => { if (!FEED.busy) feedFill(box); }).observe(box);
+    document.fonts?.addEventListener?.('loadingdone', () => feedFill(box));
+    new ResizeObserver(() => feedFill(box)).observe(box);
+    setInterval(() => feedFill(box), 1000);                     // cheap safety net: a gap never lasts more than a second
     new IntersectionObserver(es => { FEED.visible = es[0].isIntersecting; }).observe($('feed'));
     setInterval(feedNext, REDUCED ? 6000 : 3400);
   } catch (e) {}
@@ -407,8 +413,3 @@ window.addEventListener('load', initSchedules);
   if (q.get('payment_error') || q.get('approved') || q.get('funded')) $('ownerhint').open = true; }
 load(); setInterval(load, 3000); setInterval(dload, 4000);
 
-// The sticky nav tucks away while you scroll down (so it never sits over a heading you are reading) and comes back on scroll up or focus.
-(() => { const nav = document.querySelector('.nav'); if (!nav) return; let last = scrollY;
-  addEventListener('scroll', () => { const y = scrollY, d = y - last; if (Math.abs(d) < 4) return; last = y;
-    nav.classList.toggle('tuck', d > 0 && y > nav.offsetHeight && !nav.contains(document.activeElement)); }, {passive: true});
-  nav.addEventListener('focusin', () => nav.classList.remove('tuck')); })();

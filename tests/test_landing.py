@@ -111,3 +111,13 @@ def test_ag_grid_and_bryntum_containers_are_data_ui():
     for gid in ("dsched", "dpurch", "dledger", "agents", "osched", "opurch", "ledger"):
         assert re.search(rf'<div id="{gid}" class="(grid-h|sched)" data-ui', HTML), gid
     assert '<div class="tbl-wrap" data-ui><table class="tbl" id="scoretbl">' in HTML
+
+
+def test_no_hairline_borders_outside_data_ui_and_the_receipt_tear_is_sawtooth():
+    """Taste lint: a 1px (or thinner) border is a hairline rule. Only real table chrome inside [data-ui] may use one, and says
+    so on its line. The receipt's tear line is the sawtooth motif (a filled shape), not a dashed border."""
+    bad = [ln.strip() for ln in CSS.splitlines()
+           if re.search(r"border(-top|-bottom|-left|-right)?\s*:\s*(0?\.\d+|1)px", ln) and "inside [data-ui]" not in ln]
+    assert bad == []
+    tear = CSS[CSS.index(".term-body::before{"):].split("}")[0]
+    assert "var(--saw-down)" in tear and "mask:" in tear
