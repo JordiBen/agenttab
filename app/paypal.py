@@ -25,6 +25,9 @@ class PayPalClient:
         self._token: str | None = None
         self._token_exp = 0.0
         self._mock_orders: dict[str, dict] = {}
+        self._mock_refunds: dict[str, dict] = {}
+        self.mock_refund_log: list[tuple[str, Decimal]] = []   # offline mode: every refund actually issued
+        self.mock_capture_count = 0
 
     # ---------- auth ----------
     def _access_token(self) -> str:
@@ -42,7 +45,9 @@ class PayPalClient:
         self._token, self._token_exp = j["access_token"], time.time() + j.get("expires_in", 300)
         return self._token
 
-    def _req(self, method: str, path: str, json: dict | None = None) -> dict:
+    def _req(self, method: str, path: str, json: dict | None = None, request_id: str = "") -> dict:
+        # PayPal-Request-Id is derived from the logical operation (e.g. "capture-<order>"), so a retry of the
+        # same operation is idempotent at PayPal instead of creating a second order/capture/refund.
         r = httpx.request(
             method,
             f"{self.s.paypal_base}{path}",
@@ -50,7 +55,7 @@ class PayPalClient:
             headers={
                 "Authorization": f"Bearer {self._access_token()}",
                 "Content-Type": "application/json",
-                "PayPal-Request-Id": str(uuid.uuid4()),  # idempotency
+                "PayPal-Request-Id": (request_id or f"agenttab-{uuid.uuid4()}")[:108],
                 "Prefer": "return=representation",
             },
             timeout=30,
@@ -64,7 +69,7 @@ class PayPalClient:
         return self.s.paypal_mode != "sandbox"
 
     # ---------- orders ----------
-    def create_order(self, amount: Decimal, agent_id: str, description: str) -> dict:
+    def create_order(self, amount: Decimal, agent_id: str, description: str, op_id: str = "") -> dict:
         """Returns {id, approve_url, status}."""
         value = f"{amount:.2f}"
         if self.mock:
@@ -88,7 +93,7 @@ class PayPalClient:
                 "cancel_url": f"{self.s.public_url}/paypal/cancel",
             }}},
         }
-        j = self._req("POST", "/v2/checkout/orders", body)
+        j = self._req("POST", "/v2/checkout/orders", body, request_id=f"order-{op_id or uuid.uuid4().hex}")
         link = next((l["href"] for l in j.get("links", []) if l["rel"] in ("payer-action", "approve")), None)
         return {"id": j["id"], "status": j["status"], "approve_url": link}
 
@@ -102,12 +107,16 @@ class PayPalClient:
             o = self._mock_orders.get(order_id)
             if not o:
                 raise PayPalError("unknown order")
+            if o["status"] == "COMPLETED":     # same PayPal-Request-Id: PayPal replays the first result
+                return {"status": "COMPLETED", "amount": Decimal(o["amount"]),
+                        "agent_id": o["agent_id"], "capture_id": "CAP-" + order_id[5:]}
             if o["status"] != "APPROVED":
                 raise PayPalError("ORDER_NOT_APPROVED")
+            self.mock_capture_count += 1
             o["status"] = "COMPLETED"
             return {"status": "COMPLETED", "amount": Decimal(o["amount"]),
                     "agent_id": o["agent_id"], "capture_id": "CAP-" + order_id[5:]}
-        j = self._req("POST", f"/v2/checkout/orders/{order_id}/capture", {})
+        j = self._req("POST", f"/v2/checkout/orders/{order_id}/capture", {}, request_id=f"capture-{order_id}")
         pu = j["purchase_units"][0]
         cap = pu["payments"]["captures"][0]
         return {"status": j["status"], "amount": Decimal(cap["amount"]["value"]),
@@ -121,7 +130,7 @@ class PayPalClient:
     def is_sandbox(self) -> bool:
         return self.s.paypal_mode == "sandbox" and "sandbox.paypal.com" in self.s.paypal_base
 
-    def sandbox_card_topup(self, amount: Decimal, agent_id: str) -> dict:
+    def sandbox_card_topup(self, amount: Decimal, agent_id: str, op_id: str = "") -> dict:
         """Create + capture in one Orders v2 call with a sandbox test card (no browser approval).
         Refuses to run against live PayPal. Returns the same shape as capture_order()."""
         if self.mock:
@@ -135,18 +144,25 @@ class PayPalClient:
                                     "description": f"AgentTab credit for {agent_id}"[:127],
                                     "amount": {"currency_code": "USD", "value": f"{amount:.2f}"}}],
                 "payment_source": {"card": dict(self.SANDBOX_TEST_CARD)}}
-        j = self._req("POST", "/v2/checkout/orders", body)
+        j = self._req("POST", "/v2/checkout/orders", body, request_id=f"card-{op_id or uuid.uuid4().hex}")
         caps = j["purchase_units"][0].get("payments", {}).get("captures", [])
         if j.get("status") != "COMPLETED" or not caps or caps[0].get("status") != "COMPLETED":
             raise PayPalError(f"card capture not completed: {j.get('status')}")
         return {"order_id": j["id"], "status": "COMPLETED", "amount": Decimal(caps[0]["amount"]["value"]),
                 "agent_id": agent_id, "capture_id": caps[0]["id"]}
 
-    def refund_capture(self, capture_id: str, amount: Decimal) -> dict:
+    def refund_capture(self, capture_id: str, amount: Decimal, op_id: str = "") -> dict:
+        """op_id names the logical refund (e.g. "purchase-<id>" or "tab-<capture>-<already refunded>"),
+        so retrying the same refund never refunds twice."""
+        rid = f"refund-{capture_id}-{op_id or uuid.uuid4().hex}"
         if self.mock:
-            return {"id": "REF-" + uuid.uuid4().hex[:10].upper(), "status": "COMPLETED"}
+            if rid in self._mock_refunds:
+                return self._mock_refunds[rid]
+            self.mock_refund_log.append((capture_id, amount))
+            self._mock_refunds[rid] = {"id": "REF-" + uuid.uuid4().hex[:10].upper(), "status": "COMPLETED"}
+            return self._mock_refunds[rid]
         j = self._req("POST", f"/v2/payments/captures/{capture_id}/refund",
-                      {"amount": {"currency_code": "USD", "value": f"{amount:.2f}"}})
+                      {"amount": {"currency_code": "USD", "value": f"{amount:.2f}"}}, request_id=rid)
         return {"id": j["id"], "status": j["status"]}
 
     # ---------- webhooks ----------

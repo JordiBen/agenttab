@@ -53,7 +53,7 @@ def run_mode(mode: str, cases: list[dict], guard: SpendGuard | None, throttle: f
         t0 = time.perf_counter()
         out = pr.decide(cfg, p, case_state(c), mode, guard)
         ms = round((time.perf_counter() - t0) * 1000, 1)
-        called_ai = mode == "ai" and out.layer in ("policy-ai", "policy-heuristic", "approval") and bool(out.model or out.layer == "policy-heuristic")
+        called_ai = mode == "ai" and out.layer in ("policy-ai", "policy-unavailable", "approval") and bool(out.model or out.layer == "policy-unavailable")
         rows.append({"id": c["id"], "category": c["category"], "expected": c["expected"], "attack": c["attack"],
                      "got": out.outcome, "correct": out.outcome == c["expected"], "layer": out.layer,
                      "model": out.model, "latency_ms": ms, "tokens": int(llm.LAST_USAGE.get("total_tokens") or 0),
@@ -90,7 +90,8 @@ def summarize(rows: list[dict]) -> dict:
         "latency_p50_ms": round(statistics.median(lat), 1) if lat else 0,
         "latency_p95_ms": round(sorted(lat)[max(0, int(len(lat) * 0.95) - 1)], 1) if lat else 0,
         "stopped_by_layer": by_layer,
-        "heuristic_fallbacks": sum(r["layer"] == "policy-heuristic" for r in rows),
+        # AI unavailable (error/quota): since the fail-closed fix these go to human approval (older runs: keyword check)
+        "heuristic_fallbacks": sum(r["layer"] in ("policy-heuristic", "policy-unavailable") for r in rows),
         "models": sorted({r["model"] for r in judged}),
         "misses": [r["id"] for r in rows if not r["correct"]],
     }

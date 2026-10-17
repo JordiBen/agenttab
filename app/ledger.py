@@ -46,6 +46,10 @@ AGENT_MIGRATIONS = [
     ("vendor_budgets", "TEXT"),            # JSON {vendor_id: rolling-30-day cap USD}; NULL = no allowlist
     ("approval_threshold_micro", "INTEGER"),  # above this, a human approves via a PayPal link; NULL = never
     ("refund_window_days", "INTEGER"),
+    ("is_demo", "INTEGER DEFAULT 0"),      # set only by /api/demo/session; unlocks demo-owner actions
+]
+ENTRY_MIGRATIONS = [
+    ("capture_ref", "TEXT"),        # refunds: which PayPal capture the money came back from
 ]
 PURCHASE_MIGRATIONS = [
     ("used_ts", "REAL"),            # agent reported it actually used the item
@@ -79,22 +83,28 @@ class Ledger:
         for name, typ in PURCHASE_MIGRATIONS:
             if name not in pcols:
                 self.db.execute(f"ALTER TABLE purchases ADD COLUMN {name} {typ}")
+        ecols = {r[1] for r in self.db.execute("PRAGMA table_info(entries)")}
+        for name, typ in ENTRY_MIGRATIONS:
+            if name not in ecols:
+                self.db.execute(f"ALTER TABLE entries ADD COLUMN {name} {typ}")
         self.db.commit()
         self.lock = threading.Lock()
 
     # agents
     def create_agent(self, name: str, owner_email: str, policy: str,
                      daily_cap: Decimal, per_call_cap: Decimal, vendor_budgets: dict | None = None,
-                     approval_threshold: Decimal | None = None, refund_window_days: int = 7) -> dict:
+                     approval_threshold: Decimal | None = None, refund_window_days: int = 7,
+                     is_demo: bool = False) -> dict:
         aid = "ag_" + secrets.token_hex(6)
         key = "atk_" + secrets.token_urlsafe(24)
         with self.lock:
             self.db.execute(
                 "INSERT INTO agents(id,name,api_key,owner_email,policy,daily_cap_micro,per_call_cap_micro,created,"
-                "vendor_budgets,approval_threshold_micro,refund_window_days) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "vendor_budgets,approval_threshold_micro,refund_window_days,is_demo) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (aid, name, key, owner_email, policy, to_micro(daily_cap), to_micro(per_call_cap), time.time(),
                  json.dumps({k: str(v) for k, v in vendor_budgets.items()}) if vendor_budgets is not None else None,
-                 to_micro(approval_threshold) if approval_threshold is not None else None, refund_window_days))
+                 to_micro(approval_threshold) if approval_threshold is not None else None, refund_window_days,
+                 int(bool(is_demo))))
             self.db.commit()
         return {"agent_id": aid, "api_key": key}
 
@@ -126,6 +136,14 @@ class Ledger:
     def order(self, order_id: str):
         return self.db.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
 
+    def claim_order(self, order_id: str, frm: tuple[str, ...], to: str) -> bool:
+        """Atomic state transition: True only for the one caller that moved the order out of `frm`."""
+        with self.lock:
+            q = f"UPDATE orders SET status=? WHERE order_id=? AND status IN ({','.join('?' * len(frm))})"
+            n = self.db.execute(q, (to, order_id, *frm)).rowcount
+            self.db.commit()
+        return n == 1
+
     def mark_order(self, order_id: str, status: str):
         with self.lock:
             self.db.execute("UPDATE orders SET status=? WHERE order_id=?", (status, order_id))
@@ -133,13 +151,22 @@ class Ledger:
 
     # entries
     def add_entry(self, aid: str, kind: str, amount: Decimal, tool="", target="", purpose="",
-                  decision="", reason="", paypal_ref=""):
+                  decision="", reason="", paypal_ref="", capture_ref=""):
         with self.lock:
-            self.db.execute(
-                "INSERT INTO entries(agent_id,ts,kind,amount_micro,tool,target,purpose,decision,reason,paypal_ref)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (aid, time.time(), kind, to_micro(amount), tool, target, purpose, decision, reason, paypal_ref))
+            self._insert_entry(aid, kind, amount, tool, target, purpose, decision, reason, paypal_ref, capture_ref)
             self.db.commit()
+
+    def _insert_entry(self, aid, kind, amount, tool="", target="", purpose="", decision="", reason="",
+                      paypal_ref="", capture_ref=""):
+        self.db.execute(
+            "INSERT INTO entries(agent_id,ts,kind,amount_micro,tool,target,purpose,decision,reason,paypal_ref,capture_ref)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (aid, time.time(), kind, to_micro(amount), tool, target, purpose, decision, reason, paypal_ref, capture_ref))
+
+    def refunded_on_capture(self, capture_id: str) -> Decimal:
+        r = self.db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM entries WHERE kind='refund' AND capture_ref=?",
+                            (capture_id,)).fetchone()[0]
+        return from_micro(r)
 
     def balance(self, aid: str) -> Decimal:
         r = self.db.execute(
@@ -183,6 +210,51 @@ class Ledger:
                              decision_source, reason, fulfillment))
             self.db.commit()
         return pid
+
+    def commit_tab_purchase(self, aid: str, vendor: str, item: str, quantity: int, amount: Decimal, target: str,
+                            purpose: str, refund_deadline: float | None, decision_source: str, reason: str,
+                            fulfillment: str, tag: str, limits: dict) -> tuple[str | None, str]:
+        """Re-check balance, daily cap and vendor budget and write purchase + charge in ONE write transaction
+        (BEGIN IMMEDIATE), so concurrent purchases can never overspend, even across processes.
+        limits = {"daily_cap": Decimal, "vendor_budget": Decimal | None}. Returns (purchase_id, "") or (None, why)."""
+        now = time.time()
+        with self.lock:
+            db = self.db
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                bal = self.balance(aid)
+                spent = self.spent_since(aid, now - 86400)
+                why = ""
+                if amount > bal:
+                    why = "insufficient balance"
+                elif spent + amount > limits["daily_cap"]:
+                    why = f"daily cap ${limits['daily_cap']} would be exceeded (spent ${spent} in 24h)"
+                elif limits.get("vendor_budget") is not None and \
+                        self.vendor_spent_since(aid, vendor, now - 30 * 86400) + amount > limits["vendor_budget"]:
+                    why = f"30-day budget ${limits['vendor_budget']} for {vendor} would be exceeded"
+                if why:
+                    db.execute("ROLLBACK")
+                    return None, why
+                pid = "pu_" + secrets.token_hex(6)
+                db.execute("INSERT INTO purchases(id,agent_id,ts,vendor,item,quantity,amount_micro,target,purpose,"
+                           "status,funding,refund_deadline,approval_expires,paypal_order,paypal_capture,"
+                           "decision_source,reason,fulfillment) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (pid, aid, now, vendor, item, quantity, to_micro(amount), target, purpose, "completed",
+                            "tab", refund_deadline, None, "", "", decision_source, reason, fulfillment))
+                self._insert_entry(aid, "charge", amount, f"{vendor}:{item}", target, purpose, "allow", tag, pid)
+                db.execute("COMMIT")
+                return pid, ""
+            except BaseException:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
+    def claim_purchase(self, pid: str, frm: str, to: str) -> bool:
+        """Atomic status transition (e.g. pending_approval -> completing): exactly one caller wins."""
+        with self.lock:
+            n = self.db.execute("UPDATE purchases SET status=? WHERE id=? AND status=?", (to, pid, frm)).rowcount
+            self.db.commit()
+        return n == 1
 
     def purchase(self, pid: str):
         return self.db.execute("SELECT * FROM purchases WHERE id=?", (pid,)).fetchone()
@@ -236,11 +308,28 @@ class Ledger:
     def webhook_seen(self, eid: str) -> bool:
         return self.db.execute("SELECT 1 FROM webhook_events WHERE id=?", (eid,)).fetchone() is not None
 
-    def add_webhook(self, eid: str, typ: str, resource_id: str, aid: str, pid: str, verified: bool, effect: str):
+    def claim_webhook(self, eid: str, typ: str, resource_id: str, verified: bool) -> bool:
+        """INSERT OR IGNORE before processing: a redelivered event id is handled exactly once."""
         with self.lock:
-            self.db.execute("INSERT OR IGNORE INTO webhook_events VALUES(?,?,?,?,?,?,?,?)",
-                            (eid, time.time(), typ, resource_id, aid, pid, int(verified), effect))
+            n = self.db.execute("INSERT OR IGNORE INTO webhook_events VALUES(?,?,?,?,?,?,?,?)",
+                                (eid, time.time(), typ, resource_id, "", "", int(verified), "processing")).rowcount
             self.db.commit()
+        return n == 1
+
+    def finish_webhook(self, eid: str, aid: str, pid: str, effect: str):
+        with self.lock:
+            self.db.execute("UPDATE webhook_events SET agent_id=?, purchase_id=?, effect=? WHERE id=?",
+                            (aid, pid, effect, eid))
+            self.db.commit()
+
+    def release_webhook(self, eid: str):
+        with self.lock:
+            self.db.execute("DELETE FROM webhook_events WHERE id=? AND effect='processing'", (eid,))
+            self.db.commit()
+
+    def add_webhook(self, eid: str, typ: str, resource_id: str, aid: str, pid: str, verified: bool, effect: str):
+        if self.claim_webhook(eid, typ, resource_id, verified):
+            self.finish_webhook(eid, aid, pid, effect)
 
     def webhooks(self, aid: str | None = None, limit: int = 200):
         q, a = ("SELECT * FROM webhook_events WHERE agent_id=? ORDER BY ts DESC LIMIT ?", (aid, limit)) if aid else \

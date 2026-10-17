@@ -3,8 +3,9 @@
 The owner writes a plain-English policy ("only buy data about our competitors'
 public websites; never more than $1 per day on social media sites"). Before
 every metered call the guard asks an LLM whether this purchase, with the
-agent's stated purpose, fits that policy. Without an LLM configured it falls
-back to a transparent keyword heuristic so the system still runs offline.
+agent's stated purpose, fits that policy. Without an LLM configured (offline/dev)
+it uses a transparent keyword heuristic. With an LLM configured, an unavailable
+model never falls back to the heuristic: the purchase goes to a human instead.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from .config import Settings
 class Decision:
     allow: bool
     reason: str
-    source: str  # limit | ai | heuristic
+    source: str  # limit | ai | heuristic | unavailable
     model: str = ""
 
     def as_dict(self):
@@ -69,21 +70,20 @@ class SpendGuard:
 
     def evaluate(self, policy: str, tool: str, target: str, purpose: str, price: Decimal,
                  skip_prefilter: bool = False) -> Decision:
+        """AI policy check. If the model can't be asked (daily AI budget used up, rate-limited, down), the
+        result is source="unavailable", allow=False: callers route it to a human (approval), never to the
+        keyword heuristic. Keyword mode is only used when no LLM is configured at all (offline/dev)."""
         if not skip_prefilter and INJECTION.search(purpose or ""):  # cheap deterministic pre-filter, before any LLM call
             return Decision(False, "purpose contains instructions aimed at the guard (prompt injection)", "limit")
-        if llm.enabled(self.s) and not self.ai_allowed():
-            d = self._heuristic(policy, tool, target, purpose)
-            d.reason += " (daily AI budget used up)"
-            return d
-        if llm.enabled(self.s):
-            try:
-                return self._ai(policy, tool, target, purpose, price)
-            except Exception as e:  # LLM down / rate-limited: fall back to the deterministic heuristic
-                fallback = self._heuristic(policy, tool, target, purpose)
-                detail = str(e)[:120] if isinstance(e, llm.LLMError) else type(e).__name__
-                fallback.reason = f"{fallback.reason} (AI unavailable: {detail})"
-                return fallback
-        return self._heuristic(policy, tool, target, purpose)
+        if not llm.enabled(self.s):
+            return self._heuristic(policy, tool, target, purpose)
+        if not self.ai_allowed():
+            return Decision(False, "AI policy check unavailable (daily AI budget used up)", "unavailable")
+        try:
+            return self._ai(policy, tool, target, purpose, price)
+        except Exception as e:  # LLM down / rate-limited: fail closed
+            detail = str(e)[:120] if isinstance(e, llm.LLMError) else type(e).__name__
+            return Decision(False, f"AI policy check unavailable ({detail})", "unavailable")
 
     def _ai(self, policy, tool, target, purpose, price) -> Decision:
         user = json.dumps({"policy": policy, "purchase": {"tool": tool, "target": target,

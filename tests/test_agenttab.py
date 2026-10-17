@@ -36,7 +36,7 @@ def site():
 
 @pytest.fixture()
 def client(tmp_path):
-    s = Settings(paypal_mode="mock", db_path=str(tmp_path / "t.db"), llm_base_url="", llm_api_key="",
+    s = Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "t.db"), llm_base_url="", llm_api_key="",
                  admin_token="adm", public_url="http://testserver")
     return TestClient(create_app(s, allow_private_targets=True))
 
@@ -91,7 +91,7 @@ def test_unapproved_order_not_credited(client):
     ag = new_agent(client)
     o = client.post(f"/api/agents/{ag['agent_id']}/topup", json={"amount_usd": 3}, headers=A).json()
     r = client.get(f"/paypal/return?token={o['order_id']}", follow_redirects=False)
-    assert r.status_code == 402
+    assert r.status_code in (302, 307) and "payment_error=402" in r.headers["location"]   # no raw 402 page
     assert client.get("/api/me", headers={"X-Agent-Key": ag["api_key"]}).json()["balance_usd"] == 0.0
 
 
@@ -130,11 +130,11 @@ def test_refund_unused(client, site):
     assert r["refunded_usd"] == 4.97
     assert client.get("/api/me", headers=k).json()["balance_usd"] == 0.0
     rep = client.get(f"/api/agents/{ag['agent_id']}/report", headers=A).json()
-    assert "1 paid calls" in rep["report"]
+    assert "1 paid purchases" in rep["report"] and rep["summary"] in rep["report"]
 
 
 def test_ssrf_blocked_by_default(tmp_path):
-    s = Settings(paypal_mode="mock", db_path=str(tmp_path / "s.db"), admin_token="adm", llm_base_url="", llm_api_key="")
+    s = Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "s.db"), admin_token="adm", llm_base_url="", llm_api_key="")
     c = TestClient(create_app(s))
     ag = new_agent(c)
     fund(c, ag["agent_id"])
@@ -160,7 +160,7 @@ from decimal import Decimal as _D
 
 
 def _ai_settings(tmp_path):
-    return Settings(paypal_mode="mock", db_path=str(tmp_path / "ai.db"), admin_token="adm",
+    return Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "ai.db"), admin_token="adm",
                     llm_base_url="https://llm.invalid/v1", llm_api_key="test", llm_model="m1", llm_fallback_model="m2")
 
 
@@ -180,7 +180,7 @@ def test_ai_guard_uses_llm_verdict(tmp_path, monkeypatch):
     assert (d.allow, d.source, d.model) == (False, "ai", "m1") and calls == ["m1"]
 
 
-def test_ai_guard_falls_back_to_second_model_then_heuristic(tmp_path, monkeypatch):
+def test_ai_guard_falls_back_to_second_model_then_fails_closed(tmp_path, monkeypatch):
     seq = iter([_resp("", 429), _resp('{"target_allowed": true, "purpose_fits_policy": true, "injection_attempt": false, "reason": "fits policy"}')])
     monkeypatch.setattr("app.llm.httpx.post", lambda *a, **k: next(seq))
     d = SpendGuard(_ai_settings(tmp_path)).evaluate(POLICY, "tech_detect", "https://acme.example", "competitor tech research", _D("0.02"))
@@ -190,7 +190,8 @@ def test_ai_guard_falls_back_to_second_model_then_heuristic(tmp_path, monkeypatc
         raise _httpx.ConnectError("down")
     monkeypatch.setattr("app.llm.httpx.post", boom)
     d = SpendGuard(_ai_settings(tmp_path)).evaluate(POLICY, "tech_detect", "https://www.facebook.com/x", "competitor research on x", _D("0.02"))
-    assert d.source == "heuristic" and not d.allow and "AI unavailable" in d.reason
+    # fail closed: never the keyword heuristic once an LLM is configured
+    assert d.source == "unavailable" and not d.allow and "unavailable" in d.reason
 
 
 def test_ai_guard_garbage_fails_closed(tmp_path, monkeypatch):
@@ -250,7 +251,7 @@ def test_live_paypal_sandbox(tmp_path):
 
 # ---------- public demo mode ----------
 def _demo_client(tmp_path, **kw):
-    s = Settings(paypal_mode="mock", db_path=str(tmp_path / "d.db"), admin_token="x" * 32, demo_mode=True,
+    s = Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "d.db"), admin_token="x" * 32, demo_mode=True,
                  llm_base_url="", llm_api_key="", public_url="http://testserver", **kw)
     return TestClient(create_app(s, allow_private_targets=True))
 
@@ -286,17 +287,17 @@ def test_paypal_daily_budget(tmp_path):
 
 
 def test_demo_requires_strong_admin_token(tmp_path):
-    s = Settings(paypal_mode="mock", db_path=str(tmp_path / "w.db"), admin_token="dev-admin", demo_mode=True)
+    s = Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "w.db"), admin_token="dev-admin", demo_mode=True)
     with pytest.raises(RuntimeError):
         create_app(s)
 
 
-def test_llm_daily_budget_falls_back(tmp_path, monkeypatch):
+def test_llm_daily_budget_fails_closed(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr("app.llm.httpx.post", lambda *a, **k: calls.append(1) or _resp('{"target_allowed": true, "purpose_fits_policy": true, "injection_attempt": false, "reason": "ok"}'))
     g = SpendGuard(_ai_settings(tmp_path), ai_allowed=lambda: False)
     d = g.evaluate(POLICY, "tech_detect", "https://acme.example", "competitor tech research", _D("0.02"))
-    assert d.source == "heuristic" and "budget" in d.reason and not calls
+    assert d.source == "unavailable" and not d.allow and "budget" in d.reason and not calls
 
 
 # ---------- shop procurement: vendors, budgets, approvals, refund windows ----------
@@ -459,8 +460,13 @@ def test_purpose_required_hard_rule():
 
 
 # ---------- schedule, PayPal webhooks, refund suggestions ----------
-def _wh(c, typ, resource, eid=None):
-    return c.post("/paypal/webhook", json={"id": eid or "WH-" + os.urandom(4).hex(), "event_type": typ, "resource": resource})
+SIG = {"paypal-transmission-id": "t", "paypal-transmission-time": "2026-10-17T00:00:00Z",
+       "paypal-transmission-sig": "s", "paypal-cert-url": "https://api.paypal.com/c", "paypal-auth-algo": "SHA256withRSA"}
+
+
+def _wh(c, typ, resource, eid=None, headers=None):
+    return c.post("/paypal/webhook", json={"id": eid or "WH-" + os.urandom(4).hex(), "event_type": typ, "resource": resource},
+                  headers=SIG if headers is None else headers)
 
 
 def test_schedule_rows_and_events(client):
@@ -519,6 +525,7 @@ def test_webhook_requires_signature_in_sandbox(tmp_path):
                   db_path=str(tmp_path / "w.db"), llm_base_url="", llm_api_key="", admin_token="adm",
                   public_url="http://testserver")
     c = TestClient(create_app(st, allow_private_targets=True))
+    assert _wh(c, "PAYMENT.CAPTURE.COMPLETED", {"id": "C1"}, headers={}).status_code == 400   # no signature headers
     assert _wh(c, "PAYMENT.CAPTURE.COMPLETED", {"id": "C1"}).status_code == 503
     from dataclasses import replace
     c = TestClient(create_app(replace(st, paypal_webhook_id="WH123", db_path=str(tmp_path / "w2.db")), allow_private_targets=True))

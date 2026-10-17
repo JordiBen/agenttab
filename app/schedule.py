@@ -34,8 +34,9 @@ def sweep(ledger: Ledger, aid: str, now: float | None = None) -> list[str]:
     created = []
     purchases = ledger.purchases(aid, 500)
     for p in purchases:
-        if p["status"] == "pending_approval" and p["approval_expires"] and now > p["approval_expires"]:
-            ledger.update_purchase(p["id"], status="expired", reason=(p["reason"] or "") + " | approval link expired")
+        if p["status"] == "pending_approval" and p["approval_expires"] and now > p["approval_expires"] \
+                and ledger.claim_purchase(p["id"], "pending_approval", "expired"):
+            ledger.update_purchase(p["id"], reason=(p["reason"] or "") + " | approval link expired")
     completed = sorted((p for p in purchases if p["status"] == "completed"), key=lambda p: p["ts"])
     seen: dict[tuple, dict] = {}
     for p in completed:
@@ -114,6 +115,12 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
                                   "name": f"Needs approval: {name} {amt}" + ("" if p["status"] == "pending_approval" else f" ({p['status']})"),
                                   "startDate": iso(p["ts"]), "endDate": iso(end),
                                   "eventColor": "yellow" if p["status"] == "pending_approval" else "gray"})
+        elif p["status"] == "completed" and p["refund_deadline"] is None:
+            # live data: delivered instantly, non-refundable (failed calls are never charged)
+            events.append(base | {"id": f"del:{p['id']}", "type": "delivered",
+                                  "name": f"Delivered: {name} {amt} (non-refundable)",
+                                  "startDate": iso(p["ts"]), "endDate": iso(p["ts"]), "eventColor": "teal",
+                                  "confirmed": bool(p["paypal_confirmed"]), "flag": p["flag"] or ""})
         elif p["status"] in ("completed", "refunded"):
             end = p["refund_deadline"] or p["ts"] + 7 * DAY
             if p["status"] == "refunded":

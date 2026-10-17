@@ -5,7 +5,7 @@
 (function () {
   const S = window.bryntum && window.bryntum.scheduler;
   const enc = t => S ? S.StringHelper.encodeHtml(String(t ?? '')) : String(t ?? '');
-  const ICON = {budget: 'fa-wallet', refund_window: 'fa-rotate-left', approval: 'fa-user-check', renewal: 'fa-repeat',
+  const ICON = {delivered: 'fa-check', budget: 'fa-wallet', refund_window: 'fa-rotate-left', approval: 'fa-user-check', renewal: 'fa-repeat',
     topup: 'fa-circle-plus', paypal_refund: 'fa-paypal', webhook: 'fa-bolt', denied: 'fa-ban'};
 
   window.makeSchedule = function (el, opts) {
@@ -70,6 +70,7 @@
     });
     async function refresh() {
       const r = await fetch(opts.url(), {headers: opts.headers()});
+      if (r.status === 401 && opts.onUnauthorized) { opts.onUnauthorized(); return; }
       if (!r.ok) return;
       const j = await r.json();
       sch.resourceStore.data = j.resources;
@@ -85,6 +86,11 @@
       }
       return j;
     }
-    return {scheduler: sch, refresh};
+    function clear() {
+      sch.eventStore.data = [];
+      sch.resourceStore.data = [];
+      if (opts.listEl) opts.listEl.innerHTML = '';
+    }
+    return {scheduler: sch, refresh, clear};
   };
 })();

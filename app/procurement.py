@@ -25,7 +25,7 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 from .guard import INJECTION, SpendGuard
-from .tools import DESCRIPTIONS, PRICES
+from .tools import DESCRIPTIONS, PRICES, ip_is_public
 
 # Sandbox catalog. Prices are scaled down so a $1 sandbox tab can exercise every path.
 VENDORS: dict[str, dict] = {
@@ -130,8 +130,8 @@ def literal_unsafe(target: str) -> str | None:
     if host in ("localhost",) or host.endswith(".localhost") or host.endswith(".internal"):
         return "local hostname blocked"
     try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        ip = ipaddress.ip_address(host.split("%")[0])
+        if not ip_is_public(ip):
             return "private or reserved address blocked"
     except ValueError:
         pass
@@ -192,6 +192,8 @@ def decide(cfg: AgentConfig, p: Purchase, state: State, mode: str, guard: SpendG
     else:
         d = guard.evaluate(cfg.policy, tool, target, p.purpose, amount, skip_prefilter=True)
         layer = "policy-ai" if d.source == "ai" else f"policy-{d.source}"
+        if d.source == "unavailable":   # fail closed: a human decides, the heuristic never does in AI mode
+            return Outcome("approval", f"{d.reason}; a human must approve this purchase", "policy-unavailable", amount)
     if not d.allow:
         return Outcome("block", d.reason, layer, amount, d.model)
     if cfg.approval_threshold is not None and amount > cfg.approval_threshold:

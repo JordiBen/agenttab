@@ -29,31 +29,101 @@ class UnsafeTarget(ValueError):
     pass
 
 
-def check_url(url: str, allow_private: bool = False) -> str:
+MAX_BYTES = 2_000_000      # response body cap (streamed; we stop reading after this)
+MAX_REDIRECTS = 4
+
+
+def ip_is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Only globally routable unicast addresses. Rejects private, loopback, link-local (cloud metadata),
+    CGNAT, reserved, multicast, unspecified (0.0.0.0, ::) and IPv4-mapped/compatible forms like ::ffff:127.0.0.1."""
+    if ip.version == 6:
+        mapped = ip.ipv4_mapped or (ip.sixtofour if ip.sixtofour else None)
+        if mapped is not None:
+            return ip_is_public(mapped)
+        if ip.packed[:12] == bytes(12):   # deprecated IPv4-compatible ::a.b.c.d
+            return False
+    return ip.is_global and not (ip.is_multicast or ip.is_unspecified or ip.is_reserved or ip.is_loopback
+                                 or ip.is_link_local or ip.is_private)
+
+
+def _resolve(host: str) -> list[str]:
+    return [info[4][0] for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)]
+
+
+def resolve_public(url: str, allow_private: bool = False) -> tuple[str, str | None]:
+    """Validate one URL and return (hostname, ip to connect to). Every resolved address must be public,
+    and the caller connects to exactly that address (no second DNS lookup = no DNS-rebinding window)."""
     u = urlparse(url)
     if u.scheme not in ("http", "https") or not u.hostname:
         raise UnsafeTarget("only public http(s) URLs are allowed")
+    if u.username or u.password:
+        raise UnsafeTarget("credentials in URLs are not allowed")
+    host = u.hostname
     if allow_private:
-        return url
+        return host, None
     try:
-        infos = socket.getaddrinfo(u.hostname, None)
-    except socket.gaierror:
+        addrs = _resolve(host)
+    except (socket.gaierror, UnicodeError):
         raise UnsafeTarget("host does not resolve")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+    if not addrs:
+        raise UnsafeTarget("host does not resolve")
+    for a in addrs:
+        if not ip_is_public(ipaddress.ip_address(a.split("%")[0])):
             raise UnsafeTarget("private or reserved address blocked")
+    return host, addrs[0]
+
+
+def check_url(url: str, allow_private: bool = False) -> str:
+    resolve_public(url, allow_private)
     return url
 
 
-def fetch(url: str) -> tuple[str, httpx.Response]:
-    r = httpx.get(url, headers={"User-Agent": UA}, follow_redirects=True, timeout=20)
-    r.raise_for_status()
-    return r.text[:2_000_000], r
+class FetchResult:
+    """The bits of an HTTP response the tools use (url, headers, text)."""
+    def __init__(self, url: str, headers: httpx.Headers, body: bytes, encoding: str | None):
+        self.url, self.headers = url, headers
+        self.text = body.decode(encoding or "utf-8", errors="replace")
 
 
-def page_markdown(url: str) -> dict:
-    html, r = fetch(url)
+def fetch(url: str, allow_private: bool = False) -> tuple[str, FetchResult]:
+    """GET with SSRF protection: each redirect hop is re-validated, the connection goes to the validated IP
+    (Host header and TLS SNI/certificate check still use the hostname), and the body is capped at 2 MB."""
+    for _ in range(MAX_REDIRECTS + 1):
+        host, ip = resolve_public(url, allow_private)
+        u = urlparse(url)
+        req_url, ext, headers = url, {}, {"User-Agent": UA}
+        if ip:
+            netloc = (f"[{ip}]" if ":" in ip else ip) + (f":{u.port}" if u.port else "")
+            req_url = u._replace(netloc=netloc).geturl()
+            headers["Host"] = host + (f":{u.port}" if u.port else "")
+            if u.scheme == "https":
+                ext["sni_hostname"] = host
+        with httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as c:
+            req = c.build_request("GET", req_url, headers=headers, extensions=ext)
+            r = c.send(req, stream=True)
+            try:
+                if r.is_redirect:
+                    loc = r.headers.get("location", "")
+                    if not loc:
+                        raise UnsafeTarget("redirect without Location")
+                    url = urljoin(url, loc)
+                    continue
+                r.raise_for_status()
+                body = bytearray()
+                for chunk in r.iter_bytes():
+                    body += chunk
+                    if len(body) >= MAX_BYTES:
+                        del body[MAX_BYTES:]
+                        break
+                res = FetchResult(url, r.headers, bytes(body), r.charset_encoding)
+                return res.text, res
+            finally:
+                r.close()
+    raise UnsafeTarget(f"more than {MAX_REDIRECTS} redirects")
+
+
+def page_markdown(url: str, allow_private: bool = False) -> dict:
+    html, r = fetch(url, allow_private)
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style", "noscript", "svg", "iframe", "nav", "footer"]):
         t.decompose()
@@ -109,8 +179,8 @@ HEADER_FP = {"Cloudflare": ("server", "cloudflare"), "Vercel": ("server", "verce
              "Netlify": ("server", "netlify"), "nginx": ("server", "nginx"), "Apache": ("server", "apache")}
 
 
-def tech_detect(url: str) -> dict:
-    html, r = fetch(url)
+def tech_detect(url: str, allow_private: bool = False) -> dict:
+    html, r = fetch(url, allow_private)
     found = {name for name, pats in FINGERPRINTS.items() if any(re.search(p, html, re.I) for p in pats)}
     for name, (h, v) in HEADER_FP.items():
         if v in r.headers.get(h, "").lower():
@@ -120,8 +190,8 @@ def tech_detect(url: str) -> dict:
             "generator": gen.get("content") if gen else None}
 
 
-def seo_audit(url: str) -> dict:
-    html, r = fetch(url)
+def seo_audit(url: str, allow_private: bool = False) -> dict:
+    html, r = fetch(url, allow_private)
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.get_text(strip=True) if soup.title else ""
     desc_tag = soup.find("meta", attrs={"name": "description"})
