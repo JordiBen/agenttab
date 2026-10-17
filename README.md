@@ -64,6 +64,29 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 
 ![dashboard](docs/dashboard.png)
 
+## Use AgentTab from any MCP client
+
+`POST /mcp` is a Model Context Protocol server (Streamable HTTP, JSON responses, stateless). It speaks the current
+`2026-07-28` revision (`server/discover`, header validation) and the `2025-11-25` / `2025-06-18` / `2025-03-26`
+handshake. It has six tools: `get_catalog`, `get_tab`, `buy`, `request_topup`, `list_purchases` and `mark_used`.
+
+- **Auth is the agent key only:** `X-Agent-Key: atk_…` or `Authorization: Bearer atk_…`. The admin token is not accepted.
+- **There are no owner tools.** An MCP agent can't approve, refund, unfreeze or change its limits.
+- **`buy` runs the same code as `POST /api/purchases`:** caps, vendor budgets, the AI guard, approval and rate limits.
+  It returns `bought`, `approval_required` (with the PayPal link for the human), `payment_required`, `blocked` or `frozen`.
+- **Website content is labeled as third-party data** in tool results.
+
+Remote clients can point straight at `https://agenttab.onrender.com/mcp` with the agent key header. On the hosted demo,
+`curl -X POST https://agenttab.onrender.com/api/demo/session` returns a sandbox-funded demo agent and its `agent_key`.
+Clients that launch local servers can use the stdio bridge:
+
+```json
+{"mcpServers": {"agenttab": {"command": "python", "args": ["clients/agenttab_mcp_stdio.py"],
+  "env": {"AGENTTAB_URL": "https://agenttab.onrender.com", "AGENTTAB_AGENT_KEY": "atk_..."}}}}
+```
+
+Interop was checked with the official MCP Python SDK client (2.3.0) in both the `2026-07-28` and the `2025-11-25` mode.
+
 ## Schedule view: Bryntum Scheduler, driven by PayPal webhooks
 
 ![schedule](docs/schedule.png)
@@ -186,6 +209,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | POST | `/api/suggestions/{id}/confirm` · `/dismiss` | owner | Human decision on a refund the scheduler proposed |
 | POST | `/api/purchases/{id}/used` | agent | Mark an item as used (no refund suggestion) |
 | POST | `/paypal/webhook` | PayPal | Signature-verified webhook events |
+| POST | `/mcp` | agent (MCP client) | MCP server: the agent's guarded tools (see above) |
 | POST | `/api/demo/session` | anyone (demo mode) | New demo agent funded with $1.00 of sandbox money |
 | GET/POST | `/api/demo/ledger` · `purchases` · `report` · `refund` · `fast-forward?days=6` | demo agent | Demo views and actions for your own demo agent |
 
@@ -213,9 +237,10 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-120 offline tests (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+133 offline tests (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
-per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups,
+per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
+and tool guarding,
 procurement, webhooks, schedule, eval runner, and a docs check that every test the
 [threat model](docs/threat-model.md) cites exists. [`ci/github-actions-ci.yml`](ci/github-actions-ci.yml) runs
 them on Python 3.12 and 3.13, plus the offline eval, which must match the committed scorecard.

@@ -50,6 +50,20 @@ Every row names the tests that prove the mitigation. `tests/test_docs.py` fails 
 | Agent drains the owner's saved card | Auto top-up runs only after the guard allowed the purchase, never for a frozen agent, within the owner's 30-day cap (manual saved-card top-ups count), max 5 a day, serialized per agent; the Vault token never leaves the server | `test_auto_topup_only_after_guard_allows_and_within_cap`, `test_parallel_purchases_never_auto_topup_past_cap`, `test_manual_saved_card_topups_count_toward_cap`, `test_auto_topup_never_runs_for_frozen_agent_and_delete_turns_it_off`, `test_saved_card_topup_and_token_never_exposed` |
 | Saved card declined during auto top-up | `402` with the reason; nothing bought or credited | `test_auto_topup_card_decline_is_402_and_credits_nothing` |
 
+## MCP server (agents connecting through `/mcp`)
+
+| Threat | Mitigation | Tests |
+|---|---|---|
+| MCP agent approves, refunds or unfreezes its own spending | No owner tools exist; unknown tools are rejected | `test_no_owner_powers_exposed`, `test_demo_key_works_but_cannot_approve` |
+| MCP path bypasses the guard, caps or rate limits | `buy` calls the same `do_purchase()` as the REST API (guard, budgets, approval, limits, ledger) | `test_buy_outcomes_match_rest_semantics`, `test_guard_blocks_via_mcp_and_is_logged`, `test_mcp_purchases_share_rest_rate_limits`, `test_frozen_and_invalid_args` |
+| Admin token used over MCP | Only agent keys authenticate | `test_auth_agent_key_only` |
+| Gateway routes on one tool while the server runs another | `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` must match the body (`-32020`); unsupported versions get `-32022` | `test_header_validation_modern` |
+| Cross-site browser or DNS-rebinding calls, oversized or batched bodies | Foreign `Origin` → 403, 64 KB cap, batches rejected, no sessions | `test_transport_errors` |
+| Agent touches another agent's purchases | Tools are scoped to the key's agent | `test_mark_used_only_own_purchase_and_topup_link` |
+| Malformed arguments (extra fields, NaN, huge amounts) | Strict schemas (`additionalProperties: false`); errors returned as tool errors | `test_frozen_and_invalid_args` |
+| stdio bridge leaks errors or answers notifications | Bridge maps transport errors to JSON-RPC errors with the request id, never answers notifications | `test_stdio_bridge_round_trip` |
+| Version negotiation breaks older clients | Handshake revisions supported alongside the stateless one | `test_legacy_handshake_2025`, `test_discover_and_tools_list_modern` |
+
 ## Webhooks and PayPal
 
 | Threat | Mitigation | Tests |

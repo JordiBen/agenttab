@@ -46,5 +46,6 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 | Money | **Sandbox only** | No real funds anywhere. |
 | Demo clock | **Simulated time** | Shifts only your demo agent's timestamps back so deadlines approach. |
 | Mock PayPal (`PAYPAL_MODE=mock`) | **Offline dev/tests only** | Refuses to start with a public URL or with demo mode; never used on the hosted demo. |
+| MCP server (`/mcp`) | **Real** | Any MCP client, with the `agent_key` from `POST /api/demo/session`; the same guard and PayPal paths as the REST API. |
 | Storage | **Real, ephemeral** | SQLite on Render's free disk: a restart resets demo data. |
 | Bryntum Scheduler | **Real, trial build** | Official 45-day trial package (watermark); evaluation-only license. |
