@@ -174,6 +174,15 @@ class Ledger:
                             " AND tool IN ('vault','vault-auto') AND ts>=?", (aid, since)).fetchone()[0]
         return from_micro(r)
 
+    def unsettled_auto_topups(self, aid: str, older_than: float):
+        """Auto top-up credits whose saved-card hold was never captured (paypal_ref still empty; e.g. the process
+        died between the purchase commit and the capture) and that were not already reversed. capture_ref holds
+        the PayPal authorization id."""
+        return self.db.execute(
+            "SELECT * FROM entries e WHERE agent_id=? AND kind='fund' AND tool='vault-auto' AND paypal_ref=''"
+            " AND ts<? AND NOT EXISTS (SELECT 1 FROM entries r WHERE r.kind='fund_reversal'"
+            " AND r.capture_ref='entry:' || e.id) ORDER BY ts", (aid, older_than)).fetchall()
+
     def fund_entries(self, aid: str, limit: int = 50):
         """Every PayPal capture credited to this agent (tab top-ups and approval-funded purchases)."""
         return self.db.execute("SELECT * FROM entries WHERE agent_id=? AND kind='fund' AND paypal_ref!=''"
@@ -289,7 +298,8 @@ class Ledger:
             try:
                 if prefund:
                     prefund["entry_id"] = self._insert_entry(aid, "fund", prefund["amount"], prefund["tool"],
-                                                             reason=prefund["reason"])
+                                                             reason=prefund["reason"],
+                                                             capture_ref=prefund.get("authorization_id", ""))
                 bal = self.balance(aid)
                 spent = self.spent_since(aid, now - 86400)
                 why = ""

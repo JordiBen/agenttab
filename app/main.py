@@ -667,7 +667,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                     release_hold(hold, "vendor failed")
                 raise HTTPException(502, f"vendor failed, not charged: {type(e).__name__}")
             deadline = refund_deadline(a, p.vendor)
-            prefund = ({"amount": hold["amount"], "tool": "vault-auto",
+            prefund = ({"amount": hold["amount"], "tool": "vault-auto", "authorization_id": hold["authorization_id"],
                         "reason": f"automatic saved-card top-up (PayPal order {hold['order_id']}; capturing)"} if hold else None)
             pid, why = ledger.commit_tab_purchase(
                 aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose, deadline, out.layer, out.reason,
@@ -731,8 +731,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         except PayPalError as e:
             issue = e.issue or "PayPal error"
             ledger.add_entry(aid, "fund_reversal", h["amount"], "vault-auto",
-                             reason=f"saved-card capture declined after delivery ({issue}); top-up reversed",
-                             capture_ref=pid)
+                             reason=f"saved-card capture declined after delivery ({issue}) for purchase {pid}; top-up reversed",
+                             capture_ref=f"entry:{entry_id}")
             ledger.mark_order(h["order_id"], "CAPTURE_DECLINED")
             ledger.update_purchase(pid, flag="topup_capture_declined")
             release_hold(h, f"capture declined ({issue})")        # don't leave a hold on the owner's card
@@ -988,6 +988,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         the owner unfreezes it. Lookups that fail transiently are reported as unverified, not as mismatches."""
         agent_or_404(aid)
         problems, rows, unverified = [], [], 0
+        with agent_lock_or_busy(aid):   # never races a purchase that is between its commit and its capture
+            unverified += settle_stale_auto_topups(aid, problems, rows)
         bal = ledger.balance(aid)
         if bal < 0:
             problems.append(f"tab balance is negative (${bal:.2f})")
@@ -1028,6 +1030,52 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return {"agent_id": aid, "checked": len(rows), "unverified": unverified, "mismatches": problems,
                 "ok": not problems, "frozen": bool(a["frozen_reason"]), "frozen_now": froze,
                 "frozen_reason": a["frozen_reason"], "captures": rows, "balance_usd": float(bal)}
+
+    STALE_TOPUP_S = 600
+
+    def settle_stale_auto_topups(aid: str, problems: list, rows: list) -> int:
+        """An auto top-up credit with no PayPal capture after 10 minutes means the purchase committed but the
+        hold was never captured. Capture it now (Request-Id is derived from the authorization, so this can't
+        double-charge); if PayPal refuses, reverse the credit and void the hold. Either way it is a mismatch,
+        so the agent is frozen. Transient PayPal errors leave the credit for the next run (counted unverified)."""
+        unverified = 0
+        for fe in ledger.unsettled_auto_topups(aid, time.time() - STALE_TOPUP_S):
+            amt = from_micro(fe["amount_micro"]).quantize(Decimal("0.01"))
+            auth = fe["capture_ref"] or ""
+            row = {"capture": None, "source": "vault-auto (uncaptured)", "authorization": auth, "ledger_usd": float(amt)}
+            rows.append(row)
+            if auth:
+                try:
+                    paypal_budget()
+                    cap = paypal.capture_authorization(auth, amt)
+                except PayPalError as e:
+                    if e.status is None or e.status >= 500 or e.status == 429:
+                        row["paypal_status"], unverified = "UNVERIFIED", unverified + 1
+                        problems.append(f"auto top-up hold {auth} (${amt}) is credited but not captured; "
+                                        "PayPal unavailable, retry reconcile")
+                        continue
+                    issue = e.issue or f"HTTP {e.status}"
+                else:
+                    ledger.set_entry_paypal_ref(fe["id"], cap["capture_id"],
+                                                reason=(fe["reason"] or "").replace("; capturing", "") +
+                                                " (captured by reconciliation)")
+                    row.update(capture=cap["capture_id"], paypal_status="CAPTURED_NOW")
+                    problems.append(f"auto top-up hold {auth} (${amt}) was credited but never captured; "
+                                    f"captured now as {cap['capture_id']}")
+                    continue
+            else:
+                issue = "no authorization on record"
+            ledger.add_entry(aid, "fund_reversal", amt, "vault-auto", capture_ref=f"entry:{fe['id']}",
+                             reason=f"reconciliation: uncaptured auto top-up reversed ({issue})")
+            if auth:
+                try:
+                    paypal.void_authorization(auth)
+                except PayPalError:
+                    log.exception("void of stale auto top-up hold %s failed; it expires on its own", auth)
+            row["paypal_status"] = "REVERSED"
+            problems.append(f"auto top-up hold {auth or '?'} (${amt}) was credited but could not be captured "
+                            f"({issue}); credit reversed")
+        return unverified
 
     # ---------------- saved card (PayPal Vault, sandbox) ----------------
     def sandbox_only():

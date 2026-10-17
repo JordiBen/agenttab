@@ -76,6 +76,14 @@ def test_charge_declined_label_frozen_badge_and_423(page, server):
     page.wait_for_function("document.getElementById('dverdict').textContent.includes('Agent frozen')")
 
 
+def test_schedule_redraws_declined_charge_without_waiting_for_its_poll(page, server):
+    if not page.evaluate("!!(window.bryntum && window.bryntum.scheduler)"):
+        pytest.skip("Bryntum Scheduler (CDN) not loaded")
+    # the previous test declined the seat outside this tab; the purchases poll (4 s) must redraw the timeline too
+    page.wait_for_function("document.getElementById('dsched').innerText.includes('Charge declined')", timeout=7000)
+    assert "Needs approval" not in page.inner_text("#dsched")
+
+
 def test_owner_reconcile_and_unfreeze(page, server):
     page.evaluate("document.getElementById('ownerhint').open = true")
     page.fill("#tok", ADM); page.dispatch_event("#tok", "change")

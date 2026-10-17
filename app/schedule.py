@@ -142,6 +142,16 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
                 events.append({"id": f"renew:{p['id']}", "resourceId": rid, "type": "renewal", "purchaseId": p["id"],
                                "name": f"Renews: {name} {amt}" + (" (needs approval)" if need else ""),
                                "startDate": iso(at), "endDate": iso(at), "eventColor": "cyan"})
+        elif p["status"] == "capture_declined":
+            # approval was held and the item delivered, but PayPal declined the capture: no longer "needs approval"
+            events.append(base | {"id": f"decl:{p['id']}", "type": "declined",
+                                  "name": f"Charge declined: {name} {amt} · agent frozen",
+                                  "startDate": iso(p["ts"]), "endDate": iso(p["ts"]), "eventColor": "red",
+                                  "flag": p["flag"] or ""})
+        elif p["status"] == "failed_voided":
+            events.append(base | {"id": f"void:{p['id']}", "type": "voided",
+                                  "name": f"Hold cancelled: {name} {amt} · not charged",
+                                  "startDate": iso(p["ts"]), "endDate": iso(p["ts"]), "eventColor": "gray"})
         elif p["status"] == "denied":
             events.append(base | {"id": f"deny:{p['id']}", "type": "denied", "name": f"Blocked: {name} {amt}",
                                   "startDate": iso(p["ts"]), "endDate": iso(p["ts"]), "eventColor": "red"})
