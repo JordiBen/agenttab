@@ -53,6 +53,10 @@ class Settings:
     llm_calls_per_day: int = _env_int("LLM_CALLS_PER_DAY", 400)            # guard; then purchases need approval
     llm_report_calls_per_day: int = _env_int("LLM_REPORT_CALLS_PER_DAY", 60)  # reports; then a template
     paypal_calls_per_day: int = _env_int("PAYPAL_CALLS_PER_DAY", 120)  # orders/captures/refunds
+    # Live Gauntlet: a sampled attack run through the real guard (dry run, no money). Own LLM budget.
+    gauntlet_runs_per_ip_hour: int = _env_int("GAUNTLET_RUNS_PER_IP_HOUR", 3)
+    gauntlet_runs_per_day: int = _env_int("GAUNTLET_RUNS_PER_DAY", 30)
+    gauntlet_llm_calls_per_day: int = _env_int("GAUNTLET_LLM_CALLS_PER_DAY", 150)
     # Offline mock PayPal is for localhost only. Tests set this to run mock + demo mode together.
     allow_insecure_mock: bool = field(default_factory=lambda: os.getenv("ALLOW_INSECURE_MOCK", "0") == "1")
 

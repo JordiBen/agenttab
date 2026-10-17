@@ -201,9 +201,15 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     def home():
         return FileResponse(STATIC / "dashboard.html")
 
-    @app.get("/static/schedule.js", include_in_schema=False)
-    def schedule_js():
-        return FileResponse(STATIC / "schedule.js", media_type="application/javascript")
+    STATIC_FILES = {"schedule.js": "application/javascript", "app.css": "text/css", "app.js": "application/javascript",
+                    "fonts/InterVariable.woff2": "font/woff2", "fonts/Inter-OFL.txt": "text/plain"}
+
+    @app.get("/static/{path:path}", include_in_schema=False)
+    def static_file(path: str):
+        if path not in STATIC_FILES:          # explicit allowlist: nothing else under static/ is served
+            raise HTTPException(404)
+        return FileResponse(STATIC / path, media_type=STATIC_FILES[path],
+                            headers={"Cache-Control": "public, max-age=86400" if path.startswith("fonts/") else "no-cache"})
 
     @app.get("/healthz")
     def healthz():
@@ -911,6 +917,53 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(404, "no eval results yet")
         j = json.loads(f.read_text())
         return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "notes") if k in j}
+
+    # ---------------- live Gauntlet: sampled attacks through the real guard ----------------
+    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: limiter.allow("llm-gauntlet", s.gauntlet_llm_calls_per_day, DAY))
+    GAUNTLET_CATS = ("direct_injection", "indirect_injection", "personal_use", "social_target", "lookalike_unsafe",
+                     "forbidden_vendor", "caps", "vague")
+
+    def gauntlet_cases() -> list[dict]:
+        f = Path(__file__).resolve().parent.parent / "eval" / "cases.json"
+        return json.loads(f.read_text()) if f.exists() else []
+
+    @app.post("/api/gauntlet")
+    def gauntlet(request: Request):
+        """Run a random sample of the labeled attacks (one per category, plus two legitimate buys) through the
+        same decide() real purchases use, live (Gemini when configured). Dry run: nothing is charged and PayPal
+        is never called. Rate-limited, with its own daily LLM budget."""
+        limit("gauntlet:" + client_ip(request), s.gauntlet_runs_per_ip_hour, HOUR, "Gauntlet limit for your IP reached; try again in an hour")
+        limit("gauntlet:all", s.gauntlet_runs_per_day, DAY, "today's live Gauntlet runs are used up; the committed scorecard below has the full 67-case run")
+        cases, rng = gauntlet_cases(), secrets.SystemRandom()
+        picked = [rng.choice([c for c in cases if c["category"] == cat]) for cat in GAUNTLET_CATS
+                  if any(c["category"] == cat for c in cases)]
+        picked += rng.sample([c for c in cases if not c["attack"]], 2)
+        cfg = pr.AgentConfig(pr.SHOP_POLICY, dict(pr.SHOP_VENDOR_BUDGETS), pr.SHOP_APPROVAL_THRESHOLD,
+                             pr.SHOP_PER_PURCHASE_MAX, pr.SHOP_DAILY_CAP)
+        rows = []
+        for c in picked:
+            p = pr.Purchase(c["vendor"], c["item"], c.get("quantity", 1), c["purpose"], c.get("target", ""))
+            st = c.get("state") or {}
+            state = pr.State(Decimal(st.get("spent_24h", "0")),
+                             {k: Decimal(v) for k, v in (st.get("vendor_spent_30d") or {}).items()})
+            t0 = time.perf_counter()
+            out = pr.decide(cfg, p, state, guard_mode, gauntlet_guard)   # literal URL checks only; no fetches
+            ms = round((time.perf_counter() - t0) * 1000)
+            unguarded = pr.decide(cfg, p, state, "none", None)
+            rows.append({"id": c["id"], "category": c["category"], "attack": c["attack"], "vendor": c["vendor"],
+                         "item": c["item"], "target": c.get("target", ""), "purpose": c["purpose"],
+                         "amount_usd": float(out.amount or 0), "no_guard": unguarded.outcome,
+                         "outcome": out.outcome, "layer": out.layer, "model": out.model, "latency_ms": ms,
+                         "reason": out.reason[:220], "expected": c["expected"], "correct": out.outcome == c["expected"]})
+        attacks = [r for r in rows if r["attack"]]
+        return {"mode": guard_mode, "live_ai": guard_mode == "ai", "cases": rows,
+                "attacks_stopped": sum(r["outcome"] != "allow" for r in attacks), "attacks_total": len(attacks),
+                "legit_allowed": sum(r["outcome"] == "allow" for r in rows if not r["attack"]),
+                "legit_correct": sum(r["correct"] for r in rows if not r["attack"]),
+                "legit_total": sum(1 for r in rows if not r["attack"]),
+                "unguarded_would_buy": sum(r["no_guard"] == "allow" for r in attacks),
+                "llm_calls": sum(1 for r in rows if r["model"]), "paypal_calls": 0,
+                "note": "Dry run through the production decide(): no money moves and PayPal is not called."}
 
     @app.post("/api/demo/refund")
     def demo_refund(request: Request, a=Depends(demo_agent)):
