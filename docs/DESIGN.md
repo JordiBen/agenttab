@@ -1,6 +1,6 @@
 # AgentTab design system (docs/DESIGN.md)
 
-Owner-approved direction: **one motif: the receipt and its stamp.** Dealt by taste-skill (direction `one-motif`, sector finance, seed 1430111832), adapted to the owner's choice. This file is the source of truth for every visual surface: the landing page, the demo workspace, the AG Grid tables, the Bryntum schedule, video frames and Devpost screenshots.
+Owner-approved direction: **one motif: the receipt and its stamp.** This file is the source of truth for every visual surface: the landing page, the demo workspace, the AG Grid tables, the Bryntum schedule, video frames and Devpost screenshots.
 
 ## 1. The idea
 > On this page, **AgentTab's own guard log** becomes **a till receipt that prints line by line while the visitor watches, and the injected purchase is stamped BLOCKED.**
@@ -48,7 +48,7 @@ The hero receipt is live: it replays real guard decisions from `/api/replay`, an
   --ease: cubic-bezier(.2,.7,.2,1);
 }
 ```
-- **Font:** one rounded geometric sans for everything, display weight 500 (tracking -0.025em, leading 1.05) and text 400/600 (leading 1.5). First choice is **Roundo** (Fontshare), but **only if its licence allows self-hosting**. Otherwise use **Nunito** (SIL OFL). Self-host the woff2 in `static/fonts/` with the licence file next to it. No CDN font links. Mark UNSURE until you've read the licence.
+- **Font:** one rounded geometric sans for everything, display weight 500 (tracking -0.025em, leading 1.05) and text 400/600 (leading 1.5). The font is **Roundo** (Fontshare; approved, SIL OFL 1.1 per the licence file shipped in the Fontshare download). Self-host the woff2 in `static/fonts/` with `License/OFL.txt` next to it. No Nunito, no CDN font links.
 - **Numbers on the receipt** use `font-variant-numeric: tabular-nums` in the same face. No monospace anywhere.
 - **Light theme only for the landing page.** The dashboard may keep a dark mode only if it uses these same roles.
 
@@ -81,7 +81,7 @@ Gradients and gradient text, glass/backdrop-blur, resting shadows and glows, 1px
 One loud moment: the receipt printing line by line, and the stamp landing (scale 1.15 → 1, 180ms, `--ease`) on BLOCKED. Elsewhere: short entrances for section parts (opacity + 12px rise, 240ms), and feedback on every control. Nothing loops forever except the receipt replay, and that pauses when off-screen.
 
 ## 9. How it's checked
-- `node .claude/skills/taste-skill/scripts/lint.mjs static/`: the baseline is 79 FAIL / 28 WARN. Landing target: 0 FAIL.
-- `inspect.mjs` screenshots at 1440 / 768 / 390: 0 FAIL.
+- design lint: 0 FAIL.
+- Screenshots at 1440 / 768 / 390: 0 FAIL.
 - Critique pass, and Playwright clicks through the full demo flow.
 - The owner sees before and after side by side and approves before merge.
