@@ -58,8 +58,8 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
   (2/6 stopped), personal use phrased as business (4/7), Pinterest and a `faceb00k` look-alike.
 - **Run it live:** the dashboard's **Gauntlet** button (`POST /api/gauntlet`) sends one random attack from each of 8
   categories plus 2 legitimate buys through the same `decide()`, with live Gemini, and shows each verdict, layer and latency.
-  It's a dry run (nothing is charged, PayPal isn't called), limited to 3 runs per IP per hour and 30 per day, with its own
-  daily Gemini budget.
+  It's a dry run (nothing is charged, PayPal isn't called), limited to 2 runs per IP per hour and 12 per day, with its own
+  daily Gemini budget (60 calls) and the visitor's per-IP Gemini budget.
 - Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 Gemini calls).
 
 ![dashboard](docs/dashboard.png)
@@ -132,7 +132,9 @@ export PUBLIC_URL=http://localhost:8000
 export GEMINI_API_KEY=...
 uvicorn app.main:create_app --factory     # `uvicorn app.main:app` works too
 ```
-The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. If Gemini is down or rate-limited, it tries the second model; if that fails too (or the daily AI budget is used up), the purchase is **held for human approval** instead of being decided by keywords. The keyword check is only used when no LLM is configured at all (offline/dev).
+The guard makes the model answer three separate checks (target allowed, purpose fits policy, injection attempt) and only approves if all pass. Unparseable verdicts are denied. Obvious prompt injection in the agent's `purpose` is rejected before any LLM call. If Gemini is down or rate-limited, it tries the second model; if that fails too (or the daily AI budget is used up), the purchase is **held for human approval** instead of being decided by keywords, and the API and demo say so: "AI guard is busy, purchase is waiting for human approval, by design" (`ai_unavailable: true` on the `202`). The keyword check is only used when no LLM is configured at all (offline/dev).
+
+Complete verdicts from the primary model are cached for 10 minutes, keyed by a SHA-256 of the exact LLM input (policy, vendor, item and quantity, price, target, purpose) plus the model id, so an identical repeat check costs no Gemini call (`"cached": true`). Fallback-model answers, unparseable verdicts and unavailable results are never cached; changing one character of the input is a new check. Each visitor IP also has its own daily Gemini budget (30 calls, shared by purchases and the Gauntlet) on top of the shared daily budgets.
 
 ### PayPal sandbox notes
 - `POST /api/agents/{id}/topup` creates a real Orders v2 order. The buyer approves it on sandbox.paypal.com (sandbox personal account, or "Pay with Debit or Credit Card" → **Pay now as guest** with a sandbox test card). On return, AgentTab captures it.
@@ -243,7 +245,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-159 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+179 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,

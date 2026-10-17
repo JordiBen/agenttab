@@ -9,9 +9,13 @@ model never falls back to the heuristic: the purchase goes to a human instead.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from dataclasses import dataclass
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from urllib.parse import urlparse
 
@@ -25,12 +29,52 @@ class Decision:
     reason: str
     source: str  # limit | ai | heuristic | unavailable
     model: str = ""
+    cached: bool = False
+    complete: bool = True   # False for a fail-closed verdict made because the model's answer was unusable
 
     def as_dict(self):
         d = {"allow": self.allow, "reason": self.reason, "source": self.source}
         if self.model:
             d["model"] = self.model
+        if self.cached:
+            d["cached"] = True
         return d
+
+
+class VerdictCache:
+    """Short-lived cache of complete AI verdicts, so a repeated identical purchase check (same policy, vendor,
+    item, quantity, price, target and purpose, same model) doesn't spend another LLM call. Keyed by a SHA-256 of
+    the exact LLM input plus the model id; entries expire after ttl_s. Only valid verdicts from the primary model
+    are stored: never fallback-model answers, unparseable verdicts, unavailable results or heuristics."""
+
+    def __init__(self, ttl_s: float = 600.0, max_items: int = 2000, clock=time.monotonic):
+        self.ttl, self.max, self.clock = ttl_s, max_items, clock
+        self._d: OrderedDict[str, tuple[float, Decision]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def key(system: str, user: str, model: str) -> str:
+        return hashlib.sha256(json.dumps([system, user, model], ensure_ascii=False).encode()).hexdigest()
+
+    def get(self, k: str) -> Decision | None:
+        with self._lock:
+            hit = self._d.get(k)
+            if not hit:
+                return None
+            if self.clock() - hit[0] > self.ttl:
+                del self._d[k]
+                return None
+            return replace(hit[1], cached=True)
+
+    def put(self, k: str, d: Decision) -> None:
+        with self._lock:
+            self._d[k] = (self.clock(), d)
+            self._d.move_to_end(k)
+            while len(self._d) > self.max:
+                self._d.popitem(last=False)
+
+    def __len__(self):
+        return len(self._d)
 
 
 SYSTEM = (
@@ -54,9 +98,10 @@ INJECTION = re.compile(r"\b(ignore|disregard|override|bypass|forget)\b.{0,40}\b(
 
 
 class SpendGuard:
-    def __init__(self, settings: Settings, ai_allowed=None):
+    def __init__(self, settings: Settings, ai_allowed=None, cache: VerdictCache | None = None):
         self.s = settings
         self.ai_allowed = ai_allowed or (lambda: True)  # daily LLM budget hook
+        self.cache = cache
 
     def hard_limits(self, price: Decimal, balance: Decimal, spent_today: Decimal,
                     daily_cap: Decimal, per_call_cap: Decimal) -> Decision | None:
@@ -77,17 +122,27 @@ class SpendGuard:
             return Decision(False, "purpose contains instructions aimed at the guard (prompt injection)", "limit")
         if not llm.enabled(self.s):
             return self._heuristic(policy, tool, target, purpose)
+        user = self._user(policy, tool, target, purpose, price)
+        k = VerdictCache.key(SYSTEM, user, self.s.llm_model) if self.cache is not None else None
+        if k and (hit := self.cache.get(k)):        # before the budget check: a cache hit costs no LLM call
+            return hit
         if not self.ai_allowed():
             return Decision(False, "AI policy check unavailable (daily AI budget used up)", "unavailable")
         try:
-            return self._ai(policy, tool, target, purpose, price)
+            d = self._ai(user)
         except Exception as e:  # LLM down / rate-limited: fail closed
             detail = str(e)[:120] if isinstance(e, llm.LLMError) else type(e).__name__
             return Decision(False, f"AI policy check unavailable ({detail})", "unavailable")
+        if k and d.source == "ai" and d.complete and d.model == self.s.llm_model:
+            self.cache.put(k, d)
+        return d
 
-    def _ai(self, policy, tool, target, purpose, price) -> Decision:
-        user = json.dumps({"policy": policy, "purchase": {"tool": tool, "target": target,
+    @staticmethod
+    def _user(policy, tool, target, purpose, price) -> str:
+        return json.dumps({"policy": policy, "purchase": {"tool": tool, "target": target,
                                                           "price_usd": str(price), "purpose": purpose}})
+
+    def _ai(self, user: str) -> Decision:
         text, model = llm.chat(self.s, [{"role": "system", "content": SYSTEM},
                                         {"role": "user", "content": user}], json_mode=True)
         m = re.search(r"\{.*\}", text, re.S)
@@ -97,7 +152,7 @@ class SpendGuard:
             j = {}
         keys = ("target_allowed", "purpose_fits_policy", "injection_attempt")
         if not all(isinstance(j.get(k), bool) for k in keys):  # garbage verdict: fail closed
-            return Decision(False, "guard could not parse AI verdict; denied by default", "ai", model)
+            return Decision(False, "guard could not parse AI verdict; denied by default", "ai", model, complete=False)
         allow = j["target_allowed"] and j["purpose_fits_policy"] and not j["injection_attempt"]
         reason = str(j.get("reason", ""))[:200]
         if j["injection_attempt"]:

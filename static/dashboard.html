@@ -34,7 +34,7 @@
  <div class="gridlines" aria-hidden="true"></div>
  <div class="wrap hero-in">
   <div class="hero-copy">
-   <div class="eyebrow reveal"><span class="live off" id="herolive"><i></i><span>Checking AI…</span></span><span class="chip">PayPal sandbox · real captures, test money</span></div>
+   <div class="eyebrow reveal"><span class="live off" id="herolive"><i></i><span>Checking AI…</span></span><span class="chip">PayPal sandbox · real captures, test money</span><a class="chip chip-mcp" id="heromcp" href="#mcp"><b>MCP server</b> · Works with any MCP client →</a></div>
    <h1 class="reveal"><span class="l">Give your AI agent</span> <span class="l">a <span class="grad">tab</span>, not a</span> <span class="l"><span class="grad">credit card.</span></span></h1>
    <p class="lead reveal">AgentTab funds a shop's purchasing agent through PayPal, then lets it buy only inside vendor budgets, human approvals and a live Gemini guard.</p>
    <div class="cta reveal">
@@ -124,6 +124,11 @@
    <div class="t-head"><span class="ico" aria-hidden="true">⛨</span><h3>SSRF-safe fetching</h3></div>
    <p>Every redirect hop must resolve to a public IP; the request is pinned to it. 2 MB cap.</p>
   </article>
+  <a class="tile t-mcp glass reveal" id="bentomcp" href="#mcp">
+   <div class="t-head"><span class="ico" aria-hidden="true">⌘</span><h3>An MCP server for any agent</h3></div>
+   <p>The same guarded tab as MCP tools (<code>buy</code>, <code>get_tab</code>, <code>request_topup</code>…) over Streamable HTTP. Every call goes through the same guard; no owner tools are exposed.</p>
+   <span class="t-link">Connect a client →</span>
+  </a>
  </div>
 </div></section>
 
@@ -157,7 +162,8 @@
   <p>A small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$1.00 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p></div>
  <div id="demo" class="stack" style="display:none">
   <div class="grid-ws">
-   <div class="card glass"><h3>Guided demo</h3>
+   <div class="stack">
+   <div class="card glass" id="dguided"><h3>Guided demo</h3>
     <p class="sub">Vendors have 30-day budgets; anything over <b>$0.30</b> needs your approval; samples and SaaS can be refunded for <b>7 days</b> (research data is final, failed calls are never charged).</p>
     <button type="button" class="policy clamp" onclick="this.classList.toggle('clamp')" aria-label="Owner's policy (click to expand)"><b>Owner's policy</b> <span class="more">expand</span><span id="dpolicy"></span></button>
     <p id="dexpired" class="note" style="display:none"></p>
@@ -178,9 +184,22 @@
       <button class="btn btn-ghost" onclick="demoReport()">AI spend report</button><button class="btn btn-ghost" onclick="demoRefund()">Refund unused tab credit</button></div>
     </div>
    </div>
+   <div class="card glass" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue" style="vertical-align:2px">MCP 2026-07-28</span></h3></div>
+    <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
+    <div class="mcp-grid">
+     <div><label>Endpoint (Streamable HTTP)</label><code class="mcp-val" id="mcpurl"></code></div>
+     <div id="mcpbox" style="display:none"><label>Agent key (header <span class="mono">X-Agent-Key</span>)</label>
+      <div class="mcp-row"><code class="mcp-val" id="mcpkey"></code><button class="btn btn-ghost btn-sm" id="mcpreveal" onclick="mcpToggle()">Reveal</button><button class="btn btn-ghost btn-sm" onclick="mcpCopy('key')">Copy key</button></div></div>
+     <p id="mcpnone" class="sub" style="margin:0">Start a demo session to get this agent's key.</p>
+    </div>
+    <pre class="console mcp-cfg" id="mcpcfg"></pre>
+    <div class="row" style="margin-top:10px"><button class="btn btn-light btn-sm" onclick="mcpCopy('config')">Copy client config</button>
+     <a class="btn btn-ghost btn-sm" href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client" target="_blank" rel="noopener">stdio bridge &amp; docs</a></div>
+   </div>
+   </div>
    <div class="stack">
     <div class="card glass"><h3>Agent console</h3><p class="sub">What the guard decided, and why.</p>
-     <div class="verdict" id="dverdict" aria-live="polite"></div><pre class="console" id="dout"></pre></div>
+     <div class="verdict" id="dverdict" aria-live="polite"></div><p id="dbusy" class="note" role="status" style="display:none"></p><pre class="console" id="dout"></pre></div>
     <div class="card glass"><h3>Tab and vendor budgets</h3><div id="dbudgets"><p class="sub">Start a session to see the tab.</p></div></div>
    </div>
   </div>
@@ -190,18 +209,6 @@
    <div id="dsched" class="sched"></div><div id="dsugg" style="margin-top:10px"></div></div>
   <div class="card glass"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h"></div></div>
   <div class="card glass"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h"></div></div>
-  <div class="card glass" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue" style="vertical-align:2px">MCP 2026-07-28</span></h3></div>
-   <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
-   <div class="mcp-grid">
-    <div><label>Endpoint (Streamable HTTP)</label><code class="mcp-val" id="mcpurl"></code></div>
-    <div id="mcpbox" style="display:none"><label>Agent key (header <span class="mono">X-Agent-Key</span>)</label>
-     <div class="mcp-row"><code class="mcp-val" id="mcpkey"></code><button class="btn btn-ghost btn-sm" id="mcpreveal" onclick="mcpToggle()">Reveal</button><button class="btn btn-ghost btn-sm" onclick="mcpCopy('key')">Copy key</button></div></div>
-    <p id="mcpnone" class="sub" style="margin:0">Start a demo session to get this agent's key.</p>
-   </div>
-   <pre class="console mcp-cfg" id="mcpcfg"></pre>
-   <div class="row" style="margin-top:10px"><button class="btn btn-light btn-sm" onclick="mcpCopy('config')">Copy client config</button>
-    <a class="btn btn-ghost btn-sm" href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client" target="_blank" rel="noopener">stdio bridge &amp; docs</a></div>
-  </div>
  </div>
  <div id="nodemo" class="card glass" style="display:none"><h3>Public demo is off on this server</h3><p class="sub">Use the owner console below with your admin token.</p></div>
 
