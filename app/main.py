@@ -156,7 +156,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.get("/healthz")
     def healthz():
         return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.enabled(s), "demo_mode": s.demo_mode,
-                "models": [s.llm_model, s.llm_fallback_model] if llm.enabled(s) else []}
+                "models": [s.llm_model, s.llm_fallback_model] if llm.enabled(s) else [],
+                **({"demo_policy": DEMO_POLICY} if s.demo_mode else {})}
 
     @app.get("/api/catalog")
     def catalog():

@@ -11,7 +11,8 @@
  body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#f6f8fb;color:#13203b}
  header{background:#003087;color:#fff;padding:16px 28px;display:flex;align-items:center;gap:16px}
  header h1{margin:0;font-size:22px} header span{opacity:.8}
- main{padding:20px 28px;display:grid;gap:18px}
+ main{padding:20px 28px;display:grid;gap:18px;grid-template-columns:minmax(0,1fr)}
+ .card{min-width:0;overflow-x:auto}
  .card{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 3px #0001}
  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
  input,textarea{padding:8px;border:1px solid #c9d2e3;border-radius:6px;font:inherit}
@@ -169,7 +170,7 @@ async function catalog(){ CAT=(await (await fetch('/api/catalog')).json()).vendo
 function fillItems(){ const v=(CAT||[]).find(x=>x.vendor===dvendor.value); if(v) ditem.innerHTML=v.items.map(i=>`<option value="${i.item}">${i.name} ($${i.price_usd})</option>`).join(''); }
 async function demoReport(){ if(!DK()) return show('Start a demo session first.'); const r=await fetch('/api/demo/report',{headers:{'X-Agent-Key':DK()}}); const j=await r.json(); show(j.report||j); }
 async function demoRefund(){ if(!DK()) return show('Start a demo session first.'); const r=await fetch('/api/demo/refund',{method:'POST',headers:{'X-Agent-Key':DK()}}); show(await r.json()); dload(); }
-fetch('/healthz').then(r=>r.json()).then(h=>{ if(h.demo_mode){ document.getElementById('demo').style.display=''; catalog(); dload(); } });
+fetch('/healthz').then(r=>r.json()).then(h=>{ if(h.demo_mode){ document.getElementById('demo').style.display=''; if(h.demo_policy) dpolicy.textContent='"'+h.demo_policy+'"'; catalog(); dload(); } });
 const scoreGrid=agGrid.createGrid(document.getElementById('scoregrid'),{defaultColDef:{flex:1,resizable:true},columnDefs:[
  {field:'label',headerName:'Mode',flex:1.6},{field:'stopped',headerName:'Attacks stopped'},{field:'blocked',headerName:'Blocked outright'},
  {field:'legit',headerName:'Legit buys handled right'},{field:'fb',headerName:'False blocks'},{field:'lat',headerName:'Latency p50 / p95'},{field:'tok',headerName:'LLM calls / tokens'}]});
