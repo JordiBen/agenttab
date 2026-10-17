@@ -6,7 +6,8 @@
   const S = window.bryntum && window.bryntum.scheduler;
   const enc = t => S ? S.StringHelper.encodeHtml(String(t ?? '')) : String(t ?? '');
   const ICON = {delivered: 'fa-check', budget: 'fa-wallet', refund_window: 'fa-rotate-left', approval: 'fa-user-check', renewal: 'fa-repeat',
-    topup: 'fa-circle-plus', paypal_refund: 'fa-paypal', webhook: 'fa-bolt', denied: 'fa-ban'};
+    topup: 'fa-circle-plus', paypal_refund: 'fa-paypal', webhook: 'fa-bolt', denied: 'fa-ban',
+    declined: 'fa-circle-xmark', voided: 'fa-circle-minus'};
 
   // Event names come from the server ("Stoneware mug sample $0.20 · refundable"); the bar shows a version that fits
   // (item names trimmed first, the amount kept), and the tooltip always has the full text.

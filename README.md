@@ -147,6 +147,9 @@ The guard makes the model answer three separate checks (target allowed, purpose 
 - **Reconciliation freeze.** `POST /api/agents/{id}/reconcile` checks the agent's last 50 captures against
   `GET /v2/payments/captures/{id}` (amount, status, refunds). A mismatch, a negative tab, a declined capture after delivery
   or a `DENIED`/`REVERSED` webhook freezes the agent: purchases and top-up requests return `423` until the owner unfreezes it.
+  It also settles auto top-ups that were credited but never captured (older than 10 minutes, e.g. the server died between
+  the purchase commit and the capture): it captures the hold, or, if PayPal refuses, reverses the credit and voids the
+  hold. Either way the agent is frozen; a transient PayPal error leaves the credit for the next run.
 - **Saved card (Vault v3).** `POST /api/agents/{id}/saved-card` saves PayPal's sandbox test card (setup token → payment
   token; only brand and last 4 are shown). The owner can top up from it, or turn on auto top-up
   (`PUT /api/agents/{id}/auto-topup`, e.g. $1 at a time, at most $5 per 30 days). Auto top-up only runs for purchases
@@ -240,7 +243,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-146 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+159 offline tests, including browser e2e tests that skip without Chrome (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,

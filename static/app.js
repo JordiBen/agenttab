@@ -190,12 +190,16 @@ function demoExpired() { if (!sessionStorage.dkey) return; delete sessionStorage
   toast('warn', 'Demo session expired', 'Start a new one; the free server reset its sandbox data.');
   dGrid.setGridOption('rowData', []); dPurch.setGridOption('rowData', []); $('dbudgets').innerHTML = '<p class="sub">Start a session to see the tab.</p>'; DS && DS.clear && DS.clear(); verdict(''); mcpPanel(); }
 async function dfetch(url, opts = {}) { const r = await fetch(url, opts); if (r.status === 401 && DK()) { demoExpired(); throw new Error('expired'); } return r; }
+let DSIG = null;
 async function dload() { try { await dload_(); } catch (e) {} }
 async function dload_() { if (!DK()) return; const h = {'X-Agent-Key': DK()};
   const [r, p, m] = await Promise.all([dfetch('/api/demo/ledger', {headers: h}), dfetch('/api/demo/purchases', {headers: h}), dfetch('/api/me', {headers: h})]);
   const led = r.ok ? await r.json() : null, pur = p.ok ? await p.json() : null;
   if (led) dGrid.setGridOption('rowData', led);
-  if (pur) dPurch.setGridOption('rowData', pur);
+  if (pur) { dPurch.setGridOption('rowData', pur);
+    // A status changed outside this tab (webhook, declined capture, expiry): redraw the timeline now, not on its 8 s poll.
+    const sig = pur.map(x => x.id + ':' + x.status).join(',');
+    if (DSIG !== null && sig !== DSIG && DS) DS.refresh(); DSIG = sig; }
   if (m.ok) { const j = await m.json();
     $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#ffb35c')}</div>` + bars(j.vendor_budgets, pur || []);
     $('dpolicy').textContent = '"' + j.policy + '"'; } }
