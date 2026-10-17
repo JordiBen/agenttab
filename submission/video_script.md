@@ -1,17 +1,14 @@
 # Demo video (≤ 2:50). Faceless screen recording plus TTS voice-over. No music, no third-party logos beyond the UI.
-How it gets produced, with no human work:
-- Screen capture with headless Chrome or the box desktop and ffmpeg.
-- Voice: a free TTS engine (e.g. piper / espeak-ng, or Edge TTS).
-- Edit with ffmpeg.
-- Upload to the existing WebIntel Tools YouTube channel as a public video.
+Production (no human work): screen capture of the hosted demo with headless Chrome + ffmpeg, free TTS (piper / Edge TTS),
+ffmpeg edit, upload to the WebIntel Tools YouTube channel (public).
 
 | Time | Screen | Voice-over |
 |---|---|---|
-| 0:00–0:15 | Title card "AgentTab", then the dashboard | "AI agents are starting to buy things on their own. Give one a card and you're one hallucination away from a surprise bill. AgentTab gives agents a PayPal-funded tab with rules." |
-| 0:15–0:40 | Create agent: type a policy, set caps | "I create a research agent and write its spending policy in plain English: competitor research only, never social media, two dollars a day." |
-| 0:40–1:05 | Terminal: buyer agent runs and gets 402, prints a PayPal link | "The agent plans its purchases with Gemini, then tries to buy data. Its tab is empty, so the API answers 402 Payment Required. The agent asks me for five dollars and sends me a PayPal approval link." |
-| 1:05–1:25 | PayPal sandbox checkout, approve, redirect | "I approve once in PayPal. AgentTab captures the order through the Orders API and credits the tab instantly." |
-| 1:25–1:55 | Agent rerun: two purchases succeed; Facebook denied (red row in AG Grid) | "Now the agent spends by itself, two cents per call. When it tries to pull a Facebook page, the AI guard checks the policy and blocks it, and the denial shows up in the live ledger with the reason." |
-| 1:55–2:20 | AG Grid: filter, inline-edit cap; AI report | "Every charge, top-up and denial is in the AG Grid ledger. I can tighten caps inline and read an AI-written spend report." |
-| 2:20–2:40 | Click Refund; refund row appears | "When the job is done, one click refunds the unused credit to my PayPal." |
-| 2:40–2:50 | README / GitHub | "AgentTab: trusted PayPal money, autonomous agents, AI-enforced rules. Open source, MIT." |
+| 0:00–0:12 | Title "AgentTab", then the dashboard header | "Lumen and Loom is a six-person home-goods shop. Its AI agent buys samples, software and research. AgentTab gives it a PayPal-funded tab with rules." |
+| 0:12–0:30 | Demo card: policy text, Start demo session, $1.00 sandbox capture | "The owner wrote the rules in plain English. I start a session: the tab is funded with one dollar through a real PayPal sandbox capture." |
+| 0:30–0:55 | Buy mug sample (allowed), competitor research (allowed), vendor budget bars move | "The agent buys a supplier sample and some competitor research. Gemini checks each purchase against the policy, and each vendor's thirty-day budget fills up." |
+| 0:55–1:15 | SaaS seat → "needs your approval"; gift card and prompt injection → blocked with layer | "A forty-cent software seat is above the approval threshold, so it waits for me. A gift card is blocked by the vendor list, and an instruction copied from a supplier's web page is caught as prompt injection." |
+| 1:15–1:50 | Bryntum Schedule: rows agent + vendors; right-click approval → Approve; ⚡ webhook milestone, ✓ on the bar | "Everything with a deadline lives on a Bryntum Scheduler timeline: budgets, approvals, refund windows and renewals. I approve the seat with PayPal. PayPal's webhook arrives, signature-verified, and the schedule updates itself." |
+| 1:50–2:15 | Demo clock +6 days → red refund windows, 💡 suggestions; right-click → Confirm refund | "Six days later the refund windows are closing. The scheduling agent spots a duplicate mug and an unused sample and proposes refunds. Nothing moves until I confirm." |
+| 2:15–2:38 | Safety scorecard panel | "We measured it. Sixty-seven labeled purchases: with no guard, every attack goes through. Rules plus keywords stop thirty-seven of forty-seven. Rules plus Gemini stop all forty-seven, with zero false blocks." |
+| 2:38–2:50 | GitHub README | "AgentTab: PayPal money, autonomous agents, rules that hold. Open source on GitHub." |

@@ -148,3 +148,27 @@ class PayPalClient:
         j = self._req("POST", f"/v2/payments/captures/{capture_id}/refund",
                       {"amount": {"currency_code": "USD", "value": f"{amount:.2f}"}})
         return {"id": j["id"], "status": j["status"]}
+
+    # ---------- webhooks ----------
+    WEBHOOK_EVENTS = ["CHECKOUT.ORDER.APPROVED", "PAYMENT.CAPTURE.COMPLETED", "PAYMENT.CAPTURE.REFUNDED",
+                      "PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REVERSED", "PAYMENT.CAPTURE.PENDING"]
+
+    def verify_webhook(self, headers: dict, event: dict, webhook_id: str) -> bool:
+        """PayPal's verify-webhook-signature API. Header names are case-insensitive."""
+        h = {k.lower(): v for k, v in headers.items()}
+        need = ["paypal-auth-algo", "paypal-cert-url", "paypal-transmission-id", "paypal-transmission-sig",
+                "paypal-transmission-time"]
+        if not webhook_id or any(not h.get(k) for k in need):
+            return False
+        j = self._req("POST", "/v1/notifications/verify-webhook-signature", {
+            "auth_algo": h["paypal-auth-algo"], "cert_url": h["paypal-cert-url"],
+            "transmission_id": h["paypal-transmission-id"], "transmission_sig": h["paypal-transmission-sig"],
+            "transmission_time": h["paypal-transmission-time"], "webhook_id": webhook_id, "webhook_event": event})
+        return j.get("verification_status") == "SUCCESS"
+
+    def list_webhooks(self) -> list[dict]:
+        return self._req("GET", "/v1/notifications/webhooks").get("webhooks", [])
+
+    def create_webhook(self, url: str) -> dict:
+        return self._req("POST", "/v1/notifications/webhooks",
+                         {"url": url, "event_types": [{"name": n} for n in self.WEBHOOK_EVENTS]})

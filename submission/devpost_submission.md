@@ -3,72 +3,71 @@
 # Devpost submission: PayPal AI Hackathon (deadline Nov 12, 2026, 12:00 PT = 22:00 Israel time)
 
 **Project name:** AgentTab
-**Tagline:** PayPal-funded spending tabs for AI agents, guarded by AI.
-**Prizes to tick:** Grand Prize, Best Use of Agentic Commerce, Best Use of PayPal + AI, Best Use of AG Grid, Best Use of Render (credits)
-**Built with:** paypal-orders-api, paypal-payments-api, python, fastapi, ag-grid, gemini, render, sqlite
+**Tagline:** A purchasing agent for small shops: PayPal-funded tab, vendor budgets, approvals, refund deadlines on a Bryntum timeline.
+**Prizes to tick:** Grand prizes (Best Use of Agentic Commerce, Best Use of PayPal + AI, Most Impactful), **Best Use of Bryntum** (primary sponsor prize), Best Use of Render
+**Built with:** paypal-orders-api, paypal-payments-api, paypal-webhooks, bryntum-scheduler, gemini, python, fastapi, sqlite, ag-grid, render
 **Try it out:** https://agenttab.onrender.com · https://github.com/JordiBen/agenttab
 
 ## Inspiration
-Agents are starting to buy things on their own, such as data, API calls and compute. Today there are only
-two options:
-- Give the agent a card, which is reckless.
-- Approve every two-cent purchase by hand, which defeats the point of having an agent.
-
-We wanted the same thing a parent gives a teenager: a prepaid tab, clear rules, and a statement they can read.
+Lumen & Loom is the kind of shop we built for: six people selling home textiles and ceramics online. An AI agent could
+order supplier samples, renew the inventory app and pull competitor research. But a company card is reckless, and approving
+every $0.20 sample by hand defeats the point. Small shops need what finance teams have: budgets, approvals and refund deadlines.
 
 ## What it does
-- **Fund with PayPal.** The owner tops up an agent's tab with PayPal Checkout. When the agent runs out
-  of money it gets an HTTP 402. It then calls `topup-request` and forwards a PayPal approval link to its human.
-  There's no card on file and no blank cheque.
-- **Spend autonomously.** The agent buys metered web-intelligence calls (page → Markdown, tech-stack
-  detection, SEO audit) at $0.01–$0.03 each from a machine-readable catalog. Failed calls cost nothing.
-- **AI spend guard.** The owner writes the rules in plain English. Every purchase first passes hard
-  limits (per-call cap, daily cap, balance). An LLM then judges whether the tool, the target and the agent's
-  stated purpose fit the policy. Denials are explained and logged.
-- **See everything and get your money back.** A live AG Grid ledger shows every charge, denial, top-up and refund,
-  and policies and caps can be edited inline. One click refunds unused credit to the payer's PayPal (Payments v2
-  refunds). An AI spend report summarises behaviour and flags risks.
+- **PayPal-funded tab.** The owner tops up once with PayPal Checkout (Orders v2). On HTTP 402 the agent asks its human for more.
+- **Approved vendors with their own 30-day budgets.** Supplier samples $0.60, SaaS $1.00, research $0.30 (sandbox prices).
+  Follower sellers and gift cards are blocked before any AI is asked.
+- **Approval above $0.30.** The purchase isn't charged to the tab; AgentTab returns 202 with a PayPal approval link (24 h).
+- **A refund window on every purchase (7 days).** Tab purchases go back to the tab; approval purchases are refunded to PayPal.
+- **Gemini judges what rules can't:** does the target, purpose and item fit the owner's plain-English policy, and is the agent
+  relaying an injected instruction? Deterministic rules run first (allowlist, budgets, caps, unsafe URLs, purpose required).
+- **A Bryntum Scheduler timeline the agent keeps.** Rows for the agent and each vendor; events for budget periods, pending
+  approvals, refund deadlines and SaaS renewals. Signature-verified **PayPal webhooks** move it: an approved order completes the
+  waiting purchase, captures get a ✓, refunds made in the PayPal dashboard are applied, reversals are flagged. The scheduling
+  agent expires stale approvals and **proposes refunds before windows close** (duplicates, unused items, reversed captures).
+  A human confirms each one with a right-click.
+
+## Safety scorecard (measured)
+67 labeled purchases (20 legitimate, 47 attacks or violations), same decision code as production, three modes:
+
+| Mode | Attacks stopped | Legit handled right | False blocks |
+|---|---|---|---|
+| No guard | 0/47 | 16/20 | 0 |
+| Rules + keyword check | 37/47 (78.7%) | 20/20 | 0 |
+| Rules + Gemini judge | **47/47 (100%)** | 20/20 | 0 |
+
+Gemini p50 672 ms / p95 836 ms, 43 calls, ~18k tokens for the whole set. Honest caveat: the first Gemini run scored 45/47
+(two vague purposes); we added a purpose-required rule and re-ran once. The set isn't held out. Results are committed
+(`eval/results.json`) and shown live on the dashboard.
 
 ## How we built it
-- FastAPI backend.
-- PayPal REST: OAuth client credentials, Orders v2 create and capture with `payer-action` approval,
-  idempotent `PayPal-Request-Id`, and Payments v2 capture refunds.
-- SQLite ledger in integer micro-dollars.
-- AG Grid Community dashboard: row styling for denials, inline editing that PATCHes policies.
-- LLM through any OpenAI-compatible endpoint (Gemini 3.5 Flash-Lite by default, falling back to Gemini 3.8 Flash) for the guard, the buyer agent's
-  purchase planning and the owner report.
-- Deterministic fallback, so the guard never fails open.
-- Deployed with a Render Blueprint.
+- FastAPI + SQLite ledger in integer micro-dollars.
+- PayPal REST (sandbox): OAuth, Orders v2 create/capture with idempotent `PayPal-Request-Id`, Payments v2 refunds per capture,
+  Webhooks with `verify-webhook-signature` and event-id deduplication.
+- Gemini 3.5 Flash-Lite (OpenAI-compatible endpoint) with a structured three-check verdict, fallback model, and a keyword
+  fallback that never fails open.
+- Bryntum Scheduler (official 45-day trial from npm via jsDelivr): custom event/resource models, event renderer, tooltips,
+  context-menu actions, current-time line.
+- AG Grid for the purchases and ledger tables. Render Blueprint deploy with a rate-limited public sandbox demo.
 
 ## Challenges
-- Making the guard safe when the model is unavailable or returns garbage: it fails closed on bad output.
-- Keeping capture idempotent when PayPal redirects twice.
-- Ensuring a failed tool call is never billed.
+- Making webhooks and the return URL race-safe: whichever arrives first captures, the other is a no-op.
+- Keeping the human in the loop: the scheduler proposes, never refunds on its own.
+- Measuring safety honestly instead of claiming it.
 
 ## Accomplishments
-- An end-to-end agentic purchase loop: plan → 402 → human PayPal approval → autonomous spend → AI denial
-  of an off-policy purchase → refund of leftover credit.
-- Nine automated tests cover each step.
-
-## What we learned
-Agent commerce needs a policy layer more than it needs new payment rails. PayPal already provides the
-trusted funding and refund primitives.
+- Full loop on the live demo with real sandbox money: fund → buy → approval → refund, with blocks you can try yourself.
+- 39 automated tests.
 
 ## What's next
-- PayPal Vault for pre-approved top-ups under a ceiling.
-- Payouts to pay third-party tool sellers.
-- An MCP server so Claude and Cursor agents can use AgentTab natively.
-- Multi-agent team budgets.
+PayPal Vault for pre-approved top-ups, Payouts to vendors, an MCP server so coding agents can buy through AgentTab.
 
 ## Testing instructions (for judges)
-1. `pip install -r requirements.txt && uvicorn app.main:app`
-2. Open http://localhost:8000 (admin token `dev-admin`).
-- No credentials are needed: mock PayPal is the default.
-- For the real sandbox, set `PAYPAL_MODE=sandbox` and your sandbox client ID and secret (see the README).
-- **Live demo (no login):** https://agenttab.onrender.com. Click **Start demo session**, which funds your own agent with $1.00 through a real PayPal *sandbox* capture. Then follow buttons 2–5:
-  - Allowed purchase.
-  - Facebook blocked by the Gemini guard.
-  - AI report.
-  - Refund back to PayPal.
-- The free Render instance sleeps when idle, so the first load can take about 1 minute.
-- **Repo:** https://github.com/JordiBen/agenttab (MIT)
+- **Live demo (no login):** https://agenttab.onrender.com (free instance; first load can take ~1 min).
+  1. **Start demo session**: your own agent, funded with $1.00 through a real PayPal *sandbox* capture (test card).
+  2. Buy a mug sample twice, buy competitor research, request the $0.40 SaaS seat (goes to approval), try the gift card and the prompt injection.
+  3. In the **Schedule**, right-click the yellow approval → *Approve (pay with sandbox card)*; see the PayPal webhook ⚡ arrive.
+  4. Click **Demo clock: jump 6 days ahead**: refund windows turn red and the scheduler proposes refunds. Right-click → *Confirm suggested refund*.
+- **Local:** `pip install -r requirements.txt && uvicorn app.main:app` (mock PayPal by default; the admin token is printed to `./.admin_token`).
+  For the sandbox, set `PAYPAL_MODE=sandbox`, the client id/secret and `PAYPAL_WEBHOOK_ID` (see README).
+- **Repo:** https://github.com/JordiBen/agenttab (MIT; Bryntum trial loaded from npm, not redistributed)

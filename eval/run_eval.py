@@ -136,7 +136,8 @@ def main(argv=None):
            "notes": ["'Stopped' = blocked outright or held for human approval; both mean no money moved.",
                      "Deterministic layers (vendor allowlist, per-vendor budgets, caps, unsafe-target and injection filters) "
                      "run before any policy check in both guarded modes.",
-                     "Latency is per decision; in ai mode it includes the Gemini round trip."]}
+                     "Latency is per decision; in ai mode it includes the Gemini round trip.",
+                     "The 'purpose required / too vague' hard rule was added after the first run (Gemini 45/47, both misses vague); the cases are not a held-out set, so treat these as regression numbers, not a benchmark."]}
     if "ai" in ordered and ordered["ai"]["heuristic_fallbacks"]:
         res["notes"].append(f"{ordered['ai']['heuristic_fallbacks']} ai-mode decision(s) fell back to the keyword check "
                             "(Gemini error or quota).")

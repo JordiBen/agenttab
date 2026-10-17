@@ -15,6 +15,8 @@ $0.20 sample by hand defeats the point.
    back to the tab; approval-funded purchases are refunded to PayPal (Payments v2 refund of that capture).
 5. **An AI judge for what rules can't express.** Gemini checks whether the target, the purpose and the item fit the
    owner's policy, and whether the agent is relaying an injected instruction. Every decision is logged with the layer that made it.
+6. **A schedule the agent keeps.** Budgets, approval expiries, refund deadlines and renewals on a Bryntum Scheduler timeline,
+   updated by signature-verified PayPal webhooks, with refund suggestions before deadlines that a human confirms.
 
 ## Safety scorecard (measured, not claimed)
 
@@ -27,8 +29,8 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 | Mode | Attacks stopped | Legit handled right | False blocks | Latency p50 / p95 | LLM calls / tokens |
 |---|---|---|---|---|---|
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + keyword check | **36/47** (76.6%) | 20/20 | 0 | 0.0 / 0.1 ms | 0 / 0 |
-| Rules + Gemini judge | **45/47** (95.7%) | 20/20 | 0 | 739.4 / 1130.9 ms | 48 / 19846 |
+| Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
+| Rules + Gemini judge | **47/47** (100.0%) | 20/20 | 0 | 671.5 / 836.2 ms | 43 / 17794 |
 
 | Category | Cases | No guard | Rules + keyword | Rules + Gemini |
 |---|---|---|---|---|
@@ -36,17 +38,47 @@ and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 | forbidden vendor | 6 | 0 | 6 | 6 |
 | social target | 6 | 0 | 5 | 6 |
 | personal use | 7 | 0 | 4 | 7 |
-| vague | 5 | 0 | 4 | 3 |
+| vague | 5 | 0 | 5 | 5 |
 | direct injection | 6 | 0 | 5 | 6 |
 | indirect injection | 6 | 0 | 2 | 6 |
 | caps | 6 | 0 | 6 | 6 |
 | lookalike unsafe | 5 | 0 | 4 | 5 |
 
-Gemini model: gemini-3.5-flash-lite; 0 fallbacks to the keyword check during the run.
-Known misses (Gemini mode): vague-03, vague-04: purchases with an empty or one-word purpose that Gemini let through.
-Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 48 Gemini calls).
+- Gemini model: gemini-3.5-flash-lite; 0 fallbacks to the keyword check during the run.
+- **Honest caveat:** the first run scored 45/47 with Gemini; both misses were purchases with an empty or one-word purpose.
+  We then added a deterministic **purpose-required rule** (at least 4 words, no "as we discussed"-style references) and re-ran
+  all three modes once. The cases are not a held-out set, so read these as regression numbers, not a benchmark.
+- What still gets past the keyword-only mode (and why the Gemini judge matters): indirect injection copied from web pages
+  (2/6 stopped), personal use phrased as business (4/7), Pinterest and a `faceb00k` look-alike.
+- Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 Gemini calls).
 
 ![dashboard](submission/dashboard.png)
+
+## Schedule view: Bryntum Scheduler, driven by PayPal webhooks
+
+![schedule](submission/schedule.png)
+
+Money for a shop has a time dimension: budgets roll over, approval links expire, refund windows close, SaaS seats renew.
+AgentTab draws all of it on a [Bryntum Scheduler](https://bryntum.com/products/scheduler/) timeline (`static/schedule.js`):
+
+- **Rows:** the agent (tab top-ups, PayPal refunds, incoming PayPal webhooks) and one row per vendor.
+- **Events:** each vendor's 30-day budget (coloured by burn), pending approvals with their 24 h expiry, a refund-window
+  bar for every purchase (red in its last 48 h, purple once refunded), SaaS renewals as milestones ("needs approval" when
+  the price is over the threshold), and blocked purchases.
+- **PayPal webhooks (sandbox) move the schedule.** `POST /paypal/webhook` verifies every event with PayPal's
+  `verify-webhook-signature` API (`PAYPAL_WEBHOOK_ID`), deduplicates by event id, then:
+  `CHECKOUT.ORDER.APPROVED` captures the order and completes the waiting purchase (even if the buyer never returns to the site);
+  `PAYMENT.CAPTURE.COMPLETED` marks the purchase or top-up as confirmed (✓); `PAYMENT.CAPTURE.REFUNDED` confirms our refunds
+  and applies refunds made outside AgentTab (in the PayPal dashboard); `DENIED` / `REVERSED` flag the purchase or reduce the tab.
+  Each webhook shows up as a ⚡ milestone on the agent row.
+- **The scheduling agent drives the timeline.** On every webhook and schedule read it expires stale approval links and proposes
+  refunds **before** windows close: duplicate purchases, unused items in their last 48 h, captures PayPal reported as reversed.
+  Proposals are highlighted on the timeline (💡). **A human confirms or dismisses each one** (right-click the event, or the list
+  below the timeline); nothing is refunded automatically. Agents can mark items as used so they aren't proposed.
+- In the public demo, **"Demo clock: jump 6 days ahead"** shifts only your demo agent's history so you can watch deadlines approach.
+- Register the webhook once: `python -m scripts.register_webhook https://your-app.onrender.com` → set `PAYPAL_WEBHOOK_ID`.
+- Bryntum is loaded from the official **45-day trial** npm package (`@bryntum/scheduler-trial@7.3.7`) through jsDelivr; its
+  commercial code is not committed to this MIT repo. The trial shows a watermark.
 
 ## Run it (2 minutes, no accounts needed)
 
@@ -115,21 +147,26 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | POST | `/api/purchases/{id}/approve-sandbox-card` | owner | Approve a pending purchase and pay it with the sandbox test card |
 | POST | `/api/purchases/{id}/reject` | owner | Reject a pending purchase |
 | GET | `/api/scorecard` | anyone | Safety eval results |
+| GET | `/api/me/schedule` · `/api/schedule?agent_id=` | agent · owner | Bryntum resources/events + open refund suggestions |
+| POST | `/api/suggestions/{id}/confirm` · `/dismiss` | owner | Human decision on a refund the scheduler proposed |
+| POST | `/api/purchases/{id}/used` | agent | Mark an item as used (no refund suggestion) |
+| POST | `/paypal/webhook` | PayPal | Signature-verified webhook events |
+| POST | `/api/demo/fast-forward?days=6` | demo visitor | Demo clock for your own demo agent |
 
 ## Safety
 - Amounts are stored as integer micro-dollars.
 - Capture is idempotent, and an unapproved order is never credited.
 - SSRF guard blocks private and metadata IPs.
 - Admin and agent keys are separate.
-- Decision layers, in order: catalog → unsafe target → injection filter → vendor allowlist → per-purchase / daily caps → vendor budget → policy judge (Gemini, or keyword fallback) → approval threshold. Every decision is logged with its layer.
+- Decision layers, in order: catalog → unsafe target → purpose required → injection filter → vendor allowlist → per-purchase / daily caps → vendor budget → policy judge (Gemini, or keyword fallback) → approval threshold. Every decision is logged with its layer.
 
 ## Tests
 ```bash
-pip install pytest && pytest -q     # 31 tests (+2 live: LIVE_AI=1, LIVE_PAYPAL=1): procurement (allowlist, budgets, approvals, refund windows), 402 flow, AI verdicts/fallback/injection, capture idempotency, SSRF, demo limits, eval runner
+pip install pytest && pytest -q     # 39 tests (+2 live): procurement, purpose rule, webhooks (verification, idempotency, outside refunds, reversals), schedule + refund suggestions, 402 flow, AI verdicts/fallback, SSRF, demo limits, eval runner
 ```
 
 ## Built with
-PayPal Orders v2 and Payments v2 (sandbox), FastAPI, AG Grid Community, any OpenAI-compatible LLM
+PayPal Orders v2, Payments v2 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, any OpenAI-compatible LLM
 (Gemini 3.5 Flash-Lite by default), and Render (one-click `render.yaml`).
 
 MIT License · © WebIntel Tools

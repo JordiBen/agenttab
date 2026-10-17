@@ -13,6 +13,7 @@ class Settings:
     paypal_client_secret: str = os.getenv("PAYPAL_CLIENT_SECRET", "")
     paypal_base: str = os.getenv("PAYPAL_BASE", "https://api-m.sandbox.paypal.com")
     public_url: str = os.getenv("PUBLIC_URL", "http://localhost:8000")
+    paypal_webhook_id: str = os.getenv("PAYPAL_WEBHOOK_ID", "")   # from developer dashboard or scripts/register_webhook.py
     db_path: str = os.getenv("AGENTTAB_DB", "agenttab.sqlite3")
     # Any OpenAI-compatible chat endpoint: Gemini, Groq, OpenRouter, Ollama...
     # Defaults to Google Gemini (free tier) when GEMINI_API_KEY is set.

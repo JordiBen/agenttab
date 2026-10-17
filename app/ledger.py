@@ -35,23 +35,50 @@ CREATE TABLE IF NOT EXISTS purchases(
   amount_micro INTEGER, target TEXT, purpose TEXT, status TEXT, funding TEXT,
   refund_deadline REAL, approval_expires REAL, paypal_order TEXT, paypal_capture TEXT,
   decision_source TEXT, reason TEXT, fulfillment TEXT);
+CREATE TABLE IF NOT EXISTS webhook_events(
+  id TEXT PRIMARY KEY, ts REAL, type TEXT, resource_id TEXT, agent_id TEXT, purchase_id TEXT,
+  verified INTEGER, effect TEXT);
+CREATE TABLE IF NOT EXISTS suggestions(
+  id TEXT PRIMARY KEY, agent_id TEXT, purchase_id TEXT, kind TEXT, reason TEXT, created REAL,
+  due REAL, status TEXT, decided REAL);
 """
 AGENT_MIGRATIONS = [
     ("vendor_budgets", "TEXT"),            # JSON {vendor_id: rolling-30-day cap USD}; NULL = no allowlist
     ("approval_threshold_micro", "INTEGER"),  # above this, a human approves via a PayPal link; NULL = never
     ("refund_window_days", "INTEGER"),
 ]
+PURCHASE_MIGRATIONS = [
+    ("used_ts", "REAL"),            # agent reported it actually used the item
+    ("paypal_confirmed", "REAL"),   # PayPal webhook confirmed the capture
+    ("refunded_ts", "REAL"),
+    ("flag", "TEXT"),               # e.g. capture reversed / denied (from webhooks)
+]
 
 
 class Ledger:
+    @property
+    def db(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.path, timeout=15, check_same_thread=False)
+            c.row_factory = sqlite3.Row
+            self._local.conn = c
+        return c
+
     def __init__(self, path: str):
-        self.db = sqlite3.connect(path, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
+        # one connection per thread: a single shared sqlite3 connection is not safe under concurrent requests
+        self.path = path
+        self._local = threading.local()
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(agents)")}
         for name, typ in AGENT_MIGRATIONS:
             if name not in cols:
                 self.db.execute(f"ALTER TABLE agents ADD COLUMN {name} {typ}")
+        pcols = {r[1] for r in self.db.execute("PRAGMA table_info(purchases)")}
+        for name, typ in PURCHASE_MIGRATIONS:
+            if name not in pcols:
+                self.db.execute(f"ALTER TABLE purchases ADD COLUMN {name} {typ}")
         self.db.commit()
         self.lock = threading.Lock()
 
@@ -148,7 +175,9 @@ class Ledger:
                      paypal_order: str = "", fulfillment: str = "") -> str:
         pid = "pu_" + secrets.token_hex(6)
         with self.lock:
-            self.db.execute("INSERT INTO purchases VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            self.db.execute("INSERT INTO purchases(id,agent_id,ts,vendor,item,quantity,amount_micro,target,purpose,"
+                            "status,funding,refund_deadline,approval_expires,paypal_order,paypal_capture,"
+                            "decision_source,reason,fulfillment) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (pid, aid, time.time(), vendor, item, quantity, to_micro(amount), target, purpose,
                              status, funding, refund_deadline, approval_expires, paypal_order, "",
                              decision_source, reason, fulfillment))
@@ -182,3 +211,63 @@ class Ledger:
         else:
             rows = self.db.execute("SELECT * FROM entries ORDER BY ts DESC LIMIT ?", (limit,))
         return [dict(r) | {"amount_usd": float(from_micro(r["amount_micro"]))} for r in rows.fetchall()]
+
+    def purchase_by_capture(self, capture_id: str):
+        return self.db.execute("SELECT * FROM purchases WHERE paypal_capture=?", (capture_id,)).fetchone()
+
+    def fund_entry_by_capture(self, capture_id: str):
+        return self.db.execute("SELECT * FROM entries WHERE kind='fund' AND paypal_ref=?", (capture_id,)).fetchone()
+
+    def refund_entry_by_ref(self, refund_id: str):
+        return self.db.execute("SELECT * FROM entries WHERE kind='refund' AND paypal_ref=?", (refund_id,)).fetchone()
+
+    def update_entries_ts(self, aid: str, delta: float):
+        with self.lock:
+            self.db.execute("UPDATE entries SET ts=ts+? WHERE agent_id=?", (delta, aid))
+            self.db.execute("UPDATE purchases SET ts=ts+?, refund_deadline=refund_deadline+?, "
+                            "approval_expires=approval_expires+?, used_ts=used_ts+?, refunded_ts=refunded_ts+? "
+                            "WHERE agent_id=?", (delta, delta, delta, delta, delta, aid))
+            self.db.execute("UPDATE suggestions SET created=created+?, due=due+? WHERE agent_id=?", (delta, delta, aid))
+            self.db.execute("UPDATE webhook_events SET ts=ts+? WHERE agent_id=?", (delta, aid))
+            self.db.execute("UPDATE agents SET created=created+? WHERE id=?", (delta, aid))
+            self.db.commit()
+
+    # webhooks
+    def webhook_seen(self, eid: str) -> bool:
+        return self.db.execute("SELECT 1 FROM webhook_events WHERE id=?", (eid,)).fetchone() is not None
+
+    def add_webhook(self, eid: str, typ: str, resource_id: str, aid: str, pid: str, verified: bool, effect: str):
+        with self.lock:
+            self.db.execute("INSERT OR IGNORE INTO webhook_events VALUES(?,?,?,?,?,?,?,?)",
+                            (eid, time.time(), typ, resource_id, aid, pid, int(verified), effect))
+            self.db.commit()
+
+    def webhooks(self, aid: str | None = None, limit: int = 200):
+        q, a = ("SELECT * FROM webhook_events WHERE agent_id=? ORDER BY ts DESC LIMIT ?", (aid, limit)) if aid else \
+            ("SELECT * FROM webhook_events ORDER BY ts DESC LIMIT ?", (limit,))
+        return [dict(r) for r in self.db.execute(q, a).fetchall()]
+
+    # refund suggestions (made by the scheduling agent, confirmed by a human)
+    def add_suggestion(self, aid: str, pid: str, kind: str, reason: str, due: float | None) -> str | None:
+        # one open suggestion per purchase; a kind the owner already decided on is never re-proposed
+        if self.db.execute("SELECT 1 FROM suggestions WHERE purchase_id=? AND (kind=? OR status='open')",
+                           (pid, kind)).fetchone():
+            return None
+        sid = "sg_" + secrets.token_hex(5)
+        with self.lock:
+            self.db.execute("INSERT INTO suggestions VALUES(?,?,?,?,?,?,?,?,?)",
+                            (sid, aid, pid, kind, reason, time.time(), due, "open", None))
+            self.db.commit()
+        return sid
+
+    def suggestion(self, sid: str):
+        return self.db.execute("SELECT * FROM suggestions WHERE id=?", (sid,)).fetchone()
+
+    def suggestions(self, aid: str, status: str | None = None):
+        q = "SELECT * FROM suggestions WHERE agent_id=?" + (" AND status=?" if status else "") + " ORDER BY created DESC"
+        return [dict(r) for r in self.db.execute(q, (aid, status) if status else (aid,)).fetchall()]
+
+    def set_suggestion(self, sid: str, status: str):
+        with self.lock:
+            self.db.execute("UPDATE suggestions SET status=?, decided=? WHERE id=?", (status, time.time(), sid))
+            self.db.commit()

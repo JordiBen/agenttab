@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from urllib.parse import urlparse
@@ -38,8 +39,8 @@ VENDORS: dict[str, dict] = {
                             "throw-blanket-sample": {"name": "Cotton throw blanket sample", "price": Decimal("0.30")}}},
     "shopsuite": {"name": "ShopSuite", "category": "business software (SaaS)",
                   "domain": "shopsuite.example", "fulfillment": "simulated",
-                  "items": {"inventory-seat": {"name": "Inventory app, 1 seat / 1 month", "price": Decimal("0.40")},
-                            "email-tool-seat": {"name": "Email marketing tool, 1 seat / 1 month", "price": Decimal("0.35")}}},
+                  "items": {"inventory-seat": {"name": "Inventory app, 1 seat / 1 month", "price": Decimal("0.40"), "renews_days": 30},
+                            "email-tool-seat": {"name": "Email marketing tool, 1 seat / 1 month", "price": Decimal("0.35"), "renews_days": 30}}},
     "adboost-social": {"name": "AdBoost Social", "category": "social media followers & boosts",
                        "domain": "adboost-social.example", "fulfillment": "simulated",
                        "items": {"followers-1000": {"name": "1,000 Instagram followers", "price": Decimal("0.15")},
@@ -100,7 +101,7 @@ class State:
 class Outcome:
     outcome: str        # allow | block | approval
     reason: str
-    layer: str          # catalog | unsafe_target | injection | allowlist | caps | policy-ai | policy-keyword | approval | none
+    layer: str          # catalog | unsafe_target | purpose | injection | allowlist | caps | policy-ai | policy-keyword | approval | none
     amount: Decimal = Decimal(0)
     model: str = ""
 
@@ -137,6 +138,23 @@ def literal_unsafe(target: str) -> str | None:
     return None
 
 
+VAGUE_REFERENCE = re.compile(r"\b(as discussed|we discussed|you know (what|why)|the usual|whatever|same as (before|last time)|"
+                             r"for the (task|thing|project|stuff)( we| you| i)?\b(?! (of|to|for|on) \w))", re.I)
+MIN_PURPOSE_WORDS = 4
+
+
+def vague_purpose(purpose: str) -> str | None:
+    """Hard rule: every purchase needs a concrete business reason the owner could audit later."""
+    words = re.findall(r"[A-Za-z][A-Za-z'&-]+", purpose or "")
+    if not words:
+        return "purpose required: say what the purchase is for"
+    if len(words) < MIN_PURPOSE_WORDS:
+        return f"purpose too vague: at least {MIN_PURPOSE_WORDS} words describing the business reason are required"
+    if VAGUE_REFERENCE.search(purpose) and len(words) < 10:
+        return "purpose too vague: it refers to something unstated instead of giving the business reason"
+    return None
+
+
 def decide(cfg: AgentConfig, p: Purchase, state: State, mode: str, guard: SpendGuard | None,
            allow_private_targets: bool = False) -> Outcome:
     amount = price_of(p)
@@ -150,6 +168,9 @@ def decide(cfg: AgentConfig, p: Purchase, state: State, mode: str, guard: SpendG
     bad = None if allow_private_targets else literal_unsafe(p.target)
     if bad:
         return Outcome("block", bad, "unsafe_target", amount)
+    vague = vague_purpose(p.purpose)
+    if vague:
+        return Outcome("block", vague, "purpose", amount)
     if INJECTION.search(p.purpose or ""):
         return Outcome("block", "purpose contains instructions aimed at the guard (prompt injection)", "injection", amount)
     if cfg.vendor_budgets is not None and p.vendor not in cfg.vendor_budgets:

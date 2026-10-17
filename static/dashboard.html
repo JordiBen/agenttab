@@ -2,6 +2,11 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AgentTab: a purchasing agent with a spending tab, for small shops</title>
 <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33/dist/ag-grid-community.min.js"></script>
+<!-- Bryntum Scheduler: official 45-day trial package from npm (commercial license, not redistributed in this repo) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/scheduler.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/svalbard-light.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/fontawesome/css/fontawesome.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/fontawesome/css/solid.css">
+<script src="https://cdn.jsdelivr.net/npm/@bryntum/scheduler-trial@7.3.7/scheduler.umd.js"></script>
+<script src="/static/schedule.js"></script>
 <style>
  body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#f6f8fb;color:#13203b}
  header{background:#003087;color:#fff;padding:16px 28px;display:flex;align-items:center;gap:16px}
@@ -13,7 +18,11 @@
  textarea{width:420px;height:56px}
  button{background:#0070e0;color:#fff;border:0;border-radius:6px;padding:9px 14px;cursor:pointer;font-weight:600}
  button.alt{background:#ffc439;color:#003087}
- #agents,#ledger{height:300px} .bar{background:#e6ebf3;border-radius:5px;height:12px;width:220px;display:inline-block;vertical-align:middle;margin:0 8px} .bar i{display:block;height:12px;border-radius:5px;background:#0070e0} .act{padding:3px 8px;font-size:12px;margin-right:4px} #report{white-space:pre-wrap}
+ #agents,#ledger{height:300px} .bar{background:#e6ebf3;border-radius:5px;height:12px;width:220px;display:inline-block;vertical-align:middle;margin:0 8px} .bar i{display:block;height:12px;border-radius:5px;background:#0070e0} .act{padding:3px 8px;font-size:12px;margin-right:4px}
+ .sch-res{display:flex;gap:10px;align-items:center} .sch-res.vendor{padding-left:14px} .sch-sub{font-size:11px;color:#667}
+ .sch-tip{max-width:340px;font-size:13px;line-height:1.4} .sch-reason{color:#445;margin-top:4px} .sch-sugg{margin-top:6px;background:#fff6d6;padding:6px;border-radius:6px}
+ .sch-has-sugg{outline:2px dashed #e67e22;outline-offset:1px} .sch-pct{opacity:.7;margin-left:6px}
+ .sugg{display:flex;gap:8px;align-items:center;margin:6px 0;padding:6px 8px;background:#fff6d6;border-radius:6px} .sugg span{flex:1} #report{white-space:pre-wrap}
  label{font-size:12px;color:#556;display:block}
 </style></head>
 <body>
@@ -45,6 +54,9 @@
   </div>
   <p id="dout" style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:13px"></p>
   <div id="dbudgets"></div>
+  <h4 style="margin:10px 0 4px">Schedule <small style="font-weight:400;color:#556">(Bryntum Scheduler; updated by PayPal webhooks; right-click an event for actions)</small>
+   <button class="act" onclick="demoFF()">Demo clock: jump 6 days ahead</button></h4>
+  <div id="dsched"></div><div id="dsugg" style="margin-top:6px"></div>
   <h4 style="margin:10px 0 4px">Purchases</h4><div id="dpurch" style="height:230px"></div>
   <h4 style="margin:10px 0 4px">Ledger</h4><div id="dledger" style="height:220px"></div>
  </div>
@@ -66,6 +78,7 @@
    <button class="alt" id="cardbtn" style="display:none" onclick="cardTopup()">Sandbox test-card top-up</button>
    <button onclick="refund()">Refund unused credit</button><button onclick="report()">AI spend report</button>
   </div><p id="report"></p></div>
+ <div class="card"><h3>Schedule of selected agent <small style="font-weight:400;color:#556">(Bryntum Scheduler)</small></h3><div id="osched"></div><div id="osugg" style="margin-top:6px"></div></div>
  <div class="card"><h3>Purchases of selected agent</h3><div id="opurch" style="height:230px"></div></div>
  <div class="card"><h3>Live ledger: charges, denials, funding, refunds</h3><div id="ledger"></div></div>
 </main>
@@ -126,7 +139,7 @@ async function dload(){ if(!DK()) return; const h={'X-Agent-Key':DK()}; const r=
 async function demoStart(){ show('Funding your agent through PayPal sandbox…');
  const r=await fetch('/api/demo/session',{method:'POST'}); const j=await r.json();
  if(!r.ok) return show(j); sessionStorage.dkey=j.agent_key;
- show(`Agent ${j.name} funded: $${j.balance_usd.toFixed(2)} (PayPal sandbox order ${j.paypal_order_id}, capture ${j.paypal_capture_id})`); dload(); }
+ DS&&DS.refresh(); show(`Agent ${j.name} funded: $${j.balance_usd.toFixed(2)} (PayPal sandbox order ${j.paypal_order_id}, capture ${j.paypal_capture_id})`); dload(); }
 async function demoBuy(vendor,item,target,purpose){ if(!DK()) return show('Start a demo session first.'); show('Guard is checking the purchase…');
  const r=await fetch('/api/purchases',{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Key':DK()},body:JSON.stringify({vendor,item,quantity:1,target,purpose})});
  const j=await r.json(); const g=j.guard||(j.detail&&j.detail.layer?j.detail:null);
@@ -134,10 +147,10 @@ async function demoBuy(vendor,item,target,purpose){ if(!DK()) return show('Start
  if(r.status===200) show(`BOUGHT${who}: ${g.reason}\nCharged $${j.charged_usd.toFixed(2)}, tab balance $${j.balance_usd.toFixed(2)}, refundable until ${new Date(j.refund_deadline*1000).toLocaleString()}\n\n`+JSON.stringify(j.result,null,1).slice(0,900));
  else if(r.status===202) show(`NEEDS YOUR APPROVAL${who}: ${g.reason}\nPress "Approve (sandbox card)" in the purchases table, or "Reject". The approval link expires in 24h.`);
  else show((r.status===403?'BLOCKED'+who+': '+g.reason:r.status===402?'TAB EMPTY: '+JSON.stringify(j):JSON.stringify(j.detail||j,null,1)));
- dload(); }
+ dload(); DS&&DS.refresh(); }
 async function pAct(pid,act,owner){ const h=owner?H():{'X-Agent-Key':DK()};
  const r=await fetch(`/api/purchases/${pid}/${act}`,{method:'POST',headers:h}); const j=await r.json();
- (owner?(t=>document.getElementById('report').textContent=t):show)(r.ok?JSON.stringify(j,null,1):'Error: '+JSON.stringify(j.detail||j)); owner?load():dload(); }
+ (owner?(t=>document.getElementById('report').textContent=t):show)(r.ok?JSON.stringify(j,null,1):'Error: '+JSON.stringify(j.detail||j)); owner?(load(),OS&&OS.refresh()):(dload(),DS&&DS.refresh()); }
 function purchCols(owner){ const o=owner?'true':'false'; return [
  {field:'ts',headerName:'Time',sort:'desc',valueFormatter:p=>new Date(p.value*1000).toLocaleTimeString(),maxWidth:110},
  {field:'vendor'},{field:'item'},{field:'amount_usd',headerName:'Amount',valueFormatter:p=>'$'+Number(p.value).toFixed(2),maxWidth:100},
@@ -167,5 +180,19 @@ async function scorecard(){ const r=await fetch('/api/scorecard'); if(!r.ok){ sc
  const cats=Object.entries(j.by_category).map(([c,v])=>`${c.replace('_',' ')}: ${['none','keyword','ai'].filter(m=>m in v).map(m=>v[m]+'/'+v.total).join(' → ')}`).join(' · ');
  scoreGrid.setGridOption('rowData',rows); scoretxt.innerHTML+=`<br><small>Correct per category (no guard → keyword → Gemini): ${cats}</small>`; }
 scorecard();
+let DS=null, OS=null;
+async function schedAct(path, owner){ const r=await fetch(path,{method:'POST',headers:owner?H():{'X-Agent-Key':DK()}}); const j=await r.json();
+ const out=r.ok?JSON.stringify(j,null,1):'Error: '+JSON.stringify(j.detail||j); if(owner) document.getElementById('report').textContent=out; else show(out);
+ owner?(load(),OS&&OS.refresh()):(dload(),DS&&DS.refresh()); }
+function initSchedules(){
+ if(!window.makeSchedule) return;
+ DS=makeSchedule(document.getElementById('dsched'),{url:()=>'/api/me/schedule',headers:()=>({'X-Agent-Key':DK()||''}),act:p=>schedAct(p,false),listEl:document.getElementById('dsugg')});
+ OS=makeSchedule(document.getElementById('osched'),{url:()=>{const a=agentsGrid.getSelectedRows()[0]||agentsGrid.getDisplayedRowAtIndex(0)?.data; return '/api/schedule?agent_id='+(a?a.agent_id:'')},headers:H,act:p=>schedAct(p,true),listEl:document.getElementById('osugg')});
+ setInterval(()=>{ if(DK()&&DS) DS.refresh(); if(T()&&OS) OS.refresh(); },8000);
+ if(DK()&&DS) DS.refresh(); if(T()&&OS) OS.refresh();
+}
+async function demoFF(){ if(!DK()) return show('Start a demo session first.'); const r=await fetch('/api/demo/fast-forward?days=6',{method:'POST',headers:{'X-Agent-Key':DK()}}); const j=await r.json();
+ show(r.ok?`Demo clock moved 6 days ahead for your agent. The scheduling agent made ${j.new_suggestions} new refund suggestion(s).`:JSON.stringify(j.detail||j)); dload(); DS&&DS.refresh(); }
+window.addEventListener('load', initSchedules);
 load(); setInterval(load,3000); setInterval(dload,4000);
 </script></body></html>

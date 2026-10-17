@@ -18,6 +18,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -29,6 +30,7 @@ from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
 from . import procurement as pr
+from . import schedule as sched
 
 log = logging.getLogger("agenttab")
 DEMO_POLICY = pr.SHOP_POLICY
@@ -87,7 +89,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     ledger = Ledger(s.db_path)
     paypal = PayPalClient(s)
     guard = SpendGuard(s, ai_allowed=lambda: limiter.allow("llm", s.llm_calls_per_day, DAY))
-    app.state.ledger, app.state.paypal, app.state.guard = ledger, paypal, guard
+    app.state.ledger, app.state.paypal, app.state.guard, app.state.settings = ledger, paypal, guard, s
 
     def admin(x_admin_token: str = Header("")):
         if not hmac.compare_digest(x_admin_token.encode(), admin_token.encode()):
@@ -146,6 +148,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.get("/", include_in_schema=False)
     def home():
         return FileResponse(STATIC / "dashboard.html")
+
+    @app.get("/static/schedule.js", include_in_schema=False)
+    def schedule_js():
+        return FileResponse(STATIC / "schedule.js", media_type="application/javascript")
 
     @app.get("/healthz")
     def healthz():
@@ -310,11 +316,19 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/paypal/return", include_in_schema=False)
     def paypal_return(token: str):
+        kind, ref = capture_order_flow(token)
+        return RedirectResponse(("/?approved=" if kind == "approved" else "/?funded=") + ref)
+
+    def capture_order_flow(token: str) -> tuple[str, str]:
+        """Capture an approved order once (return URL or CHECKOUT.ORDER.APPROVED webhook, whichever comes first)."""
         o = ledger.order(token)
         if not o:
             raise HTTPException(404, "unknown order")
+        pu = ledger.purchase_by_order(token)
         if o["status"] == "CAPTURED":
-            return RedirectResponse("/?funded=" + o["agent_id"])
+            return ("approved", pu["id"]) if pu else ("funded", o["agent_id"])
+        if o["status"] in ("CANCELLED", "SUPERSEDED"):
+            raise HTTPException(409, f"order is {o['status'].lower()}")
         paypal_budget()
         try:
             cap = paypal.capture_order(token)
@@ -323,13 +337,13 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if cap["status"] != "COMPLETED":
             raise HTTPException(402, f"capture status {cap['status']}")
         ledger.mark_order(token, "CAPTURED")
-        pu = ledger.purchase_by_order(token)
         if pu:  # this order was the approval link for one purchase
             complete_approved(pu, cap["capture_id"], cap["amount"], f"PayPal order {token}")
-            return RedirectResponse("/?approved=" + pu["id"])
+            sched.sweep(ledger, pu["agent_id"])
+            return "approved", pu["id"]
         ledger.add_entry(o["agent_id"], "fund", cap["amount"], paypal_ref=cap["capture_id"],
                          reason=f"PayPal order {token}")
-        return RedirectResponse("/?funded=" + o["agent_id"])
+        return "funded", o["agent_id"]
 
     @app.get("/paypal/cancel", include_in_schema=False)
     def paypal_cancel(token: str = ""):
@@ -428,6 +442,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "refund_deadline": deadline, "guard": out.as_dict(), "result": result}
 
     def complete_approved(pu, capture_id: str, amount: Decimal, ref: str):
+        pu = ledger.purchase(pu["id"])
+        if pu["status"] != "pending_approval":      # already handled (return URL, webhook or card)
+            return
         aid = pu["agent_id"]
         p = pr.Purchase(pu["vendor"], pu["item"], pu["quantity"], pu["purpose"], pu["target"])
         ledger.add_entry(aid, "fund", amount, "approval", paypal_ref=capture_id, reason=f"approval for {pu['id']}: {ref}")
@@ -444,6 +461,33 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                          f"[approval] approved by owner via PayPal ({ref})", pu["id"])
         ledger.update_purchase(pu["id"], status="completed", paypal_capture=capture_id,
                                refund_deadline=refund_deadline(a), fulfillment=json.dumps(result)[:4000])
+
+    def refund_one(pu, note: str = "") -> dict:
+        pid = pu["id"]
+        pu = ledger.purchase(pid)
+        if pu["status"] != "completed":
+            raise HTTPException(409, f"purchase is {pu['status']}, not refundable")
+        if pu["refund_deadline"] is None or time.time() > pu["refund_deadline"]:
+            raise HTTPException(409, "refund window has closed")
+        amount = from_micro(pu["amount_micro"])
+        aid = pu["agent_id"]
+        why = f"purchase {pid} refunded" + (f" ({note})" if note else "")
+        if pu["funding"] == "direct":
+            paypal_budget()
+            try:
+                r = paypal.refund_capture(pu["paypal_capture"], amount)
+            except PayPalError as e:
+                raise HTTPException(502, str(e))
+            ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=why)
+            ledger.add_entry(aid, "refund", amount, "approval", paypal_ref=r["id"],
+                             reason=f"{why}: PayPal capture {pu['paypal_capture']} refunded")
+            ref = r["id"]
+        else:
+            ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=why + " to tab")
+            ref = None
+        ledger.update_purchase(pid, status="refunded", refunded_ts=time.time())
+        return {"purchase_id": pid, "refunded_usd": float(amount), "to": "paypal" if ref else "tab",
+                "paypal_refund": ref, "balance_usd": float(ledger.balance(aid))}
 
     def purchase_for(pid: str, x_admin_token: str, x_agent_key: str, demo_owner_ok: bool):
         pu = ledger.purchase(pid)
@@ -481,28 +525,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """Refund one purchase inside its refund window. Tab-funded: credit returns to the tab.
         Approval-funded: the purchase's own PayPal capture is refunded."""
         pu = purchase_for(pid, x_admin_token, x_agent_key, demo_owner_ok=s.demo_mode)
-        if pu["status"] != "completed":
-            raise HTTPException(409, f"purchase is {pu['status']}, not refundable")
-        if pu["refund_deadline"] is None or time.time() > pu["refund_deadline"]:
-            raise HTTPException(409, "refund window has closed")
-        amount = from_micro(pu["amount_micro"])
-        aid = pu["agent_id"]
-        if pu["funding"] == "direct":
-            paypal_budget()
-            try:
-                r = paypal.refund_capture(pu["paypal_capture"], amount)
-            except PayPalError as e:
-                raise HTTPException(502, str(e))
-            ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=f"purchase {pid} refunded")
-            ledger.add_entry(aid, "refund", amount, "approval", paypal_ref=r["id"],
-                             reason=f"purchase {pid}: PayPal capture {pu['paypal_capture']} refunded")
-            ref = r["id"]
-        else:
-            ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=f"purchase {pid} refunded to tab")
-            ref = "tab-credit"
-        ledger.update_purchase(pid, status="refunded")
-        return {"purchase_id": pid, "refunded_usd": float(amount), "to": "paypal" if pu["funding"] == "direct" else "tab",
-                "paypal_refund": ref if pu["funding"] == "direct" else None, "balance_usd": float(ledger.balance(aid))}
+        return refund_one(pu)
 
     @app.post("/api/purchases/{pid}/approve-sandbox-card")
     def approve_sandbox_card(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
@@ -538,6 +561,174 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if pu["paypal_order"]:
             ledger.mark_order(pu["paypal_order"], "CANCELLED")
         return {"purchase_id": pid, "status": "rejected"}
+
+    # ---------------- PayPal webhooks (sandbox) ----------------
+    def _capture_of_refund(res: dict) -> str:
+        for l in res.get("links", []):
+            if l.get("rel") == "up" and "/captures/" in l.get("href", ""):
+                return l["href"].rstrip("/").rsplit("/", 1)[1]
+        return ""
+
+    def handle_webhook(typ: str, res: dict) -> tuple[str, str, str]:
+        """Apply one PayPal event to the ledger. Returns (agent_id, purchase_id, effect)."""
+        rid = str(res.get("id", ""))
+        if typ == "CHECKOUT.ORDER.APPROVED":
+            o = ledger.order(rid)
+            if not o:
+                return "", "", "order not created by AgentTab; ignored"
+            pu = ledger.purchase_by_order(rid)
+            if o["status"] == "CAPTURED":
+                return o["agent_id"], pu["id"] if pu else "", "already captured via return URL"
+            try:
+                kind, ref = capture_order_flow(rid)
+            except HTTPException as e:
+                return o["agent_id"], pu["id"] if pu else "", f"capture failed: {e.detail}"
+            return o["agent_id"], pu["id"] if pu else "", ("approved purchase completed" if kind == "approved"
+                                                         else "top-up captured") + " from the webhook"
+        if typ.startswith("PAYMENT.CAPTURE."):
+            amount = Decimal(str((res.get("amount") or {}).get("value", "0")))
+            if typ == "PAYMENT.CAPTURE.REFUNDED":
+                refund_id, cid = rid, _capture_of_refund(res)
+                known = ledger.refund_entry_by_ref(refund_id)
+                if known:
+                    pu = ledger.purchase_by_capture(cid) if cid else None
+                    return known["agent_id"], pu["id"] if pu else "", f"refund {refund_id} confirmed by PayPal"
+                pu = ledger.purchase_by_capture(cid) if cid else None
+                if pu and pu["status"] == "completed":
+                    aid = pu["agent_id"]
+                    ledger.add_entry(aid, "credit", from_micro(pu["amount_micro"]), f"{pu['vendor']}:{pu['item']}",
+                                     reason=f"purchase {pu['id']} refunded in PayPal")
+                    ledger.add_entry(aid, "refund", amount, "approval", paypal_ref=refund_id,
+                                     reason=f"refund made outside AgentTab on capture {cid}")
+                    ledger.update_purchase(pu["id"], status="refunded", refunded_ts=time.time())
+                    return aid, pu["id"], "refunded outside AgentTab; purchase marked refunded"
+                fe = ledger.fund_entry_by_capture(cid) if cid else None
+                if fe:
+                    ledger.add_entry(fe["agent_id"], "refund", amount, paypal_ref=refund_id,
+                                     reason=f"top-up capture {cid} refunded in PayPal")
+                    return fe["agent_id"], "", f"top-up refunded in PayPal; tab reduced by ${amount:.2f}"
+                return "", "", "refund for an unknown capture; ignored"
+            order_id = ((res.get("supplementary_data") or {}).get("related_ids") or {}).get("order_id", "")
+            pu = ledger.purchase_by_capture(rid) or (ledger.purchase_by_order(order_id) if order_id else None)
+            fe = ledger.fund_entry_by_capture(rid)
+            if typ == "PAYMENT.CAPTURE.COMPLETED":
+                if pu:
+                    if pu["status"] == "pending_approval":
+                        if order_id and ledger.order(order_id):
+                            ledger.mark_order(order_id, "CAPTURED")
+                        complete_approved(pu, rid, amount, f"PayPal order {order_id} (webhook)")
+                    ledger.update_purchase(pu["id"], paypal_confirmed=time.time())
+                    return pu["agent_id"], pu["id"], "capture confirmed by PayPal"
+                if fe:
+                    return fe["agent_id"], "", "top-up capture confirmed by PayPal"
+                return "", "", "capture for an unknown order; ignored"
+            if typ in ("PAYMENT.CAPTURE.DENIED", "PAYMENT.CAPTURE.REVERSED"):
+                flag = typ.rsplit(".", 1)[1].lower()
+                if pu:
+                    ledger.update_purchase(pu["id"], flag=flag)
+                    return pu["agent_id"], pu["id"], f"capture {flag}; purchase flagged for review"
+                if fe:
+                    ledger.add_entry(fe["agent_id"], "refund", amount, paypal_ref=rid,
+                                     reason=f"top-up capture {flag} by PayPal; tab reduced")
+                    return fe["agent_id"], "", f"top-up capture {flag}; tab reduced by ${amount:.2f}"
+                return "", "", f"capture {flag} for an unknown order"
+            if typ == "PAYMENT.CAPTURE.PENDING":
+                return (pu["agent_id"] if pu else fe["agent_id"] if fe else ""), pu["id"] if pu else "", "capture pending at PayPal"
+        return "", "", "event type not used"
+
+    @app.post("/paypal/webhook", include_in_schema=False)
+    async def paypal_webhook(request: Request):
+        raw = await request.body()
+        if len(raw) > 64_000:
+            raise HTTPException(413, "too large")
+        if not limiter.allow("webhook:all", 3000, DAY):
+            raise HTTPException(429, "webhook limit")
+        try:
+            event = json.loads(raw)
+            eid, typ, res = str(event["id"]), str(event["event_type"]), event.get("resource") or {}
+        except Exception:
+            raise HTTPException(400, "bad event")
+        if paypal.mock:
+            verified = False                   # offline mode: no PayPal to verify against
+        else:
+            if not s.paypal_webhook_id:
+                raise HTTPException(503, "PAYPAL_WEBHOOK_ID not configured")
+            try:
+                verified = await run_in_threadpool(paypal.verify_webhook, dict(request.headers), event, s.paypal_webhook_id)
+            except PayPalError:
+                verified = False
+            if not verified:
+                raise HTTPException(400, "webhook signature not verified")
+        if ledger.webhook_seen(eid):
+            return {"ok": True, "duplicate": True}
+        aid, pid, effect = await run_in_threadpool(handle_webhook, typ, res)
+        ledger.add_webhook(eid, typ, str(res.get("id", "")), aid, pid, verified, effect)
+        if aid:
+            sched.sweep(ledger, aid)
+        log.info("webhook %s %s -> %s", typ, eid, effect)
+        return {"ok": True, "effect": effect}
+
+    @app.get("/api/webhooks", dependencies=[Depends(admin)])
+    def list_webhooks(agent_id: str = ""):
+        return ledger.webhooks(agent_id or None)
+
+    # ---------------- schedule (Bryntum Scheduler) + refund suggestions ----------------
+    @app.get("/api/me/schedule")
+    def my_schedule(a=Depends(agent_from_key)):
+        sched.sweep(ledger, a["id"])
+        return sched.build(ledger, ledger.agent(a["id"]))
+
+    @app.get("/api/schedule", dependencies=[Depends(admin)])
+    def agent_schedule(agent_id: str):
+        a = ledger.agent(agent_id)
+        if not a:
+            raise HTTPException(404, "no such agent")
+        sched.sweep(ledger, agent_id)
+        return sched.build(ledger, a)
+
+    def suggestion_for(sid: str, x_admin_token: str, x_agent_key: str):
+        sg = ledger.suggestion(sid)
+        if not sg:
+            raise HTTPException(404, "no such suggestion")
+        purchase_for(sg["purchase_id"], x_admin_token, x_agent_key, demo_owner_ok=s.demo_mode)
+        if sg["status"] != "open":
+            raise HTTPException(409, f"suggestion is {sg['status']}")
+        return sg
+
+    @app.post("/api/suggestions/{sid}/confirm")
+    def confirm_suggestion(sid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        """A human confirms a refund the scheduling agent proposed. Only now does money move."""
+        sg = suggestion_for(sid, x_admin_token, x_agent_key)
+        out = refund_one(ledger.purchase(sg["purchase_id"]), note=f"{sg['kind']} refund suggested by the scheduler, confirmed by owner")
+        ledger.set_suggestion(sid, "confirmed")
+        return out | {"suggestion_id": sid, "status": "confirmed"}
+
+    @app.post("/api/suggestions/{sid}/dismiss")
+    def dismiss_suggestion(sid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        suggestion_for(sid, x_admin_token, x_agent_key)
+        ledger.set_suggestion(sid, "dismissed")
+        return {"suggestion_id": sid, "status": "dismissed"}
+
+    @app.post("/api/purchases/{pid}/used")
+    def mark_used(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        """The agent (or owner) records that an item was actually used, so it isn't proposed for refund."""
+        pu = purchase_for(pid, x_admin_token, x_agent_key, demo_owner_ok=True)
+        ledger.update_purchase(pid, used_ts=time.time())
+        return {"purchase_id": pid, "used": True, "status": pu["status"]}
+
+    @app.post("/api/demo/fast-forward")
+    def demo_fast_forward(request: Request, days: float = 6, a=Depends(agent_from_key)):
+        """Demo clock: move this demo agent's history N days into the past (max 6 per call) so refund
+        deadlines approach and the scheduler's suggestions appear. Demo mode only; touches only your agent."""
+        if not s.demo_mode:
+            raise HTTPException(404, "demo mode is off")
+        if not (0 < days <= 6):
+            raise HTTPException(422, "days must be between 0 and 6")
+        if not limiter.allow("ff:" + client_ip(request), 30, HOUR):
+            raise HTTPException(429, "slow down")
+        ledger.update_entries_ts(a["id"], -days * 86400)
+        new = sched.sweep(ledger, a["id"])
+        return {"shifted_days": days, "new_suggestions": len(new)}
 
     # ---------------- public sandboxed demo ----------------
     @app.post("/api/demo/session")

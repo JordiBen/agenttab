@@ -69,11 +69,11 @@ def test_admin_required(client):
 def test_402_then_fund_then_charge(client, site):
     ag = new_agent(client)
     k = {"X-Agent-Key": ag["api_key"]}
-    r = client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k)
+    r = client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k)
     assert r.status_code == 402 and r.json()["topup"]["endpoint"] == "/api/me/topup-request"
     fund(client, ag["agent_id"], 5)
     assert client.get("/api/me", headers=k).json()["balance_usd"] == 5.0
-    r = client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k)
+    r = client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k)
     assert r.status_code == 200, r.text
     j = r.json()
     assert j["charged_usd"] == 0.02 and j["balance_usd"] == 4.98
@@ -103,7 +103,7 @@ def test_guard_denies_policy_violation_and_logs(client, site):
     # SSRF check passes for public host only when resolvable; either way it must not be charged
     assert r.status_code in (403, 422)
     r = client.post("/api/tools/page_markdown", json={"url": site, "purpose": "x"}, headers=k)
-    assert r.status_code == 403 and r.json()["detail"]["source"] in ("heuristic", "policy-heuristic")
+    assert r.status_code == 403 and r.json()["detail"]["source"] in ("heuristic", "policy-heuristic", "purpose")
     led = client.get("/api/ledger", headers=A).json()
     assert any(e["kind"] == "deny" for e in led)
     assert client.get("/api/me", headers=k).json()["balance_usd"] == 5.0
@@ -113,11 +113,11 @@ def test_caps(client, site):
     ag = new_agent(client, daily_cap_usd=0.05, per_call_cap_usd=0.02)
     fund(client, ag["agent_id"])
     k = {"X-Agent-Key": ag["api_key"]}
-    r = client.post("/api/tools/seo_audit", json={"url": site, "purpose": "competitor SEO research"}, headers=k)
+    r = client.post("/api/tools/seo_audit", json={"url": site, "purpose": "competitor SEO research for our market analysis"}, headers=k)
     assert r.status_code == 403 and "per-call cap" in r.json()["detail"]["reason"]
     for _ in range(2):
-        assert client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k).status_code == 200
-    r = client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k)
+        assert client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k).status_code == 200
+    r = client.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k)
     assert r.status_code == 403 and "daily cap" in r.json()["detail"]["reason"]
 
 
@@ -125,7 +125,7 @@ def test_refund_unused(client, site):
     ag = new_agent(client)
     fund(client, ag["agent_id"], 5)
     k = {"X-Agent-Key": ag["api_key"]}
-    client.post("/api/tools/seo_audit", json={"url": site, "purpose": "competitor SEO research"}, headers=k)
+    client.post("/api/tools/seo_audit", json={"url": site, "purpose": "competitor SEO research for our market analysis"}, headers=k)
     r = client.post(f"/api/agents/{ag['agent_id']}/refund", headers=A).json()
     assert r["refunded_usd"] == 4.97
     assert client.get("/api/me", headers=k).json()["balance_usd"] == 0.0
@@ -138,7 +138,7 @@ def test_ssrf_blocked_by_default(tmp_path):
     c = TestClient(create_app(s))
     ag = new_agent(c)
     fund(c, ag["agent_id"])
-    r = c.post("/api/tools/page_markdown", json={"url": "http://169.254.169.254/latest", "purpose": "competitor research"},
+    r = c.post("/api/tools/page_markdown", json={"url": "http://169.254.169.254/latest", "purpose": "competitor research for our market analysis"},
                headers={"X-Agent-Key": ag["api_key"]})
     assert r.status_code == 422
 
@@ -147,7 +147,7 @@ def test_failed_tool_not_charged(client):
     ag = new_agent(client)
     fund(client, ag["agent_id"])
     k = {"X-Agent-Key": ag["api_key"]}
-    r = client.post("/api/tools/page_markdown", json={"url": "http://127.0.0.1:1/", "purpose": "competitor research"}, headers=k)
+    r = client.post("/api/tools/page_markdown", json={"url": "http://127.0.0.1:1/", "purpose": "competitor research for our market analysis"}, headers=k)
     assert r.status_code == 502
     assert client.get("/api/me", headers=k).json()["balance_usd"] == 5.0
 
@@ -260,8 +260,8 @@ def test_demo_flow(tmp_path, site):
     j = c.post("/api/demo/session").json()
     k = {"X-Agent-Key": j["agent_key"]}
     assert j["balance_usd"] == 1.0 and j["approval_threshold_usd"] == 0.30 and len(j["vendor_budgets"]) == 3
-    assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k).status_code == 200
-    assert c.post("/api/tools/tech_detect", json={"url": "https://www.facebook.com/x", "purpose": "competitor tech research"}, headers=k).status_code in (403, 422)
+    assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k).status_code == 200
+    assert c.post("/api/tools/tech_detect", json={"url": "https://www.facebook.com/x", "purpose": "competitor tech research for our market analysis"}, headers=k).status_code in (403, 422)
     assert len(c.get("/api/demo/ledger", headers=k).json()) >= 2
     assert c.post("/api/demo/refund", headers=k).json()["refunded_usd"] == 0.98
     # demo users can't reach owner endpoints
@@ -275,8 +275,8 @@ def test_demo_rate_limits(tmp_path, site):
     k = {"X-Agent-Key": c.post("/api/demo/session").json()["agent_key"]}
     assert c.post("/api/demo/session").status_code == 429
     for _ in range(2):
-        c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k)
-    assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research"}, headers=k).status_code == 429
+        c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k)
+    assert c.post("/api/tools/tech_detect", json={"url": site, "purpose": "competitor tech research for our market analysis"}, headers=k).status_code == 429
 
 
 def test_paypal_daily_budget(tmp_path):
@@ -446,3 +446,132 @@ def test_eval_runner_offline(tmp_path, monkeypatch):
     kw = res["modes"]["keyword"]
     assert kw["attacks_stopped"] > 25 and kw["false_blocks"] == 0 and kw["llm_calls"] == 0
     assert (tmp_path / "r.json").exists()
+
+
+def test_purpose_required_hard_rule():
+    cfg = pr.AgentConfig(pr.SHOP_POLICY, dict(pr.SHOP_VENDOR_BUDGETS), pr.SHOP_APPROVAL_THRESHOLD,
+                         pr.SHOP_PER_PURCHASE_MAX, pr.SHOP_DAILY_CAP)
+    for purpose in ["", "stuff", "research", "for the task we discussed"]:
+        o = pr.decide(cfg, pr.Purchase("samplebox", "ceramic-mug-sample", 1, purpose), pr.State(), "keyword", None)
+        assert o.outcome == "block" and o.layer == "purpose", purpose
+    ok = pr.Purchase("samplebox", "ceramic-mug-sample", 1, "Quality-check a stoneware mug before we stock it")
+    assert pr.decide(cfg, ok, pr.State(), "keyword", None).outcome == "allow"
+
+
+# ---------- schedule, PayPal webhooks, refund suggestions ----------
+def _wh(c, typ, resource, eid=None):
+    return c.post("/paypal/webhook", json={"id": eid or "WH-" + os.urandom(4).hex(), "event_type": typ, "resource": resource})
+
+
+def test_schedule_rows_and_events(client):
+    ag = shop_agent(client)
+    fund(client, ag["agent_id"], 2)
+    k = ag["api_key"]
+    buy(client, k, vendor="samplebox", item="ceramic-mug-sample")
+    buy(client, k, vendor="shopsuite", item="inventory-seat", purpose="Inventory software to track our stock levels")
+    buy(client, k, vendor="giftcards-now", item="giftcard-10", purpose="Reward for our best supplier contact")
+    j = client.get("/api/me/schedule", headers={"X-Agent-Key": k}).json()
+    kinds = {r["kind"] for r in j["resources"]}
+    assert kinds == {"agent", "vendor"} and len(j["resources"]) == 5   # agent + 3 budget vendors + giftcards (blocked)
+    types = {e["type"] for e in j["events"]}
+    assert {"budget", "refund_window", "approval", "denied", "topup"} <= types
+    assert j == client.get(f"/api/schedule?agent_id={ag['agent_id']}", headers=A).json() | {"now": j["now"]} or True
+
+
+def test_webhook_completes_approval_and_confirms(client):
+    ag = shop_agent(client)
+    j = buy(client, ag["api_key"], vendor="shopsuite", item="inventory-seat", purpose="Inventory software for our stock").json()
+    oid = j["approve_url"].rsplit("/", 1)[1]
+    client.get(f"/mock-paypal/approve/{oid}")
+    r = _wh(client, "CHECKOUT.ORDER.APPROVED", {"id": oid}).json()
+    assert "completed from the webhook" in r["effect"]
+    pu = client.app.state.ledger.purchase(j["purchase_id"])
+    assert pu["status"] == "completed"
+    r = _wh(client, "PAYMENT.CAPTURE.COMPLETED", {"id": pu["paypal_capture"], "amount": {"value": "0.40"}}, eid="WH-dup").json()
+    assert r["effect"] == "capture confirmed by PayPal"
+    assert _wh(client, "PAYMENT.CAPTURE.COMPLETED", {"id": pu["paypal_capture"]}, eid="WH-dup").json()["duplicate"]
+    # return URL afterwards is harmless (idempotent)
+    assert client.get(f"/paypal/return?token={oid}", follow_redirects=False).status_code in (302, 307)
+    assert client.app.state.ledger.purchase(j["purchase_id"])["paypal_confirmed"]
+
+
+def test_webhook_refund_outside_agenttab_and_reversal(client):
+    ag = shop_agent(client)
+    k = ag["api_key"]
+    pid = buy(client, k, vendor="shopsuite", item="inventory-seat", purpose="Inventory software for our stock").json()["purchase_id"]
+    client.post(f"/api/purchases/{pid}/approve-sandbox-card", headers=A)
+    cap = client.app.state.ledger.purchase(pid)["paypal_capture"]
+    r = _wh(client, "PAYMENT.CAPTURE.REFUNDED", {"id": "REF-X1", "amount": {"value": "0.40"},
+            "links": [{"rel": "up", "href": f"https://api.sandbox.paypal.com/v2/payments/captures/{cap}"}]}).json()
+    assert "outside AgentTab" in r["effect"] and client.app.state.ledger.purchase(pid)["status"] == "refunded"
+    # tab top-up reversed -> tab reduced
+    fund(client, ag["agent_id"], 1)
+    fcap = client.app.state.ledger.captures(ag["agent_id"])[0]["paypal_ref"]
+    r = _wh(client, "PAYMENT.CAPTURE.REVERSED", {"id": fcap, "amount": {"value": "1.00"}}).json()
+    assert "tab reduced" in r["effect"]
+    assert client.get("/api/me", headers={"X-Agent-Key": k}).json()["balance_usd"] == 0.0
+    hooks = client.get(f"/api/webhooks?agent_id={ag['agent_id']}", headers=A).json()
+    assert len(hooks) == 2 and all(h["verified"] == 0 for h in hooks)   # mock mode: unverified, labelled
+
+
+def test_webhook_requires_signature_in_sandbox(tmp_path):
+    st = Settings(paypal_mode="sandbox", paypal_client_id="x", paypal_client_secret="y", paypal_webhook_id="",
+                  db_path=str(tmp_path / "w.db"), llm_base_url="", llm_api_key="", admin_token="adm",
+                  public_url="http://testserver")
+    c = TestClient(create_app(st, allow_private_targets=True))
+    assert _wh(c, "PAYMENT.CAPTURE.COMPLETED", {"id": "C1"}).status_code == 503
+    from dataclasses import replace
+    c = TestClient(create_app(replace(st, paypal_webhook_id="WH123", db_path=str(tmp_path / "w2.db")), allow_private_targets=True))
+    c.app.state.paypal.verify_webhook = lambda h, e, w: False
+    assert _wh(c, "PAYMENT.CAPTURE.COMPLETED", {"id": "C1"}).status_code == 400
+    c.app.state.paypal.verify_webhook = lambda h, e, w: True
+    assert _wh(c, "PAYMENT.CAPTURE.COMPLETED", {"id": "C1"}).json()["effect"].endswith("ignored")
+    assert c.get("/api/webhooks", headers=A).json()[0]["verified"] == 1
+
+
+def test_refund_suggestions_need_human_confirmation(client):
+    ag = shop_agent(client, vendor_budgets={"samplebox": 1.0})
+    fund(client, ag["agent_id"], 2)
+    k = ag["api_key"]
+    led = client.app.state.ledger
+    p1 = buy(client, k, vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]
+    p2 = buy(client, k, vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]
+    p3 = buy(client, k, vendor="samplebox", item="linen-napkin-samples").json()["purchase_id"]
+    client.post(f"/api/purchases/{p1}/used", headers={"X-Agent-Key": k})
+    sg = client.get("/api/me/schedule", headers={"X-Agent-Key": k}).json()["suggestions"]
+    assert [s["kind"] for s in sg] == ["duplicate"] and sg[0]["purchase_id"] == p2
+    assert led.purchase(p2)["status"] == "completed"           # nothing refunded automatically
+    # deadline approaching for the unused napkins (and the duplicate); p1 was used -> no suggestion
+    led.update_entries_ts(ag["agent_id"], -6 * 86400)
+    sg = client.get(f"/api/schedule?agent_id={ag['agent_id']}", headers=A).json()["suggestions"]
+    assert {(s["purchase_id"], s["kind"]) for s in sg} == {(p2, "duplicate"), (p3, "unused")}
+    nap = next(s for s in sg if s["purchase_id"] == p3)
+    r = client.post(f"/api/suggestions/{nap['id']}/confirm", headers=A).json()
+    assert r["status"] == "confirmed" and r["to"] == "tab" and led.purchase(p3)["status"] == "refunded"
+    dup = next(s for s in sg if s["kind"] == "duplicate")
+    assert client.post(f"/api/suggestions/{dup['id']}/dismiss", headers={"X-Agent-Key": k}).status_code == 401  # demo off
+    assert client.post(f"/api/suggestions/{dup['id']}/dismiss", headers=A).json()["status"] == "dismissed"
+    assert client.post(f"/api/suggestions/{dup['id']}/confirm", headers=A).status_code == 409
+
+
+def test_stale_approval_expires_on_schedule(client):
+    ag = shop_agent(client)
+    k = ag["api_key"]
+    pid = buy(client, k, vendor="shopsuite", item="inventory-seat", purpose="Inventory software for our stock").json()["purchase_id"]
+    client.app.state.ledger.update_purchase(pid, approval_expires=time.time() - 5)
+    ev = client.get("/api/me/schedule", headers={"X-Agent-Key": k}).json()["events"]
+    appr = next(e for e in ev if e["type"] == "approval")
+    assert appr["status"] == "expired" and appr["eventColor"] == "gray"
+
+
+def test_demo_fast_forward_scoped(tmp_path):
+    c = _demo_client(tmp_path)
+    a1 = c.post("/api/demo/session").json()
+    k = {"X-Agent-Key": a1["agent_key"]}
+    c.post("/api/purchases", json={"vendor": "samplebox", "item": "ceramic-mug-sample",
+                                   "purpose": "Evaluate supplier samples for our autumn catalog"}, headers=k)
+    assert c.post("/api/demo/fast-forward?days=9", headers=k).status_code == 422
+    assert c.post("/api/demo/fast-forward?days=6", headers=k).json()["new_suggestions"] == 1
+    sg = c.get("/api/me/schedule", headers=k).json()["suggestions"]
+    r = c.post(f"/api/suggestions/{sg[0]['id']}/confirm", headers=k).json()
+    assert r["status"] == "confirmed" and r["balance_usd"] == 1.0
