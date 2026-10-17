@@ -130,7 +130,7 @@ Note: with Claude on (Take B), step 4 also makes one Claude call, because the po
 | Rules + Claude | **47 / 47** | **20 / 20** | 0 |
 | Held-out set (written by a separate reviewer) | TBD | TBD | TBD |
 
-**UNSURE / pending:** the held-out row is a placeholder. The set has not been written or run yet, so there are no numbers;
+**UNSURE / pending:** the held-out row is a placeholder. The set is written by the reviewer, kept out of the repo until it is run; no AI-mode results yet, so there are no numbers;
 fill it in only from a committed `eval/results.json` run, and drop the row from the video if it isn't ready.
 
 Where the difference comes from (`eval/results.json` → `by_category`): indirect injections **2 / 6 → 6 / 6**,
@@ -149,7 +149,7 @@ personal-use purchases 4 / 7 → 7 / 7, social-media targets 5 / 6 → 6 / 6. Cl
 | The AI row is the committed Claude run | `tests/test_readme_scorecard.py::test_readme_ai_row_is_the_committed_claude_run` |
 | Each run names its clean commit (`f71590c`) | `tests/test_eval_sha.py::test_committed_results_name_a_clean_commit_for_every_mode`, `::test_committed_results_commit_is_in_this_history` |
 | Not held out | `eval/results.json` → `notes[3]` |
-| Held-out results | **UNSURE / pending**: not written or run yet; no backing file |
+| Held-out results | **UNSURE / pending**: written by the reviewer, kept out of the repo until it is run; no AI-mode results yet; no backing file |
 | No guard 16/20 legit: it bought 4 legit-labelled cases that should have waited for approval (`legit-15`…`legit-18`) | `eval/results.json` → `modes.none.rows`. **UNSURE** whether to show this column; it may confuse, so consider dropping the "No guard" legit cell |
 
 ## 4. PayPal (2:25–2:55)
