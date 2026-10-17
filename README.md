@@ -1,5 +1,9 @@
 # AgentTab: a purchasing agent for small shops, with a PayPal-funded tab
 
+**Judges: start with [docs/judge-instructions.md](docs/judge-instructions.md)** (a 1-minute path through the hosted demo,
+plus what is real and what is simulated). Threats and the tests that cover them: [docs/threat-model.md](docs/threat-model.md).
+Live demo: https://agenttab.onrender.com (PayPal sandbox only, no real money).
+
 **Lumen & Loom** is a 6-person online shop selling home textiles and ceramics. Its AI agent orders supplier samples,
 buys SaaS seats and pays for competitor research. Giving that agent a company card is reckless; approving every
 $0.20 sample by hand defeats the point.
@@ -188,8 +192,13 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 
 ## Tests
 ```bash
-pip install pytest && pytest -q     # 88 tests (+2 live): concurrency (parallel buys, capture/webhook races, double approval), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap), per-capture refunds, procurement, webhooks, schedule, eval runner
+pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
+90 offline tests (+2 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+approval), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
+per-capture refunds, procurement, webhooks, schedule, eval runner, and a docs check that every test the
+[threat model](docs/threat-model.md) cites exists. [`ci/github-actions-ci.yml`](ci/github-actions-ci.yml) runs
+them on Python 3.12 and 3.13, plus the offline eval, which must match the committed scorecard.
 
 ## Built with
 PayPal Orders v2, Payments v2 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Inter (SIL OFL), any OpenAI-compatible LLM
