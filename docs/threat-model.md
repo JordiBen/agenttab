@@ -27,10 +27,28 @@ Every row names the tests that prove the mitigation. `tests/test_docs.py` fails 
 | A webhook redelivered concurrently is applied twice | Event id inserted (`INSERT OR IGNORE`) before processing | `test_webhook_event_processed_once_under_concurrency` |
 | Unapproved order credited | Credit only after a COMPLETED capture | `test_unapproved_order_not_credited`, `test_402_then_fund_then_charge` |
 | Refund returns more than a capture took in | Refunds tracked per capture | `test_tab_refund_tracks_refunded_amount_per_capture`, `test_refund_unused`, `test_tab_refund_inside_and_outside_window` |
-| Failed vendor call is charged | Charge only after fulfilment; approval-funded failures are auto-refunded | `test_failed_tool_not_charged` |
+| Failed vendor call is charged | Charge only after fulfilment; approval purchases are only *held* (PayPal authorization) and the hold is voided if delivery fails | `test_failed_tool_not_charged`, `test_vendor_failure_voids_hold_and_charges_nothing` |
 | Instantly-delivered data refunded / bought in bulk | Live data is final and quantity 1 | `test_live_items_quantity_one_and_non_refundable` |
 | NaN / Infinity / out-of-range amounts | Rejected at validation and in `money()` | `test_nan_and_infinite_amounts_rejected` |
 | Retried PayPal call creates a second order/capture/refund | Operation-derived PayPal-Request-Id | `test_paypal_request_ids_are_derived_from_the_operation` |
+
+## PayPal holds, declines, reconciliation and saved cards
+
+| Threat | Mitigation | Tests |
+|---|---|---|
+| Approved purchase is charged but never delivered | Approval links use `intent=AUTHORIZE`: the hold is captured only after delivery, for exactly the approved amount; otherwise voided | `test_approval_link_authorizes_then_captures_after_delivery`, `test_vendor_failure_voids_hold_and_charges_nothing`, `test_authorized_amount_must_match_approved_amount` |
+| Approval link paid after it expired, or while the agent is frozen | The hold is voided, nothing charged | `test_late_paid_link_on_expired_approval_is_voided`, `test_frozen_agent_hold_is_voided_not_captured` |
+| Return URL and webhook both authorize the same link | Same atomic order claim; one hold, one capture | `test_return_url_and_webhook_race_authorizes_and_captures_once` |
+| Forged "capture completed" webhook completes an approval | Authorize-intent purchases complete only through AgentTab's own capture | `test_capture_webhook_for_authorize_order_does_not_complete_purchase`, `test_order_capture_endpoint_refuses_authorize_order` |
+| Card or checkout capture declined | Nothing credited; the order is released for a retry | `test_card_topup_decline_credits_nothing`, `test_checkout_capture_decline_releases_order_for_retry` |
+| Capture declined *after* delivery | Hold voided, purchase flagged `capture_declined`, agent frozen | `test_capture_decline_after_delivery_freezes_agent` |
+| Refund declined by PayPal | Purchase stays `completed`, no ledger refund; a retry works | `test_refund_decline_keeps_purchase_completed_then_retry_works` |
+| Decline drills abused or leaking to live | `X-Simulate-Decline` needs the admin token, an allowlisted code and the sandbox; it uses a fresh PayPal-Request-Id | `test_simulated_decline_is_owner_and_allowlist_only`, `test_mock_response_header_only_in_sandbox_and_fresh_request_id` |
+| Ledger and PayPal drift apart (refund/reversal in the dashboard, missed webhook, forged credit) | `POST /api/agents/{id}/reconcile` compares each capture's amount, status and refunds with PayPal; any mismatch or a negative tab freezes the agent (`423` on purchases and top-up requests) until the owner unfreezes | `test_reconcile_clean_then_outside_refund_freezes`, `test_reconcile_flags_each_paypal_side_change`, `test_reconcile_unknown_capture_and_amount_mismatch`, `test_reconcile_lookup_error_is_unverified_not_frozen` |
+| Reversal or outside refund leaves the tab negative | The webhook freezes the agent | `test_reversal_webhook_freezes_and_negative_balance_reported`, `test_outside_topup_refund_into_negative_freezes` |
+| Agent or demo visitor freezes/unfreezes, or uses the saved card | Owner-only endpoints; the first freeze reason is kept | `test_freeze_endpoints_are_admin_only`, `test_demo_agent_cannot_use_vault_or_freeze_endpoints` |
+| Agent drains the owner's saved card | Auto top-up runs only after the guard allowed the purchase, never for a frozen agent, within the owner's 30-day cap (manual saved-card top-ups count), max 5 a day, serialized per agent; the Vault token never leaves the server | `test_auto_topup_only_after_guard_allows_and_within_cap`, `test_parallel_purchases_never_auto_topup_past_cap`, `test_manual_saved_card_topups_count_toward_cap`, `test_auto_topup_never_runs_for_frozen_agent_and_delete_turns_it_off`, `test_saved_card_topup_and_token_never_exposed` |
+| Saved card declined during auto top-up | `402` with the reason; nothing bought or credited | `test_auto_topup_card_decline_is_402_and_credits_nothing` |
 
 ## Webhooks and PayPal
 

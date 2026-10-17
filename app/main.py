@@ -21,7 +21,7 @@ import secrets
 import threading
 import time
 from urllib.parse import quote, urlparse
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -35,7 +35,7 @@ from .config import Settings, get_settings
 from .guard import SpendGuard
 from .ledger import Ledger, from_micro, to_micro
 from .ratelimit import DAY, HOUR, RateLimiter
-from .paypal import PayPalClient, PayPalError
+from .paypal import SIMULATABLE, PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
 from . import procurement as pr
 from . import schedule as sched
@@ -75,6 +75,14 @@ class PurchaseReq(BaseModel):
 class TopUp(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     amount_usd: float = 5.0
+
+class FreezeReq(BaseModel):
+    reason: str = Field(default="frozen by owner", min_length=1, max_length=300)
+
+class AutoTopUp(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    amount_usd: float | None = None          # size of one automatic saved-card top-up; null = off
+    monthly_cap_usd: float | None = None     # max automatic + manual saved-card top-ups per rolling 30 days
 
 class ToolCall(BaseModel):
     url: str = Field(max_length=2048)
@@ -175,6 +183,48 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(422, "amount must be between 0.01 and 500" + (" (or 0)" if allow_zero else ""))
         return d
 
+    # PayPal errors that mean "the payer's money said no" (vs. our/PayPal's fault): reported as 402.
+    DECLINES = SIMULATABLE | {"PAYMENT_DENIED", "INSTRUMENT_DECLINED", "TRANSACTION_REFUSED"}
+
+    def paypal_http(e: Exception) -> HTTPException:
+        if isinstance(e, HTTPException):
+            return e
+        issue = getattr(e, "issue", "")
+        if issue in DECLINES:
+            return HTTPException(402, f"PayPal declined the payment: {issue}")
+        return HTTPException(502, str(e)[:300])
+
+    def simulated_decline(request: Request) -> str:
+        """X-Simulate-Decline: <PayPal issue code> asks PayPal's sandbox (negative testing, PayPal-Mock-Response)
+        to decline the next PayPal call of this request. Owner (admin token) only, sandbox or offline mock only."""
+        code = request.headers.get("x-simulate-decline", "").strip()
+        if not code:
+            return ""
+        tok = request.headers.get("x-admin-token", "")
+        if not (tok and hmac.compare_digest(tok.encode(), admin_token.encode())):
+            raise HTTPException(403, "decline simulation needs the admin token")
+        if not (paypal.mock or paypal.is_sandbox):
+            raise HTTPException(403, "decline simulation is only available in the PayPal sandbox")
+        if code not in SIMULATABLE:
+            raise HTTPException(422, f"can't simulate {code[:40]!r}; one of {sorted(SIMULATABLE)}")
+        return code
+
+    def freeze(aid: str, reason: str) -> bool:
+        if ledger.freeze(aid, reason):
+            log.warning("agent %s frozen: %s", aid, reason)
+            return True
+        return False
+
+    def freeze_if_negative(aid: str) -> None:
+        bal = ledger.balance(aid)
+        if bal < 0:
+            freeze(aid, f"tab balance went negative (${bal:.2f}) after a PayPal reversal or refund")
+
+    def refuse_if_frozen(a) -> None:
+        if a["frozen_reason"]:
+            raise HTTPException(423, {"error": "agent_frozen", "reason": a["frozen_reason"],
+                                      "note": "Spending is paused until the owner reconciles and unfreezes this agent."})
+
     def agent_view(a) -> dict:
         return {"agent_id": a["id"], "name": a["name"], "owner_email": a["owner_email"],
                 "policy": a["policy"], "daily_cap_usd": float(from_micro(a["daily_cap_micro"])),
@@ -186,7 +236,13 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "vendor_budgets": [{"vendor": vid, "name": pr.VENDORS.get(vid, {}).get("name", vid),
                                     "budget_usd": float(b),
                                     "spent_30d_usd": float(ledger.vendor_spent_since(a["id"], vid, time.time() - 30 * 86400))}
-                                   for vid, b in (pr.AgentConfig.from_row(a).vendor_budgets or {}).items()]}
+                                   for vid, b in (pr.AgentConfig.from_row(a).vendor_budgets or {}).items()],
+                "frozen": bool(a["frozen_reason"]), "frozen_reason": a["frozen_reason"],
+                "saved_card": a["vault_card"],
+                "auto_topup": ({"amount_usd": float(from_micro(a["auto_topup_micro"])),
+                                "monthly_cap_usd": float(from_micro(a["auto_topup_cap_micro"] or 0)),
+                                "used_30d_usd": float(ledger.vault_topups_since(a["id"], time.time() - 30 * 86400))}
+                               if a["auto_topup_micro"] and a["vault_id"] else None)}
 
     def vendor_budgets_in(d: dict[str, float] | None) -> dict | None:
         if d is None:
@@ -362,18 +418,20 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return _topup(aid, money(body.amount_usd))
 
     @app.post("/api/agents/{aid}/topup-sandbox-card", dependencies=[Depends(admin)])
-    def sandbox_card_topup(aid: str, body: TopUp):
-        """Sandbox/demo only: fund instantly with PayPal's test card (create+capture, no browser step)."""
+    def sandbox_card_topup(aid: str, body: TopUp, request: Request):
+        """Sandbox/demo only: fund instantly with PayPal's test card (create+capture, no browser step).
+        A declined card (402) credits nothing."""
         if not ledger.agent(aid):
             raise HTTPException(404, "no such agent")
         if not (paypal.mock or paypal.is_sandbox):
             raise HTTPException(403, "only available in PayPal sandbox")
         amount = money(body.amount_usd)
+        sim = simulated_decline(request)
         paypal_budget()
         try:
-            cap = paypal.sandbox_card_topup(amount, aid)
+            cap = paypal.sandbox_card_topup(amount, aid, simulate=sim)
         except PayPalError as e:
-            raise HTTPException(502, str(e))
+            raise paypal_http(e)
         ledger.add_order(cap["order_id"], aid, amount)
         ledger.mark_order(cap["order_id"], "CAPTURED")
         ledger.add_entry(aid, "fund", cap["amount"], paypal_ref=cap["capture_id"],
@@ -384,6 +442,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.post("/api/me/topup-request")
     def agent_topup_request(body: TopUp, request: Request, a=Depends(agent_from_key)):
         """The agent asks its human for more budget: returns a PayPal approval link to forward."""
+        refuse_if_frozen(a)
         amount = money(body.amount_usd)
         limit("topup-agent:" + a["id"], s.topup_requests_per_agent_hour, HOUR, "too many top-up requests for this agent; try later")
         limit("topup-ip:" + client_ip(request), 2 * s.topup_requests_per_agent_hour, HOUR, "too many top-up requests from your IP; try later")
@@ -420,15 +479,24 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             if o["status"] == "CAPTURED":
                 return done
             raise HTTPException(409, f"order is {o['status'].lower()}")
+        authorize = bool(pu) and (o["intent"] or "CAPTURE") == "AUTHORIZE"
         try:
             paypal_budget()
-            cap = paypal.capture_order(token)
-            if cap["status"] != "COMPLETED":
-                raise PayPalError(f"capture status {cap['status']}")
+            if authorize:      # approval link: place a hold now, capture only after the vendor delivers
+                auth = paypal.authorize_order(token)
+            else:
+                cap = paypal.capture_order(token)
+                if cap["status"] != "COMPLETED":
+                    raise PayPalError(f"capture status {cap['status']}")
         except (PayPalError, HTTPException) as e:
             ledger.claim_order(token, ("CAPTURING",), "CREATED")   # release so a retry can capture
-            raise HTTPException(402, f"capture failed: {getattr(e, 'detail', e)}")
-        if pu:  # this order was the approval link for one purchase
+            raise HTTPException(402, f"{'authorization' if authorize else 'capture'} failed: {getattr(e, 'detail', e)}")
+        if authorize:
+            complete_authorized(pu, auth["authorization_id"], auth["amount"], f"PayPal order {token}")
+            ledger.mark_order(token, "CAPTURED")
+            sched.sweep(ledger, pu["agent_id"])
+            return done
+        if pu:  # legacy intent=CAPTURE approval link for one purchase
             complete_approved(pu, cap["capture_id"], cap["amount"], f"PayPal order {token}")
             ledger.mark_order(token, "CAPTURED")
             sched.sweep(ledger, pu["agent_id"])
@@ -503,14 +571,20 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         # the limits inside a single SQLite write transaction as a second line of defence.
         with agent_lock(aid):
             a = ledger.agent(aid)
+            refuse_if_frozen(a)
             cfg = pr.AgentConfig.from_row(a)
             needs_approval = cfg.approval_threshold is not None and amount > cfg.approval_threshold
             balance = ledger.balance(aid)
-            if not needs_approval and amount > balance:  # check before spending an LLM call
+            auto = bool(a["vault_id"] and a["auto_topup_micro"] and a["auto_topup_cap_micro"])
+
+            def payment_required(why: str = ""):
                 return JSONResponse(status_code=402, headers={"X-AgentTab-Price": str(amount)}, content={
-                    "error": "payment_required", "price_usd": float(amount), "balance_usd": float(balance),
+                    "error": "payment_required", "price_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
+                    **({"auto_topup": why} if why else {}),
                     "topup": {"method": "POST", "endpoint": "/api/me/topup-request", "body": {"amount_usd": 5.0},
                               "note": "Returns a PayPal approval link for your human owner."}})
+            if not needs_approval and amount > balance and not auto:  # check before spending an LLM call
+                return payment_required()
             out = pr.decide(cfg, p, state_for(aid), guard_mode, guard, allow_private_targets)
             tag = f"[{out.layer}] {out.reason}"
             if out.outcome == "block":
@@ -522,10 +596,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 paypal_budget()
                 try:
                     o = paypal.create_order(amount, aid, f"Approve: {pr.VENDORS[p.vendor]['name']} {p.item} x{p.quantity}",
-                                            op_id=f"approval-{aid}-{secrets.token_hex(6)}")
+                                            op_id=f"approval-{aid}-{secrets.token_hex(6)}", intent="AUTHORIZE")
                 except PayPalError as e:
                     raise HTTPException(502, str(e))
-                ledger.add_order(o["id"], aid, amount)
+                ledger.add_order(o["id"], aid, amount, intent="AUTHORIZE")
                 expires = time.time() + 86400
                 pid = ledger.add_purchase(aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose,
                                           "pending_approval", "direct", None, expires, out.layer, out.reason,
@@ -535,7 +609,12 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 return JSONResponse(status_code=202, content={
                     "status": "approval_required", "purchase_id": pid, "amount_usd": float(amount),
                     "approve_url": o["approve_url"], "approval_expires_at": expires, "guard": out.as_dict(),
-                    "note": "Forward approve_url to your human. Paying it approves and funds this one purchase."})
+                    "note": "Forward approve_url to your human. Approving places a PayPal hold; it is captured only "
+                            "after the vendor delivers, and voided (never charged) if delivery fails."})
+            if amount > ledger.balance(aid):
+                why = auto_topup(ledger.agent(aid), amount - ledger.balance(aid))
+                if why:
+                    return payment_required(why)
             try:
                 result = fulfill(p)
             except Exception as e:  # failed calls are never charged
@@ -551,6 +630,91 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             return {"purchase_id": pid, "charged_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
                     "refund_deadline": deadline, "refundable": deadline is not None, "guard": out.as_dict(),
                     "result": result}
+
+    def auto_topup(a, shortfall: Decimal) -> str:
+        """Charge the owner's saved (Vault) sandbox card so an already-guard-approved purchase can go through.
+        Only within the owner's rolling-30-day cap and at most 5 times a day. Returns "" on success, or why not."""
+        aid = a["id"]
+        if not (a["vault_id"] and a["auto_topup_micro"] and a["auto_topup_cap_micro"]):
+            return "no saved card / auto top-up configured"
+        size = max(from_micro(a["auto_topup_micro"]), shortfall).quantize(Decimal("0.01"), rounding=ROUND_UP)
+        cap = from_micro(a["auto_topup_cap_micro"])
+        used = ledger.vault_topups_since(aid, time.time() - 30 * 86400)
+        if used + size > cap:
+            return f"saved-card top-ups would exceed the owner's 30-day cap (${used:.2f} of ${cap:.2f} used)"
+        if not limiter.allow("autotopup:" + aid, 5, DAY):
+            return "auto top-up limit (5 per day) reached"
+        try:
+            paypal_budget()
+            cap_ = paypal.charge_vault(a["vault_id"], size, aid, op_id=f"auto-{aid}-{secrets.token_hex(6)}")
+        except (PayPalError, HTTPException) as e:
+            return f"saved card was not charged: {getattr(e, 'issue', '') or getattr(e, 'detail', '') or 'PayPal error'}"
+        ledger.add_order(cap_["order_id"], aid, size)
+        ledger.mark_order(cap_["order_id"], "CAPTURED")
+        ledger.add_entry(aid, "fund", cap_["amount"], "vault-auto", paypal_ref=cap_["capture_id"],
+                         reason=f"automatic saved-card top-up (PayPal order {cap_['order_id']})")
+        return ""
+
+    def complete_authorized(pu, auth_id: str, amount: Decimal, ref: str, frm: str = "pending_approval",
+                            simulate: str = "") -> bool:
+        """Approval purchases: PayPal holds the money (authorization). Deliver first, then capture exactly the
+        approved amount. If delivery fails, the agent is frozen, the approval expired, or the amount doesn't
+        match, the hold is voided: nothing is charged and nothing needs refunding. If PayPal declines the
+        capture after delivery, the purchase is flagged and the agent frozen for the owner to reconcile."""
+        pid = pu["id"]
+
+        def void(status: str, why: str, **extra):
+            try:
+                paypal.void_authorization(auth_id)
+                ledger.update_purchase(pid, status=status, reason=why, **extra)
+            except PayPalError:
+                log.exception("void failed for %s", pid)
+                ledger.update_purchase(pid, status=status, reason=why + " (void failed; the hold expires on its own)",
+                                       flag="void_failed", **extra)
+
+        if not ledger.claim_purchase(pid, frm, "completing"):
+            try:                           # lost the race (already paid another way): release this hold
+                paypal.void_authorization(auth_id)
+            except PayPalError:
+                log.exception("void of losing authorization %s failed", auth_id)
+            return False
+        ledger.update_purchase(pid, paypal_authorization=auth_id)
+        pu = ledger.purchase(pid)
+        aid = pu["agent_id"]
+        a = ledger.agent(aid)
+        approved = from_micro(pu["amount_micro"]).quantize(Decimal("0.01"))
+        if Decimal(amount).quantize(Decimal("0.01")) != approved:
+            void("failed_voided", f"PayPal authorized ${amount}, approved amount is ${approved}; hold voided")
+            return True
+        if a["frozen_reason"]:
+            void("failed_voided", "agent is frozen for reconciliation; hold voided, nothing charged")
+            return True
+        if pu["approval_expires"] and time.time() > pu["approval_expires"]:
+            void("expired", "approval link was paid after it expired; hold voided, nothing charged")
+            return True
+        p = pr.Purchase(pu["vendor"], pu["item"], pu["quantity"], pu["purpose"], pu["target"])
+        try:
+            result = fulfill(p)
+        except Exception as e:
+            void("failed_voided", f"vendor failed ({type(e).__name__}); PayPal hold voided, nothing charged")
+            return True
+        try:
+            cap = paypal.capture_authorization(auth_id, approved, simulate=simulate)
+            if cap["status"] not in ("COMPLETED", "PENDING"):
+                raise PayPalError(f"capture status {cap['status']}", cap["status"])
+        except PayPalError as e:
+            issue = e.issue or "error"
+            void("capture_declined", f"PayPal declined the capture ({issue}) after delivery; not charged",
+                 flag="capture_declined", fulfillment=json.dumps(result)[:4000])
+            freeze(aid, f"capture for delivered purchase {pid} was declined by PayPal ({issue})")
+            return True
+        ledger.add_entry(aid, "fund", cap["amount"], "approval", paypal_ref=cap["capture_id"],
+                         reason=f"approval for {pid}: {ref}, authorization {auth_id} captured after delivery")
+        ledger.add_entry(aid, "charge", approved, f"{p.vendor}:{p.item}", p.target, p.purpose, "allow",
+                         f"[approval] approved by owner via PayPal ({ref})", pid)
+        ledger.update_purchase(pid, status="completed", paypal_capture=cap["capture_id"],
+                               refund_deadline=refund_deadline(a, p.vendor), fulfillment=json.dumps(result)[:4000])
+        return True
 
     def complete_approved(pu, capture_id: str, amount: Decimal, ref: str, frm: str = "pending_approval"):
         """Complete an approved purchase once. pending_approval -> completing is an atomic UPDATE, so the
@@ -582,7 +746,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                                refund_deadline=refund_deadline(a, p.vendor), fulfillment=json.dumps(result)[:4000])
         return True
 
-    def refund_one(pu, note: str = "") -> dict:
+    def refund_one(pu, note: str = "", simulate: str = "") -> dict:
         pid = pu["id"]
         pu = ledger.purchase(pid)
         if pu["status"] != "completed":
@@ -599,7 +763,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if pu["funding"] == "direct":
             try:
                 paypal_budget()
-                r = paypal.refund_capture(pu["paypal_capture"], amount, op_id=f"purchase-{pid}")
+                r = paypal.refund_capture(pu["paypal_capture"], amount, op_id=f"purchase-{pid}", simulate=simulate)
             except (PayPalError, HTTPException) as e:
                 ledger.claim_purchase(pid, "refunding", "completed")
                 raise HTTPException(502, str(getattr(e, "detail", e)))
@@ -608,6 +772,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                              reason=f"{why}: PayPal capture {pu['paypal_capture']} refunded")
             ref = r["id"]
         else:
+            if simulate:
+                ledger.claim_purchase(pid, "refunding", "completed")
+                raise HTTPException(422, "tab refunds don't call PayPal; nothing to decline")
             ledger.add_entry(aid, "credit", amount, f"{pu['vendor']}:{pu['item']}", reason=why + " to tab")
             ref = None
         ledger.update_purchase(pid, status="refunded", refunded_ts=time.time())
@@ -649,14 +816,14 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return ledger.purchases(agent_id)
 
     @app.post("/api/purchases/{pid}/refund")
-    def refund_purchase(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+    def refund_purchase(pid: str, request: Request, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
         """Refund one purchase inside its refund window. Tab-funded: credit returns to the tab.
         Approval-funded: the purchase's own PayPal capture is refunded."""
         pu = purchase_for(pid, x_admin_token, x_agent_key)
-        return refund_one(pu)
+        return refund_one(pu, simulate=simulated_decline(request))
 
     @app.post("/api/purchases/{pid}/approve-sandbox-card")
-    def approve_sandbox_card(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+    def approve_sandbox_card(pid: str, request: Request, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
         """Owner approves a pending purchase and pays it with PayPal's sandbox test card (no browser step).
         In demo mode the visitor plays the owner of their own demo agent."""
         pu = purchase_for(pid, x_admin_token, x_agent_key)
@@ -667,6 +834,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(409, "approval has expired")
         if not (paypal.mock or paypal.is_sandbox):
             raise HTTPException(403, "only available in PayPal sandbox")
+        sim = simulated_decline(request)      # declines the capture after delivery (owner drills only)
+        refuse_if_frozen(ledger.agent(pu["agent_id"]))
         # Claim the purchase first so two clicks can't charge the card twice, and retire the PayPal link
         # (unless the payer is already capturing it, in which case that path wins).
         if not ledger.claim_purchase(pid, "pending_approval", "paying"):
@@ -677,17 +846,20 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         amount = from_micro(pu["amount_micro"])
         try:
             paypal_budget()
-            cap = paypal.sandbox_card_topup(amount, pu["agent_id"], op_id=f"approve-{pid}")
+            au = paypal.card_authorize(amount, pu["agent_id"], op_id=f"approve-{pid}",
+                                       description=f"Approve: {pu['vendor']} {pu['item']} x{pu['quantity']}")
         except (PayPalError, HTTPException) as e:
             ledger.claim_purchase(pid, "paying", "pending_approval")
             if pu["paypal_order"]:
                 ledger.claim_order(pu["paypal_order"], ("SUPERSEDED",), "CREATED")
-            raise e if isinstance(e, HTTPException) else HTTPException(502, str(e))
-        complete_approved(pu, cap["capture_id"], cap["amount"], f"PayPal order {cap['order_id']} (sandbox test card)",
-                          frm="paying")
+            raise paypal_http(e)
+        complete_authorized(pu, au["authorization_id"], au["amount"],
+                            f"PayPal order {au['order_id']} (sandbox test card)", frm="paying", simulate=sim)
         pu = ledger.purchase(pid)
-        return {"purchase_id": pid, "status": pu["status"], "paypal_order_id": cap["order_id"],
-                "paypal_capture_id": cap["capture_id"], "refund_deadline": pu["refund_deadline"]}
+        return {"purchase_id": pid, "status": pu["status"], "paypal_order_id": au["order_id"],
+                "paypal_authorization_id": au["authorization_id"], "paypal_capture_id": pu["paypal_capture"] or None,
+                "refund_deadline": pu["refund_deadline"], "flag": pu["flag"],
+                **({"note": pu["reason"]} if pu["status"] != "completed" else {})}
 
     @app.post("/api/purchases/{pid}/reject")
     def reject_purchase(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
@@ -697,6 +869,151 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if pu["paypal_order"]:
             ledger.claim_order(pu["paypal_order"], ("CREATED",), "CANCELLED")
         return {"purchase_id": pid, "status": "rejected"}
+
+    # ---------------- reconciliation freeze ----------------
+    def agent_or_404(aid: str):
+        a = ledger.agent(aid)
+        if not a:
+            raise HTTPException(404, "no such agent")
+        return a
+
+    @app.post("/api/agents/{aid}/freeze", dependencies=[Depends(admin)])
+    def freeze_agent(aid: str, body: FreezeReq):
+        agent_or_404(aid)
+        freeze(aid, body.reason)
+        return agent_view(ledger.agent(aid))
+
+    @app.post("/api/agents/{aid}/unfreeze", dependencies=[Depends(admin)])
+    def unfreeze_agent(aid: str):
+        agent_or_404(aid)
+        ledger.unfreeze(aid)
+        return agent_view(ledger.agent(aid))
+
+    @app.post("/api/agents/{aid}/reconcile", dependencies=[Depends(admin)])
+    def reconcile(aid: str):
+        """Compare the ledger with PayPal for this agent's newest 50 captures (GET /v2/payments/captures/{id}):
+        amount, status and refunds. Any mismatch, or a negative tab, freezes the agent (no new spending) until
+        the owner unfreezes it. Lookups that fail transiently are reported as unverified, not as mismatches."""
+        agent_or_404(aid)
+        problems, rows, unverified = [], [], 0
+        bal = ledger.balance(aid)
+        if bal < 0:
+            problems.append(f"tab balance is negative (${bal:.2f})")
+        for fe in ledger.fund_entries(aid, 50):
+            cid = fe["paypal_ref"]
+            amt = from_micro(fe["amount_micro"]).quantize(Decimal("0.01"))
+            refunded = ledger.refunded_on_capture(cid).quantize(Decimal("0.01"))
+            row = {"capture": cid, "source": fe["tool"] or "top-up", "ledger_usd": float(amt),
+                   "ledger_refunded_usd": float(refunded)}
+            rows.append(row)
+            if refunded > amt:
+                problems.append(f"capture {cid}: ledger refunded ${refunded} of a ${amt} capture")
+            paypal_budget()
+            try:
+                pc = paypal.get_capture(cid)
+            except PayPalError as e:
+                if e.status == 404:
+                    row["paypal_status"] = "NOT_FOUND"
+                    problems.append(f"capture {cid} is credited in the ledger but PayPal has no such capture")
+                else:
+                    row["paypal_status"], unverified = "UNVERIFIED", unverified + 1
+                continue
+            st, pamt = pc["status"], Decimal(pc["amount"]).quantize(Decimal("0.01"))
+            row.update(paypal_status=st, paypal_usd=float(pamt))
+            if pamt != amt:
+                problems.append(f"capture {cid}: PayPal amount ${pamt}, ledger ${amt}")
+            if st in ("DECLINED", "FAILED", "REVERSED") and refunded < amt:
+                problems.append(f"capture {cid} is {st} at PayPal but still credited in the ledger")
+            elif st == "REFUNDED" and refunded < amt:
+                problems.append(f"capture {cid} is fully refunded at PayPal; ledger shows ${refunded} refunded")
+            elif st == "PARTIALLY_REFUNDED" and refunded == 0:
+                problems.append(f"capture {cid} is partially refunded at PayPal; ledger shows no refund")
+            elif st in ("COMPLETED", "PENDING") and refunded > 0:
+                problems.append(f"capture {cid}: ledger shows ${refunded} refunded, PayPal shows no refund")
+            row["ok"] = not any(cid in pr_ for pr_ in problems)
+        froze = bool(problems) and freeze(aid, "reconciliation: " + problems[0])
+        a = ledger.agent(aid)
+        return {"agent_id": aid, "checked": len(rows), "unverified": unverified, "mismatches": problems,
+                "ok": not problems, "frozen": bool(a["frozen_reason"]), "frozen_now": froze,
+                "frozen_reason": a["frozen_reason"], "captures": rows, "balance_usd": float(bal)}
+
+    # ---------------- saved card (PayPal Vault, sandbox) ----------------
+    def sandbox_only():
+        if not (paypal.mock or paypal.is_sandbox):
+            raise HTTPException(403, "only available in PayPal sandbox")
+
+    @app.post("/api/agents/{aid}/saved-card", dependencies=[Depends(admin)])
+    def save_card(aid: str):
+        """Owner saves PayPal's sandbox test card in PayPal Vault (setup token -> payment token). Only the
+        brand and last 4 digits are shown; the Vault token stays server-side."""
+        a = agent_or_404(aid)
+        sandbox_only()
+        if a["vault_id"]:
+            raise HTTPException(409, f"a card is already saved ({a['vault_card']}); delete it first")
+        paypal_budget()
+        try:
+            v = paypal.vault_sandbox_card(op_id=f"{aid}-{secrets.token_hex(6)}")
+        except PayPalError as e:
+            raise paypal_http(e)
+        ledger.set_vault(aid, v["vault_id"], f"{v['brand']} {v['last4']}")
+        return agent_view(ledger.agent(aid))
+
+    @app.delete("/api/agents/{aid}/saved-card", dependencies=[Depends(admin)])
+    def delete_card(aid: str):
+        a = agent_or_404(aid)
+        if not a["vault_id"]:
+            raise HTTPException(404, "no saved card")
+        try:
+            paypal_budget()
+            paypal.delete_vault_token(a["vault_id"])
+        except (PayPalError, HTTPException) as e:
+            raise paypal_http(e)
+        ledger.set_vault(aid, None, None)      # also turns auto top-up off
+        return agent_view(ledger.agent(aid))
+
+    @app.post("/api/agents/{aid}/topup-saved-card", dependencies=[Depends(admin)])
+    def topup_saved_card(aid: str, body: TopUp, request: Request):
+        """Owner tops up the tab from the saved card (merchant-initiated, no browser step). Counts toward the
+        30-day saved-card cap when one is set."""
+        a = agent_or_404(aid)
+        sandbox_only()
+        if not a["vault_id"]:
+            raise HTTPException(409, "no saved card; POST /api/agents/{id}/saved-card first")
+        amount = money(body.amount_usd)
+        if a["auto_topup_cap_micro"]:
+            used, cap = ledger.vault_topups_since(aid, time.time() - 30 * 86400), from_micro(a["auto_topup_cap_micro"])
+            if used + amount > cap:
+                raise HTTPException(409, f"saved-card top-ups would exceed the 30-day cap (${used:.2f} of ${cap:.2f} used)")
+        sim = simulated_decline(request)
+        paypal_budget()
+        try:
+            cap_ = paypal.charge_vault(a["vault_id"], amount, aid, op_id=f"topup-{aid}-{secrets.token_hex(6)}", simulate=sim)
+        except PayPalError as e:
+            raise paypal_http(e)
+        ledger.add_order(cap_["order_id"], aid, amount)
+        ledger.mark_order(cap_["order_id"], "CAPTURED")
+        ledger.add_entry(aid, "fund", cap_["amount"], "vault", paypal_ref=cap_["capture_id"],
+                         reason=f"saved-card top-up (PayPal order {cap_['order_id']})")
+        return {"order_id": cap_["order_id"], "capture_id": cap_["capture_id"], "amount_usd": float(cap_["amount"]),
+                "balance_usd": float(ledger.balance(aid))}
+
+    @app.put("/api/agents/{aid}/auto-topup", dependencies=[Depends(admin)])
+    def set_auto_topup(aid: str, body: AutoTopUp):
+        """Let purchases the guard already allowed top up the tab from the saved card when it runs short:
+        amount_usd per top-up, at most monthly_cap_usd per rolling 30 days. Both null turns it off."""
+        a = agent_or_404(aid)
+        if body.amount_usd is None and body.monthly_cap_usd is None:
+            ledger.set_auto_topup(aid, None, None)
+            return agent_view(ledger.agent(aid))
+        if body.amount_usd is None or body.monthly_cap_usd is None:
+            raise HTTPException(422, "set both amount_usd and monthly_cap_usd (or both null to turn off)")
+        if not a["vault_id"]:
+            raise HTTPException(409, "no saved card; POST /api/agents/{id}/saved-card first")
+        amount, cap = money(body.amount_usd), money(body.monthly_cap_usd)
+        if cap < amount:
+            raise HTTPException(422, "monthly_cap_usd must be at least amount_usd")
+        ledger.set_auto_topup(aid, amount, cap)
+        return agent_view(ledger.agent(aid))
 
     # ---------------- PayPal webhooks (sandbox) ----------------
     def _capture_of_refund(res: dict) -> str:
@@ -742,6 +1059,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 if fe:
                     ledger.add_entry(fe["agent_id"], "refund", amount, paypal_ref=refund_id, capture_ref=cid,
                                      reason=f"top-up capture {cid} refunded in PayPal")
+                    freeze_if_negative(fe["agent_id"])
                     return fe["agent_id"], "", f"top-up refunded in PayPal; tab reduced by ${amount:.2f}"
                 return "", "", "refund for an unknown capture; ignored"
             order_id = ((res.get("supplementary_data") or {}).get("related_ids") or {}).get("order_id", "")
@@ -749,7 +1067,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             fe = ledger.fund_entry_by_capture(rid)
             if typ == "PAYMENT.CAPTURE.COMPLETED":
                 if pu:
-                    if pu["status"] == "pending_approval" and \
+                    legacy = order_id and ledger.order(order_id) and (ledger.order(order_id)["intent"] or "CAPTURE") == "CAPTURE"
+                    if legacy and pu["status"] == "pending_approval" and \
                             complete_approved(pu, rid, amount, f"PayPal order {order_id} (webhook)"):
                         if order_id and ledger.order(order_id):
                             ledger.mark_order(order_id, "CAPTURED")
@@ -762,11 +1081,13 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 flag = typ.rsplit(".", 1)[1].lower()
                 if pu:
                     ledger.update_purchase(pu["id"], flag=flag)
-                    return pu["agent_id"], pu["id"], f"capture {flag}; purchase flagged for review"
+                    freeze(pu["agent_id"], f"PayPal {flag} the capture {rid} of purchase {pu['id']}")
+                    return pu["agent_id"], pu["id"], f"capture {flag}; purchase flagged, agent frozen for review"
                 if fe:
                     ledger.add_entry(fe["agent_id"], "refund", amount, paypal_ref=rid, capture_ref=rid,
                                      reason=f"top-up capture {flag} by PayPal; tab reduced")
-                    return fe["agent_id"], "", f"top-up capture {flag}; tab reduced by ${amount:.2f}"
+                    freeze(fe["agent_id"], f"PayPal {flag} the top-up capture {rid} (${amount:.2f})")
+                    return fe["agent_id"], "", f"top-up capture {flag}; tab reduced by ${amount:.2f}, agent frozen"
                 return "", "", f"capture {flag} for an unknown order"
             if typ == "PAYMENT.CAPTURE.PENDING":
                 return (pu["agent_id"] if pu else fe["agent_id"] if fe else ""), pu["id"] if pu else "", "capture pending at PayPal"

@@ -344,13 +344,13 @@ def test_double_card_approval_charges_once(tmp_path, monkeypatch):
     pid = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat",
               purpose="Inventory software to track stock across our two warehouses").json()["purchase_id"]
     pp = c.app.state.paypal
-    real, n = pp.sandbox_card_topup, []
+    real, n = pp.card_authorize, []
 
     def slow(*a, **k):
         n.append(1)
         time.sleep(0.2)
         return real(*a, **k)
-    pp.sandbox_card_topup = slow
+    pp.card_authorize = slow
     with ThreadPoolExecutor(4) as ex:
         codes = list(ex.map(lambda _: c.post(f"/api/purchases/{pid}/approve-sandbox-card", headers=A).status_code, range(4)))
     assert sorted(codes) == [200, 409, 409, 409] and len(n) == 1
@@ -369,21 +369,21 @@ def test_paypal_link_after_card_payment_is_not_captured(tmp_path):
     c.get(f"/mock-paypal/approve/{oid}")
     r = c.get(f"/paypal/return?token={oid}", follow_redirects=False)
     assert "payment_error=409" in r.headers["location"]
-    assert c.app.state.paypal.mock_capture_count == 0
+    pp = c.app.state.paypal
+    assert pp.mock_capture_count == 0 and pp.mock_authorize_count == 1   # only the card's hold, never the link
 
 
 def test_webhook_event_processed_once_under_concurrency(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
-    j = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat",
-            purpose="Inventory software to track stock across our two warehouses").json()
-    oid = j["approve_url"].rsplit("/", 1)[1]
-    ev = {"id": "CAP-X1", "amount": {"value": "0.40"}, "supplementary_data": {"related_ids": {"order_id": oid}}}
+    fund(c, ag["agent_id"], 2)
+    cap = c.app.state.ledger.captures(ag["agent_id"])[0]["paypal_ref"]
+    ev = {"id": cap, "amount": {"value": "2.00"}}
     with ThreadPoolExecutor(5) as ex:
-        res = list(ex.map(lambda _: _wh(c, "PAYMENT.CAPTURE.COMPLETED", ev, eid="WH-SAME").json(), range(5)))
+        res = list(ex.map(lambda _: _wh(c, "PAYMENT.CAPTURE.REVERSED", ev, eid="WH-SAME").json(), range(5)))
     assert sum(1 for r in res if r.get("duplicate")) == 4
-    funds = [e for e in c.app.state.ledger.entries(ag["agent_id"]) if e["kind"] == "fund"]
-    assert len(funds) == 1
+    refunds = [e for e in c.app.state.ledger.entries(ag["agent_id"]) if e["kind"] == "refund"]
+    assert len(refunds) == 1 and c.app.state.ledger.balance(ag["agent_id"]) == Decimal("0.00")
 
 
 # ---------- smaller items ----------

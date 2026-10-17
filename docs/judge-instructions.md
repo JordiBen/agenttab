@@ -21,7 +21,9 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 - **Code you may want to read:**
   - The decision pipeline: [`app/procurement.py`](../app/procurement.py) `decide()`, guard prompt in [`app/guard.py`](../app/guard.py).
   - Money: [`app/ledger.py`](../app/ledger.py) `commit_tab_purchase()` (re-checks limits in one `BEGIN IMMEDIATE` transaction).
-  - PayPal: [`app/paypal.py`](../app/paypal.py) (Orders v2, Payments v2 refunds, webhook signature verification).
+  - PayPal: [`app/paypal.py`](../app/paypal.py) (Orders v2, Payments v2 authorize/capture/void and refunds, Vault v3,
+    negative testing, webhook signature verification). Holds, the freeze and reconciliation are in
+    [`app/main.py`](../app/main.py) `complete_authorized()` and `reconcile()`.
 - **Threat model mapped to tests:** [`docs/threat-model.md`](threat-model.md).
 - **Run it locally, offline** (mock PayPal, no keys): `pip install -r requirements.txt -r requirements-dev.txt && pytest -q`.
 
@@ -31,6 +33,10 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 |---|---|---|
 | PayPal Orders v2 (create, approve, capture) | **Real, sandbox** | `api-m.sandbox.paypal.com`; owner top-ups and approval links open real sandbox checkout. |
 | Demo funding and "Approve (sandbox card)" | **Real, sandbox** | Orders v2 with PayPal's public sandbox test card, so judges don't have to log in to a sandbox buyer account. Refused against live PayPal. |
+| Authorize → capture / void | **Real, sandbox** | Approvals place a hold; captured after delivery, voided if delivery fails. |
+| Forced declines | **Real, sandbox** | PayPal's `PayPal-Mock-Response` negative testing, via the owner-only `X-Simulate-Decline` header. |
+| Reconciliation + freeze | **Real, sandbox** | Ledger vs `GET /v2/payments/captures/{id}`; mismatches freeze the agent. |
+| Saved card (Vault v3) + auto top-up | **Real, sandbox** | PayPal's generic sandbox test Visa saved in Vault; merchant-initiated charges within an owner cap. |
 | Refunds | **Real, sandbox** | Payments v2 refund of the specific capture (tab refunds, approval-funded purchases). Tab-funded purchase refunds are ledger credits back to the tab. |
 | Webhooks | **Real, sandbox** | `POST /paypal/webhook`, every event checked with PayPal's `verify-webhook-signature`; unverified events are rejected. |
 | AI spend guard | **Real** | Live Gemini (`gemini-3.5-flash-lite`, then a second model). If Gemini is unavailable the purchase is held for a human. |

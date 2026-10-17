@@ -14,7 +14,8 @@ $0.20 sample by hand defeats the point.
 2. **Approved vendors, each with its own 30-day budget.** SampleBox Wholesale $0.60, ShopSuite $1.00, WebIntel Data $0.30.
    Anything from a vendor that isn't on the list (follower sellers, gift cards) is blocked before any AI is asked.
 3. **Approval above a threshold.** A purchase over **$0.30** isn't charged to the tab. AgentTab returns `202` with a
-   PayPal approval link (valid 24 h). The owner pays that one purchase directly, or rejects it.
+   PayPal approval link (valid 24 h). Approving places a PayPal **hold** (Orders v2 `intent=AUTHORIZE`); AgentTab
+   captures it only after the vendor delivers and voids it if delivery fails, so a failed purchase is never charged.
 4. **A refund window on goods and subscriptions.** For 7 days each sample or SaaS purchase has its own Refund button:
    tab-funded purchases go back to the tab; approval-funded purchases are refunded to PayPal (Payments v2 refund of that
    capture). Research data is delivered instantly, so it's final; a failed data call is never charged.
@@ -114,6 +115,19 @@ The guard makes the model answer three separate checks (target allowed, purpose 
 - `POST /api/agents/{id}/topup` creates a real Orders v2 order. The buyer approves it on sandbox.paypal.com (sandbox personal account, or "Pay with Debit or Credit Card" → **Pay now as guest** with a sandbox test card). On return, AgentTab captures it.
 - `POST /api/agents/{id}/topup-sandbox-card` (sandbox only, refused against live PayPal) creates and captures in one call with PayPal's public sandbox test card. It's for judges and CI who can't click through checkout.
 - `agent/approve_sandbox.py` is an experimental headless guest-checkout helper for recordings.
+- **Authorize, then capture.** Approval links and "Approve (sandbox card)" create an authorization; after delivery
+  AgentTab captures exactly the approved amount (`/v2/payments/authorizations/{id}/capture`), otherwise it voids the hold.
+- **Forced declines.** With the owner's admin token, the header `X-Simulate-Decline: <code>` (e.g. `INSTRUMENT_DECLINED`,
+  `TRANSACTION_REFUSED`, `REFUND_FAILED_INSUFFICIENT_FUNDS`) makes that request's PayPal call use PayPal's negative-testing
+  header `PayPal-Mock-Response`. It's sandbox only. It works on card top-ups, saved-card top-ups, "Approve (sandbox card)"
+  (declines the capture after delivery) and purchase refunds.
+- **Reconciliation freeze.** `POST /api/agents/{id}/reconcile` checks the agent's last 50 captures against
+  `GET /v2/payments/captures/{id}` (amount, status, refunds). A mismatch, a negative tab, a declined capture after delivery
+  or a `DENIED`/`REVERSED` webhook freezes the agent: purchases and top-up requests return `423` until the owner unfreezes it.
+- **Saved card (Vault v3).** `POST /api/agents/{id}/saved-card` saves PayPal's sandbox test card (setup token → payment
+  token; only brand and last 4 are shown). The owner can top up from it, or turn on auto top-up
+  (`PUT /api/agents/{id}/auto-topup`, e.g. $1 at a time, at most $5 per 30 days). Auto top-up only runs for purchases
+  the guard already allowed, and never for a frozen agent. Charges are merchant-initiated (stored credential, unscheduled).
 
 ### Try the demo agent
 1. Open the dashboard, create an agent, and copy its key.
@@ -161,6 +175,11 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | POST | `/api/purchases/{id}/refund` | owner | Refund one sample/SaaS purchase inside its window (to tab, or to PayPal if paid by approval); data is final |
 | POST | `/api/purchases/{id}/approve-sandbox-card` | owner | Approve a pending purchase and pay it with the sandbox test card |
 | POST | `/api/purchases/{id}/reject` | owner | Reject a pending purchase |
+| POST | `/api/agents/{id}/reconcile` | owner | Compare ledger captures with PayPal; freeze on mismatch |
+| POST | `/api/agents/{id}/freeze` · `/unfreeze` | owner | Pause or resume an agent's spending (`423` while frozen) |
+| POST · DELETE | `/api/agents/{id}/saved-card` | owner | Save (Vault) or delete the sandbox test card |
+| POST | `/api/agents/{id}/topup-saved-card` | owner | Top up from the saved card |
+| PUT | `/api/agents/{id}/auto-topup` | owner | `{amount_usd, monthly_cap_usd}` for auto top-ups (both `null` = off) |
 | GET | `/api/scorecard` | anyone | Safety eval results |
 | POST | `/api/gauntlet` | anyone (rate-limited) | Live dry run of 10 sampled eval cases through the guard |
 | GET | `/api/me/schedule` · `/api/schedule?agent_id=` | agent · owner | Bryntum resources/events + open refund suggestions |
@@ -194,14 +213,15 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-90 offline tests (+2 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
-approval), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
-per-capture refunds, procurement, webhooks, schedule, eval runner, and a docs check that every test the
+120 offline tests (+3 live ones that skip without keys): concurrency (parallel buys, capture/webhook races, double
+approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
+per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups,
+procurement, webhooks, schedule, eval runner, and a docs check that every test the
 [threat model](docs/threat-model.md) cites exists. [`ci/github-actions-ci.yml`](ci/github-actions-ci.yml) runs
 them on Python 3.12 and 3.13, plus the offline eval, which must match the committed scorecard.
 
 ## Built with
-PayPal Orders v2, Payments v2 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Inter (SIL OFL), any OpenAI-compatible LLM
+PayPal Orders v2, Payments v2, Vault v3 and Webhooks (sandbox), FastAPI, Bryntum Scheduler (trial), AG Grid Community, Inter (SIL OFL), any OpenAI-compatible LLM
 (Gemini 3.5 Flash-Lite by default), and Render (one-click `render.yaml`).
 
 MIT License · © WebIntel Tools

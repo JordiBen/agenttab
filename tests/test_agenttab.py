@@ -242,7 +242,8 @@ def test_live_paypal_sandbox(tmp_path):
     ag = new_agent(c)
     o = c.post(f"/api/agents/{ag['agent_id']}/topup", json={"amount_usd": 5}, headers=A).json()
     assert "sandbox.paypal.com" in o["approve_url"]
-    assert c.get(f"/paypal/return?token={o['order_id']}", follow_redirects=False).status_code == 402  # not approved
+    r = c.get(f"/paypal/return?token={o['order_id']}", follow_redirects=False)              # not approved
+    assert "payment_error=402" in r.headers["location"]
     r = c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 3}, headers=A).json()
     assert r["balance_usd"] == 3.0
     ref = c.post(f"/api/agents/{ag['agent_id']}/refund", headers=A).json()

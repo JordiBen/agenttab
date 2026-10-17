@@ -47,6 +47,15 @@ AGENT_MIGRATIONS = [
     ("approval_threshold_micro", "INTEGER"),  # above this, a human approves via a PayPal link; NULL = never
     ("refund_window_days", "INTEGER"),
     ("is_demo", "INTEGER DEFAULT 0"),      # set only by /api/demo/session; unlocks demo-owner actions
+    ("frozen_reason", "TEXT"),             # set = agent frozen (reconciliation problem); no new spending
+    ("frozen_ts", "REAL"),
+    ("vault_id", "TEXT"),                  # PayPal Vault payment token of the owner's saved (sandbox) card
+    ("vault_card", "TEXT"),                # display only, e.g. "VISA 1111"
+    ("auto_topup_micro", "INTEGER"),       # saved-card auto top-up size; NULL = off
+    ("auto_topup_cap_micro", "INTEGER"),   # max saved-card top-ups per rolling 30 days
+]
+ORDER_MIGRATIONS = [
+    ("intent", "TEXT DEFAULT 'CAPTURE'"),  # AUTHORIZE for approval links (hold, then capture on delivery)
 ]
 ENTRY_MIGRATIONS = [
     ("capture_ref", "TEXT"),        # refunds: which PayPal capture the money came back from
@@ -56,6 +65,7 @@ PURCHASE_MIGRATIONS = [
     ("paypal_confirmed", "REAL"),   # PayPal webhook confirmed the capture
     ("refunded_ts", "REAL"),
     ("flag", "TEXT"),               # e.g. capture reversed / denied (from webhooks)
+    ("paypal_authorization", "TEXT"),  # approval purchases: the PayPal hold, captured after delivery
 ]
 
 
@@ -83,6 +93,10 @@ class Ledger:
         for name, typ in PURCHASE_MIGRATIONS:
             if name not in pcols:
                 self.db.execute(f"ALTER TABLE purchases ADD COLUMN {name} {typ}")
+        ocols = {r[1] for r in self.db.execute("PRAGMA table_info(orders)")}
+        for name, typ in ORDER_MIGRATIONS:
+            if name not in ocols:
+                self.db.execute(f"ALTER TABLE orders ADD COLUMN {name} {typ}")
         ecols = {r[1] for r in self.db.execute("PRAGMA table_info(entries)")}
         for name, typ in ENTRY_MIGRATIONS:
             if name not in ecols:
@@ -126,11 +140,50 @@ class Ledger:
                              to_micro(per_call_cap) if per_call_cap is not None else a["per_call_cap_micro"], aid))
             self.db.commit()
 
-    # orders
-    def add_order(self, order_id: str, aid: str, amount: Decimal):
+    # reconciliation freeze
+    def freeze(self, aid: str, reason: str) -> bool:
+        """Freeze an agent (first reason wins). True if this call froze it."""
         with self.lock:
-            self.db.execute("INSERT INTO orders VALUES(?,?,?,?,?)",
-                            (order_id, aid, to_micro(amount), "CREATED", time.time()))
+            n = self.db.execute("UPDATE agents SET frozen_reason=?, frozen_ts=? WHERE id=? AND frozen_reason IS NULL",
+                                (reason[:300], time.time(), aid)).rowcount
+            self.db.commit()
+        return n == 1
+
+    def unfreeze(self, aid: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE agents SET frozen_reason=NULL, frozen_ts=NULL WHERE id=?", (aid,))
+            self.db.commit()
+
+    # saved card (Vault) + auto top-up
+    def set_vault(self, aid: str, vault_id: str | None, card: str | None) -> None:
+        with self.lock:
+            self.db.execute("UPDATE agents SET vault_id=?, vault_card=? WHERE id=?", (vault_id, card, aid))
+            if vault_id is None:
+                self.db.execute("UPDATE agents SET auto_topup_micro=NULL, auto_topup_cap_micro=NULL WHERE id=?", (aid,))
+            self.db.commit()
+
+    def set_auto_topup(self, aid: str, amount: Decimal | None, monthly_cap: Decimal | None) -> None:
+        with self.lock:
+            self.db.execute("UPDATE agents SET auto_topup_micro=?, auto_topup_cap_micro=? WHERE id=?",
+                            (to_micro(amount) if amount is not None else None,
+                             to_micro(monthly_cap) if monthly_cap is not None else None, aid))
+            self.db.commit()
+
+    def vault_topups_since(self, aid: str, since: float) -> Decimal:
+        r = self.db.execute("SELECT COALESCE(SUM(amount_micro),0) FROM entries WHERE agent_id=? AND kind='fund'"
+                            " AND tool IN ('vault','vault-auto') AND ts>=?", (aid, since)).fetchone()[0]
+        return from_micro(r)
+
+    def fund_entries(self, aid: str, limit: int = 50):
+        """Every PayPal capture credited to this agent (tab top-ups and approval-funded purchases)."""
+        return self.db.execute("SELECT * FROM entries WHERE agent_id=? AND kind='fund' AND paypal_ref!=''"
+                               " ORDER BY ts DESC LIMIT ?", (aid, limit)).fetchall()
+
+    # orders
+    def add_order(self, order_id: str, aid: str, amount: Decimal, intent: str = "CAPTURE"):
+        with self.lock:
+            self.db.execute("INSERT INTO orders(order_id,agent_id,amount_micro,status,created,intent) VALUES(?,?,?,?,?,?)",
+                            (order_id, aid, to_micro(amount), "CREATED", time.time(), intent))
             self.db.commit()
 
     def order(self, order_id: str):
