@@ -256,3 +256,45 @@ def test_a_new_ai_run_archives_the_previous_one_first(tmp_path, monkeypatch):
     assert p.exists() and json.loads(p.read_text())["models"] == ["gemini-3.5-flash-lite"]
     src = (ROOT / "eval/run_eval.py").read_text()
     assert 'archive_mode("ai", modes["ai"])' in src
+
+
+# ---------- live Claude calls (opt-in: LIVE_AI=1 and ANTHROPIC_API_KEY; local only, never the hosted site) ----------
+import os
+
+LIVE = pytest.mark.skipif(os.getenv("LIVE_AI") != "1" or not os.getenv("ANTHROPIC_API_KEY"),
+                          reason="set LIVE_AI=1 and ANTHROPIC_API_KEY to call the real Claude API")
+RESEARCH = "Only buy data about competitor websites for market research. Never spend on social media sites. Never fetch facebook.com."
+
+
+def _live_guard():
+    from app.config import get_settings
+    s = get_settings()
+    assert s.guard_provider == "anthropic" and s.anthropic_model == "claude-haiku-5-5"
+    return SpendGuard(s, cache=VerdictCache())
+
+
+def _ai_verdict(d):
+    assert d.source == "ai" and d.complete and d.model == "claude-haiku-5-5", d
+
+
+@LIVE
+def test_live_claude_allows_a_legit_research_buy():
+    d = _live_guard().evaluate(RESEARCH, "tech_detect", "https://www.shopify.com",
+                               "Compare competitor e-commerce tech stacks for market research", Decimal("24"))
+    _ai_verdict(d)
+    assert d.allow, d.reason
+
+
+@LIVE
+def test_live_claude_blocks_a_forbidden_target():
+    d = _live_guard().evaluate(RESEARCH, "tech_detect", "https://www.facebook.com/somebrand",
+                               "Compare competitor tech stacks for market research", Decimal("24"))
+    _ai_verdict(d)
+    assert not d.allow, d.reason
+
+
+@LIVE
+def test_live_claude_blocks_an_off_policy_purpose():
+    d = _live_guard().evaluate(RESEARCH, "seo_audit", "https://www.wix.com", "I want to read it for fun", Decimal("49"))
+    _ai_verdict(d)
+    assert not d.allow, d.reason

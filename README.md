@@ -34,11 +34,14 @@ $32, SaaS seat $29 or $39 a month, research data $12 to $49; limits: $60 approva
 Results: [`eval/results.json`](eval/results.json), also live at `/api/scorecard`
 and on the dashboard. "Stopped" = blocked or held for approval (no money moves).
 
+<!-- scorecard:start -->
 | Mode | Attacks stopped | Legit handled right | False blocks | Latency p50 / p95 | LLM calls / tokens |
 |---|---|---|---|---|---|
 | No guard | **0/47** (0.0%) | 16/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
 | Rules + keyword check | **37/47** (78.7%) | 20/20 | 0 | 0.0 / 0.0 ms | 0 / 0 |
-| Rules + Gemini judge (previous catalog) | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
+| Rules + Claude judge | **47/47** (100.0%) | 20/20 | 0 | 1167.2 / 1649.1 ms | 43 / 40504 |
+| Rules + Gemini judge (previous catalog, archived) | **47/47** (100.0%) | 20/20 | 0 | 659.5 / 783.3 ms | 43 / 17821 |
+<!-- scorecard:end -->
 
 **Repricing note (branch feature/realistic-shop):** the catalog moved from cent prices to the realistic prices above and the
 vendor `webintel-data` was renamed `sitescope-data`. To keep each case testing the same thing, six cases changed quantity
@@ -58,17 +61,19 @@ The previous Gemini run and its cases are kept in [`eval/archive/`](eval/archive
 - The badge shows only "Live AI guard" or "AI busy, human approval" from `/healthz`; the model name appears in Proof.
 - The previous Gemini results are archived in `eval/archive/`, not deleted. The Claude eval run is pending (no key yet).
 
-| Category | Cases | No guard | Rules + keyword | Rules + Gemini (previous catalog) |
-|---|---|---|---|---|
-| legit | 20 | 16 | 20 | 20 |
-| forbidden vendor | 6 | 0 | 6 | 6 |
-| social target | 6 | 0 | 5 | 6 |
-| personal use | 7 | 0 | 4 | 7 |
-| vague | 5 | 0 | 5 | 5 |
-| direct injection | 6 | 0 | 5 | 6 |
-| indirect injection | 6 | 0 | 2 | 6 |
-| caps | 6 | 0 | 6 | 6 |
-| lookalike unsafe | 5 | 0 | 4 | 5 |
+<!-- categories:start -->
+| Category | Cases | No guard | Rules + keyword check | Rules + Claude judge | Rules + Gemini judge (previous catalog, archived) |
+|---|---|---|---|---|---|
+| legit | 20 | 16 | 20 | 20 | 20 |
+| forbidden vendor | 6 | 0 | 6 | 6 | 6 |
+| social target | 6 | 0 | 5 | 6 | 6 |
+| personal use | 7 | 0 | 4 | 7 | 7 |
+| vague | 5 | 0 | 5 | 5 | 5 |
+| direct injection | 6 | 0 | 5 | 6 | 6 |
+| indirect injection | 6 | 0 | 2 | 6 | 6 |
+| caps | 6 | 0 | 6 | 6 | 6 |
+| lookalike unsafe | 5 | 0 | 4 | 5 | 5 |
+<!-- categories:end -->
 
 - That previous-catalog run used gemini-3.5-flash-lite; every ai-mode decision in it got a Gemini verdict (no errors or quota hits).
 - **Honest caveat:** the first run scored 45/47 with Gemini; both misses were purchases with an empty or one-word purpose.
