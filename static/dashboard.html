@@ -30,7 +30,7 @@
 
 <header class="hero" id="top">
  <div class="wrap hero-in">
-  <h1 class="reveal">Your agent gets a tab. Not your card.</h1>
+  <h1 class="reveal"><span class="h-long">Your agent gets a tab. Not your card.</span><span class="h-short">A tab, not your card.</span></h1>
   <div class="hero-copy">
    <p class="lead reveal">AgentTab funds a shop's purchasing agent through PayPal, then lets it buy only inside vendor budgets, caps, human approval and a live AI guard.</p>
    <div class="reveal"><button class="btn btn-primary" onclick="overspend()">Try to make the agent overspend</button></div>
@@ -49,20 +49,27 @@
  <div class="sec-head reveal"><h2>Every purchase walks the same path.</h2>
   <p>Segments are sized by where the 67 eval purchases were actually decided.</p></div>
  <div class="how-bar reveal" id="howbar" data-ui>
-  <div class="seg" style="--n:1;--c:var(--ink)"><div class="fill"><span>Catalog &amp; allowlist</span><span class="count" data-k="rules"></span></div><p><b>First,</b> unknown vendors, unsafe URLs, empty purposes and injected instructions stop here.</p></div>
-  <div class="seg" style="--n:1;--c:var(--ink-80)"><div class="fill"><span>Caps &amp; budgets</span><span class="count" data-k="caps"></span></div><p><b>Then</b> per-purchase, daily and 30-day vendor limits, in whole cents.</p></div>
-  <div class="seg" style="--n:1;--c:var(--ink-60)"><div class="fill"><span>AI guard</span><span class="count" data-k="ai"></span></div><p><b>Then</b> the AI judges what rules can't express. If it's unavailable, a human decides.</p></div>
-  <div class="seg" style="--n:1;--c:var(--stamp-hold)"><div class="fill"><span>Human approval</span><span class="count" data-k="hold"></span></div><p><b>Then</b> anything over $60 waits for the owner.</p></div>
-  <div class="seg" style="--n:1;--c:var(--ink-20);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div><p><b>Finally</b> the tab pays, through PayPal sandbox.</p></div>
+  <div class="seg" style="--n:1;--c:var(--ink)"><div class="fill"><span>Catalog &amp; allowlist</span><span class="count" data-k="rules"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--ink-80)"><div class="fill"><span>Caps &amp; budgets</span><span class="count" data-k="caps"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--ink-60)"><div class="fill"><span>AI guard</span><span class="count" data-k="ai"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--stamp-hold)"><div class="fill"><span>Human approval</span><span class="count" data-k="hold"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--ink-20);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div></div>
  </div>
- <div class="bento">
-  <article class="tile reveal"><h3>A prepaid tab, funded by PayPal</h3><p>Orders v2 create → approve → capture. Integer micro-dollar ledger; parallel buys can't overspend.</p></article>
-  <article class="tile reveal"><h3>Vendor budgets</h3><p>Each approved vendor gets its own rolling 30-day budget. Others are blocked before any AI runs.</p></article>
-  <article class="tile reveal"><h3>Human approval over $60</h3><p>Big buys return 202 with a PayPal link. The owner pays that one purchase, or rejects it.</p></article>
-  <article class="tile reveal"><h3>Refund windows on a live timeline</h3><p>Budgets, approvals, refund deadlines and renewals on a Bryntum Scheduler, moved by PayPal webhooks. The scheduler <em>proposes</em> refunds; you confirm.</p></article>
-  <article class="tile reveal"><h3>Verified webhooks, SSRF-safe fetching</h3><p>Every PayPal event is checked with verify-webhook-signature and applied exactly once. Every redirect hop must resolve to a public IP.</p></article>
-  <a class="tile t-mcp reveal" id="bentomcp" href="#mcp"><h3>An MCP server for any agent</h3><p>The same guarded tab as MCP tools (<code>buy</code>, <code>get_tab</code>, <code>request_topup</code>…) over Streamable HTTP. No owner tools are exposed.</p><span class="t-link">Connect a client →</span></a>
- </div>
+ <ol class="how-caps reveal" aria-label="What each step does">
+  <li style="--c:var(--ink)"><span class="cap-k">Catalog &amp; allowlist</span><p><b>First,</b> unknown vendors, unsafe URLs, empty purposes and injected instructions stop here.</p></li>
+  <li style="--c:var(--ink-80)"><span class="cap-k">Caps &amp; budgets</span><p><b>Then</b> per-purchase, daily and 30-day vendor limits, in whole cents.</p></li>
+  <li style="--c:var(--ink-60)"><span class="cap-k">AI guard</span><p><b>Then</b> the AI judges what rules can't express. If it's unavailable, a human decides.</p></li>
+  <li style="--c:var(--stamp-hold)"><span class="cap-k">Human approval</span><p><b>Then</b> anything over $60 waits for the owner.</p></li>
+  <li style="--c:var(--ink-20)"><span class="cap-k">PayPal payment</span><p><b>Finally</b> the tab pays, through PayPal sandbox.</p></li>
+ </ol>
+ <ul class="features reveal" aria-label="What AgentTab does">
+  <li><h3>A prepaid tab, funded by PayPal</h3><p>Orders v2 create → approve → capture. Integer micro-dollar ledger; parallel buys can't overspend.</p></li>
+  <li><h3>Vendor budgets</h3><p>Each approved vendor gets its own rolling 30-day budget. Others are blocked before any AI runs.</p></li>
+  <li><h3>Human approval over $60</h3><p>Big buys return 202 with a PayPal link. The owner pays that one purchase, or rejects it.</p></li>
+  <li><h3>Refund windows on a live timeline</h3><p>Budgets, approvals, refund deadlines and renewals on a Bryntum Scheduler, moved by PayPal webhooks. The scheduler <em>proposes</em> refunds; you confirm.</p></li>
+  <li><h3>Verified webhooks, SSRF-safe fetching</h3><p>Every PayPal event is checked with verify-webhook-signature and applied exactly once. Every redirect hop must resolve to a public IP.</p></li>
+  <li><h3>An MCP server for any agent</h3><p>The same guarded tab as MCP tools (<code>buy</code>, <code>get_tab</code>, <code>request_topup</code>…) over Streamable HTTP. No owner tools are exposed. <a id="bentomcp" class="t-link" href="#mcp">Connect a client →</a></p></li>
+ </ul>
 </div></section>
 
 <section id="proof" class="band saw-tb"><div class="wrap">
@@ -78,7 +85,7 @@
  <div class="proof">
   <div class="card reveal" id="score"><h3>Safety scorecard</h3><p class="sub" id="scoretxt">loading…</p>
    <p class="sub" id="proofmodel" role="status">AI guard model: checking…</p>
-   <div class="tbl-wrap"><table class="tbl" id="scoretbl"><thead><tr><th>Mode</th><th>Attacks stopped</th><th>Legit OK</th><th>False blocks</th><th>p50 / p95</th><th>LLM calls</th></tr></thead><tbody></tbody></table></div>
+   <div class="tbl-wrap" data-ui><table class="tbl" id="scoretbl"><thead><tr><th>Mode</th><th>Attacks stopped</th><th>Legit OK</th><th>False blocks</th><th>p50 / p95</th><th>LLM calls</th></tr></thead><tbody></tbody></table></div>
    <div class="cats" id="cats"></div>
    <div class="legend"><span style="--c:var(--ink-20)">No guard</span><span style="--c:var(--ink-60)">Rules + keywords</span><span style="--c:var(--ink)">Rules + AI</span></div>
    <p class="sub" style="margin-top:12px">Source: <a href="https://github.com/JordiBen/agenttab/tree/main/eval">eval/cases.json</a> and results.json. The purpose rule was added after a first run (45/47); the set isn't held out.</p>
@@ -112,10 +119,8 @@
   <div class="stage saw-tb" id="stage" role="tabpanel" aria-live="polite" data-ui><p class="purp">Loading the eval run…</p></div>
  </div>
  <div class="shots">
-  <figure class="shot saw-b reveal"><img src="/static/img/demo-workspace.jpg" alt="The AgentTab live demo: guided purchase buttons, the agent console and the tab balance" loading="lazy" width="1184" height="888"><figcaption>The live demo workspace</figcaption></figure>
-  <figure class="shot saw-b reveal"><img src="/static/img/purchases-grid.jpg" alt="The purchases grid with paid, held and blocked purchases and their deciding layer" loading="lazy" width="1184" height="448"><figcaption>Purchases, with the layer that decided</figcaption></figure>
-  <figure class="shot saw-b reveal"><img src="/static/img/schedule.jpg" alt="The Bryntum schedule with vendor budgets, an approval and refund windows" loading="lazy" width="1184" height="677"><figcaption>Budgets and refund windows on the schedule</figcaption></figure>
-  <figure class="shot saw-b reveal"><img src="/static/img/owner-console.jpg" alt="The ledger: every top-up, charge, denial and refund with its PayPal reference" loading="lazy" width="1184" height="448"><figcaption>The ledger, with PayPal references</figcaption></figure>
+  <figure class="shot saw-b reveal"><img src="/static/img/guard-console.jpg" alt="Close-up of the agent console: a gift-card purchase stamped BLOCKED by the allowlist, and the tab at $58.00 with per-vendor budgets" loading="lazy" width="1340" height="1168"><figcaption>The guard's verdict, and the tab it protects</figcaption></figure>
+  <figure class="shot saw-b reveal"><img src="/static/img/schedule-close.jpg" alt="Close-up of the Bryntum schedule: a PayPal top-up, a delivered purchase, a refund window, a held approval and a blocked gift card" loading="lazy" width="1400" height="956"><figcaption>Budgets, approvals and refund windows on the schedule</figcaption></figure>
  </div>
 </div></section>
 
@@ -180,9 +185,9 @@
   <div class="card"><div class="card-head"><h3>Schedule <span class="pill blue">Bryntum Scheduler</span></h3>
     <button class="btn btn-ghost btn-sm" onclick="demoFF()">Demo clock: jump 6 days ahead</button></div>
    <p class="sub">Budgets, approvals, refund windows and renewals, moved by signature-verified PayPal webhooks. Right-click an event for actions.</p>
-   <div id="dsched" class="sched"></div><div id="dsugg" style="margin-top:10px"></div></div>
-  <div class="card"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h"></div></div>
-  <div class="card"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h"></div></div>
+   <div id="dsched" class="sched" data-ui></div><div id="dsugg" style="margin-top:10px"></div></div>
+  <div class="card"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h" data-ui></div></div>
+  <div class="card"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h" data-ui></div></div>
  </div>
  <div id="nodemo" class="card" style="display:none"><h3>Public demo is off on this server</h3><p class="sub">Use the owner console below with your admin token.</p></div>
 
@@ -195,16 +200,16 @@
   </div>
   <div><label for="policy">Spending policy (plain English)</label><textarea id="policy">Only buy data about public websites of our competitors for market research. Never spend on social media sites. Never fetch facebook.com.</textarea></div>
   <div class="row"><button class="btn btn-light" onclick="createAgent()">Create agent</button><span id="newkey" class="mono" style="overflow-wrap:anywhere"></span></div>
-  <div><h3>Agents</h3><div id="agents" class="grid-h" style="margin-top:8px"></div>
+  <div><h3>Agents</h3><div id="agents" class="grid-h" data-ui style="margin-top:8px"></div>
    <div class="row" style="margin-top:10px"><div style="flex:0 1 110px"><input id="amt" value="100.00" aria-label="Amount in USD"></div>
     <button class="btn btn-primary" onclick="topup()">Fund selected with PayPal</button>
     <button class="btn btn-ghost" id="cardbtn" style="display:none" onclick="cardTopup()">Sandbox test-card top-up</button>
     <button class="btn btn-ghost" onclick="refund()">Refund unused credit</button><button class="btn btn-ghost" onclick="report()">AI spend report</button>
     <button class="btn btn-ghost" onclick="reconcile()">Reconcile with PayPal</button><button class="btn btn-ghost" onclick="unfreeze()">Unfreeze</button></div>
    <p id="report"></p></div>
-  <div><h3>Schedule of selected agent</h3><div id="osched" class="sched" style="margin-top:8px"></div><div id="osugg" style="margin-top:6px"></div></div>
-  <div><h3>Purchases of selected agent</h3><div id="opurch" class="grid-h" style="margin-top:8px"></div></div>
-  <div><h3>Live ledger</h3><div id="ledger" class="grid-h" style="margin-top:8px"></div></div>
+  <div><h3>Schedule of selected agent</h3><div id="osched" class="sched" data-ui style="margin-top:8px"></div><div id="osugg" style="margin-top:6px"></div></div>
+  <div><h3>Purchases of selected agent</h3><div id="opurch" class="grid-h" data-ui style="margin-top:8px"></div></div>
+  <div><h3>Live ledger</h3><div id="ledger" class="grid-h" data-ui style="margin-top:8px"></div></div>
  </div></details>
 </div></section>
 

@@ -19,10 +19,11 @@ const frozenBadge = a => a && a.frozen ? pill('frozen', 'frozen', 'Frozen: ' + (
 const pillCell = p => p.value == null ? '' : pill(p.value);
 
 // ---- toasts ----
-const TOAST = {ok: ['✓', 'var(--ok)'], bad: ['✕', 'var(--bad)'], warn: ['!', 'var(--warn)'], info: ['i', 'var(--sky)'], violet: ['↺', 'var(--violet)']};
+// toast marker: the sawtooth tooth in the verdict colour (no emoji or symbol glyphs as UI)
+const TOAST = {ok: ['ok', 'var(--ok)'], bad: ['bad', 'var(--bad)'], warn: ['warn', 'var(--warn)'], info: ['info', 'var(--muted)'], violet: ['refund', 'var(--muted)']};
 function toast(kind, title, text = '') {
   const [ic, c] = TOAST[kind] || TOAST.info, el = document.createElement('div');
-  el.className = 'toast'; el.innerHTML = `<span class="ti" style="--c:${c}">${ic}</span><div><b>${enc(title)}</b>${text ? enc(text).slice(0, 180) : ''}</div>`;
+  el.className = 'toast'; el.dataset.kind = ic; el.innerHTML = `<span class="ti" style="--c:${c}" aria-hidden="true"></span><div><b>${enc(title)}</b>${text ? enc(text).slice(0, 180) : ''}</div>`;
   $('toasts').appendChild(el);
   while ($('toasts').children.length > 4) $('toasts').firstChild.remove();
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, 4600);

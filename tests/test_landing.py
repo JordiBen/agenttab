@@ -76,11 +76,38 @@ def test_sections_in_design_order_and_existing_selectors_kept():
     assert "by WebIntel Tools" not in HTML
 
 
-def test_at_least_four_real_screenshots_are_served(tmp_path):
+def test_two_large_close_crop_screenshots_are_served(tmp_path):
+    """Review: two large, close crops (half the page each), not four narrow ones; captured at 2x so they stay sharp."""
     c = _client(tmp_path)
-    shots = re.findall(r'<img[^>]+src="(/static/img/[^"]+)"[^>]*alt="([^"]+)"', HTML)
-    assert len(shots) >= 4
-    for src, alt in shots:
+    shots = re.findall(r'<img[^>]+src="(/static/img/[^"]+)"[^>]*alt="([^"]+)"[^>]*width="(\d+)" height="(\d+)"', HTML)
+    assert len(shots) == 2
+    for src, alt, w, h in shots:
         r = c.get(src)
         assert r.status_code == 200 and r.headers["content-type"] in ("image/webp", "image/jpeg", "image/png"), src
-        assert len(alt) > 10
+        assert len(alt) > 10 and int(w) >= 1200, src
+    assert ".shots{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))" in CSS
+
+
+def test_no_gradients_and_no_emoji_or_symbol_glyphs_as_ui():
+    """Review: remove the 3 gradients (the sawtooth masks were conic-gradients) and the 5 emoji used as UI."""
+    sched = (ROOT / "static/schedule.js").read_text()
+    for name, src in (("app.css", CSS), ("dashboard.html", HTML), ("app.js", JS), ("schedule.js", sched)):
+        assert "gradient" not in src.lower(), name
+        assert not re.search("[\u2713\u2715\u21BA\u2726\u25D4\U0001F300-\U0001FAFF]", src), name
+
+
+def test_feature_cards_are_a_list_with_the_tooth_marker():
+    """Review: the six feature cards become a list with a small sawtooth marker and no boxes."""
+    feats = HTML[HTML.index('<ul class="features'):HTML.index("</ul>", HTML.index('<ul class="features'))]
+    assert feats.count("<li>") == 6 and not re.search(r'class="tile[ "]', HTML) and 'class="bento' not in HTML
+    assert 'id="bentomcp"' in feats and 'href="#mcp"' in feats
+    rule = CSS[CSS.index(".features li::before"):].split("}")[0]
+    assert "clip-path:polygon(0 0,100% 0,50% 100%)" in rule
+    li = CSS[CSS.index(".features li{"):].split("}")[0]
+    assert "background" not in li and "border" not in li
+
+
+def test_ag_grid_and_bryntum_containers_are_data_ui():
+    for gid in ("dsched", "dpurch", "dledger", "agents", "osched", "opurch", "ledger"):
+        assert re.search(rf'<div id="{gid}" class="(grid-h|sched)" data-ui', HTML), gid
+    assert '<div class="tbl-wrap" data-ui><table class="tbl" id="scoretbl">' in HTML

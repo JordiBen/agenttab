@@ -274,7 +274,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-221 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
+253 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,

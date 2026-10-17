@@ -204,8 +204,10 @@ def test_hero_has_an_mcp_badge_that_claims_only_what_was_verified():
 
 def test_features_bento_has_an_mcp_card_linking_to_the_panel():
     h = _html()
-    bento = h[h.index('class="bento'):h.index('<section id="proof"')]
-    assert re.search(r'<a class="tile t-mcp[^"]*" id="bentomcp" href="#mcp">', bento)
+    # Features are a list now (review: no boxes); the MCP item must still link to the panel.
+    feats = h[h.index('<ul class="features'):h.index('<section id="proof"')]
+    item = re.search(r'<li><h3>An MCP server[^<]*</h3>.*?</li>', feats, re.S)
+    assert item and re.search(r'<a id="bentomcp"[^>]*href="#mcp"', item.group(0))
 
 
 def test_mcp_panel_sits_directly_after_the_buy_buttons():

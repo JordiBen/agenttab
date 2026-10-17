@@ -323,8 +323,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     STATIC_FILES = {"schedule.js": "application/javascript", "app.css": "text/css", "app.js": "application/javascript",
                     "fonts/roundo/Roundo-Variable.woff2": "font/woff2", "fonts/roundo/License/OFL.txt": "text/plain",
                     # real screenshots of AgentTab itself (local mock run), used on the landing page
-                    "img/demo-workspace.jpg": "image/jpeg", "img/purchases-grid.jpg": "image/jpeg",
-                    "img/schedule.jpg": "image/jpeg", "img/owner-console.jpg": "image/jpeg",
+                    "img/guard-console.jpg": "image/jpeg", "img/schedule-close.jpg": "image/jpeg",
                     "vendor/ag-grid-community-33.3.2.min.js": "application/javascript",
                     "vendor/ag-grid-LICENSE.txt": "text/plain"}
 
