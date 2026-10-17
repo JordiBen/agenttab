@@ -25,7 +25,7 @@ The hero receipt is live: it replays real guard decisions from `/api/replay`, an
 :root {
   /* colour: olive on bone. Two verdict colours because pass/blocked is a real pair. */
   --bg: #ecebe7;        /* page ground (bone) */
-  --paper: #f7f6f2;     /* receipt paper, one step lighter than the ground */
+  --paper: #f4f4f1;     /* receipt paper, a cool neutral bone one step lighter than the ground */
   --surface: #e1dfd9;   /* tiles, grid header */
   --ink: #38450f;       /* all text, large and small */
   --muted: #5d683a;     /* secondary text; still >= 4.5:1 on --bg and --paper */

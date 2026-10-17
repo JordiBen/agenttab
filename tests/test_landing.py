@@ -39,7 +39,7 @@ def test_scorecard_api_carries_stale_modes_for_the_previous_catalog_label(tmp_pa
 
 
 def test_design_tokens_and_remove_list():
-    for tok in ("--bg: #ecebe7", "--paper: #f7f6f2", "--ink: #38450f", "--stamp-block: #a3261b", "--stamp-hold: #7a5200",
+    for tok in ("--bg: #ecebe7", "--paper: #f4f4f1", "--ink: #38450f", "--stamp-block: #a3261b", "--stamp-hold: #7a5200",
                 "--radius: 6px", "--tooth: 12px"):
         assert tok in CSS, tok
     assert "backdrop-filter" not in CSS and "linear-gradient" not in CSS and "radial-gradient" not in CSS

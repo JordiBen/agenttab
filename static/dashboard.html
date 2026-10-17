@@ -51,16 +51,16 @@
  <div class="how-bar reveal" id="howbar" data-ui>
   <div class="seg" style="--n:1;--c:var(--ink)"><div class="fill"><span>Catalog &amp; allowlist</span><span class="count" data-k="rules"></span></div></div>
   <div class="seg" style="--n:1;--c:var(--ink-80)"><div class="fill"><span>Caps &amp; budgets</span><span class="count" data-k="caps"></span></div></div>
-  <div class="seg" style="--n:1;--c:var(--ink-60)"><div class="fill"><span>AI guard</span><span class="count" data-k="ai"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--ink-30);--fg:var(--ink)"><div class="fill"><span>AI guard</span><span class="count" data-k="ai"></span></div></div>
   <div class="seg" style="--n:1;--c:var(--stamp-hold)"><div class="fill"><span>Human approval</span><span class="count" data-k="hold"></span></div></div>
-  <div class="seg" style="--n:1;--c:var(--ink-20);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--surface);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div></div>
  </div>
  <ol class="how-caps reveal" aria-label="What each step does">
   <li style="--c:var(--ink)"><span class="cap-k">Catalog &amp; allowlist</span><p><b>First,</b> unknown vendors, unsafe URLs, empty purposes and injected instructions stop here.</p></li>
   <li style="--c:var(--ink-80)"><span class="cap-k">Caps &amp; budgets</span><p><b>Then</b> per-purchase, daily and 30-day vendor limits, in whole cents.</p></li>
-  <li style="--c:var(--ink-60)"><span class="cap-k">AI guard</span><p><b>Then</b> the AI judges what rules can't express. If it's unavailable, a human decides.</p></li>
+  <li style="--c:var(--ink-30)"><span class="cap-k">AI guard</span><p><b>Then</b> the AI judges what rules can't express. If it's unavailable, a human decides.</p></li>
   <li style="--c:var(--stamp-hold)"><span class="cap-k">Human approval</span><p><b>Then</b> anything over $60 waits for the owner.</p></li>
-  <li style="--c:var(--ink-20)"><span class="cap-k">PayPal payment</span><p><b>Finally</b> the tab pays, through PayPal sandbox.</p></li>
+  <li style="--c:var(--surface)"><span class="cap-k">PayPal payment</span><p><b>Finally</b> the tab pays, through PayPal sandbox.</p></li>
  </ol>
  <ul class="features reveal" aria-label="What AgentTab does">
   <li><h3>A prepaid tab, funded by PayPal</h3><p>Orders v2 create → approve → capture. Integer micro-dollar ledger; parallel buys can't overspend.</p></li>
@@ -75,12 +75,12 @@
 <section id="proof" class="band saw-tb"><div class="wrap">
  <div class="tiles" id="tiles">
   <div class="ptile lead reveal"><h2>Measured, not claimed.</h2><p id="tilesrc">67 labeled purchases (47 attacks or rule violations, 20 legitimate) run through the same <code>decide()</code> the server uses. The set isn't held out.</p></div>
-  <div class="ptile reveal"><span class="lbl">Rules alone</span><div class="big" id="tkw">–</div><p id="tkwtxt">attacks stopped by the deterministic rules and keyword check</p></div>
-  <div class="ptile reveal"><span class="lbl">Rules + AI <span class="stalepill" id="tstale" hidden>previous catalog</span></span><div class="big" id="tai">–</div><p id="taitxt">attacks stopped with the AI guard added</p></div>
-  <div class="ptile reveal"><span class="lbl">No guard</span><div class="big" id="tnone">–</div><p>attacks a naive agent would stop: it buys everything</p></div>
-  <div class="ptile reveal"><span class="lbl">Legitimate buys</span><div class="big" id="hlegit">–</div><p>handled right, <span id="hfb">–</span> wrongly blocked</p></div>
-  <div class="ptile reveal"><span class="lbl">AI decision time</span><div class="big" id="hlat">–</div><p>median per decision in the eval, including the AI round trip</p></div>
-  <div class="ptile reveal"><span class="lbl">Who stopped what</span><p id="tlayers">–</p></div>
+  <div class="ptile reveal"><div class="big"><span id="tkw">–</span> <span class="unit">rules alone</span></div><p id="tkwtxt">attacks stopped by the deterministic rules and keyword check</p></div>
+  <div class="ptile reveal"><div class="big"><span id="tai">–</span> <span class="unit">rules + AI</span> <span class="stalepill" id="tstale" hidden>previous catalog</span></div><p id="taitxt">attacks stopped with the AI guard added</p></div>
+  <div class="ptile reveal"><div class="big"><span id="tnone">–</span> <span class="unit">with no guard</span></div><p>attacks a naive agent would stop: it buys everything</p></div>
+  <div class="ptile reveal"><div class="big"><span id="hlegit">–</span> <span class="unit">legitimate buys</span></div><p>handled right, <span id="hfb">–</span> wrongly blocked</p></div>
+  <div class="ptile reveal"><div class="big"><span id="hlat">–</span> <span class="unit">per AI decision</span></div><p>median per decision in the eval, including the AI round trip</p></div>
+  <div class="ptile reveal"><p class="layers"><b>Who stopped what:</b> <span id="tlayers">–</span></p></div>
  </div>
  <div class="proof">
   <div class="card reveal" id="score"><h3>Safety scorecard</h3><p class="sub" id="scoretxt">loading…</p>

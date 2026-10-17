@@ -3,7 +3,7 @@
 @font-face{font-family:Roundo;src:url(/static/fonts/roundo/Roundo-Variable.woff2) format("woff2");font-weight:200 700;font-display:swap}
 
 :root {
-  --bg: #ecebe7; --paper: #f7f6f2; --surface: #e1dfd9;
+  --bg: #ecebe7; --paper: #f4f4f1; --surface: #e1dfd9;
   --ink: #38450f; --muted: #5d683a; --accent: #38450f; --accent-ink: #ecebe7;
   --stamp-block: #a3261b; --stamp-hold: #7a5200;
   --field-1: #38450f; --field-1-ink: #ecebe7;
@@ -17,6 +17,7 @@
   --ink-80: color-mix(in srgb, var(--ink) 80%, var(--paper));
   --ink-60: color-mix(in srgb, var(--ink) 60%, var(--paper));
   --ink-40: color-mix(in srgb, var(--ink) 40%, var(--paper));
+  --ink-30: color-mix(in srgb, var(--ink) 30%, var(--paper));
   --ink-20: color-mix(in srgb, var(--ink) 20%, var(--paper));
   /* roles kept for the app's status pills and toasts */
   --ok: var(--ink); --bad: var(--stamp-block); --warn: var(--stamp-hold); --sky: var(--muted); --violet: var(--muted);
@@ -82,7 +83,9 @@ section{padding:clamp(64px,9vw,128px) 0}
 .act.alt{background:var(--ink);color:var(--accent-ink)}
 
 /* ---- nav ---- */
-.nav{position:sticky;top:0;z-index:20;background:var(--bg)}
+html{scroll-padding-top:76px}   /* anchor jumps land below the sticky nav */
+.nav{position:sticky;top:0;z-index:20;background:var(--bg);transition:transform .25s var(--ease)}
+.nav.tuck{transform:translateY(-100%)}   /* tucked while scrolling down: it never covers a heading */
 .nav .wrap{display:flex;align-items:center;gap:22px;height:64px}
 .logo{font-weight:600;font-size:1.15rem;text-decoration:none;letter-spacing:-0.02em}
 .nav-links{display:flex;gap:18px;flex:1;font-size:var(--step-small)}
@@ -103,16 +106,18 @@ section{padding:clamp(64px,9vw,128px) 0}
 .chip{color:var(--muted)}
 .chip-mcp{color:var(--ink);font-weight:600}
 .fine{font-size:var(--step-text);color:var(--muted);margin-top:10px;max-width:46ch}
-.receipt{background:var(--paper);height:min(70vw,880px);padding:28px clamp(20px,3vw,36px) 40px;
+.receipt{background:var(--paper);height:clamp(520px,56vw,700px);padding:28px clamp(20px,3vw,36px) 40px;
   display:flex;flex-direction:column;overflow:hidden;font-variant-numeric:tabular-nums}
 .r-head{display:flex;justify-content:space-between;gap:12px;font-size:var(--step-small);color:var(--muted);padding-bottom:16px}
 .r-head b{color:var(--ink);font-size:var(--step-body)}
 .term-mode{font-weight:600}
 .term-mode.on{color:var(--stamp-block)}
-.term-body{flex:1;display:flex;flex-direction:column;gap:18px;overflow:hidden}
+/* lines print at the bottom and scroll up under the tear line, so the paper is always full */
+.term-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;gap:18px;overflow:hidden;border-top:1px dashed var(--ink-40)}
 .term-foot{font-size:var(--step-small);color:var(--muted);padding-top:14px}
 .fe{display:grid;gap:3px}
-.fe{min-width:0}
+.fe{min-width:0;transition:opacity .3s}
+.fe.past{opacity:.35}
 .fe .req{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-weight:600;min-height:1.5em}
 .fe .req .what{min-width:0;overflow-wrap:anywhere}
 .fe .amt{flex:none}
@@ -158,7 +163,10 @@ section{padding:clamp(64px,9vw,128px) 0}
 .ptile .big{font-size:var(--step-head);font-weight:500;letter-spacing:-0.025em;line-height:1;font-variant-numeric:tabular-nums}
 .ptile .big small{font-size:.45em;color:var(--muted);letter-spacing:0}
 .ptile p{font-size:var(--step-text);color:var(--muted)}
-.ptile .lbl{font-weight:600;color:var(--ink);font-size:var(--step-body)}
+/* the tile's name reads after its number ("37 / 47 rules alone"), never as small text above it */
+.ptile .big{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:.35em;row-gap:6px}
+.ptile .big .unit{font-size:var(--step-body);font-weight:600;letter-spacing:0;line-height:1.2;color:var(--ink)}
+.ptile .layers b{color:var(--ink)}
 .stalepill{display:inline-block;font-size:var(--step-small);font-weight:600;color:var(--stamp-hold)}
 .stalepill[hidden]{display:none}
 .proof{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:4px;margin-top:4px}

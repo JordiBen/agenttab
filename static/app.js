@@ -31,9 +31,9 @@ function toast(kind, title, text = '') {
 
 // AG Grid v33 Theming API in the design tokens (olive on bone, Roundo); no CSS overrides
 const gridTheme = agGrid.themeQuartz.withParams({fontFamily: 'Roundo, system-ui, sans-serif', fontSize: 13.5, headerFontWeight: 600,
-  backgroundColor: '#f7f6f2', foregroundColor: '#38450f', headerBackgroundColor: '#e1dfd9', headerTextColor: '#38450f',
-  chromeBackgroundColor: '#f7f6f2', borderColor: '#e1dfd9', rowBorder: {color: '#ecebe7'}, wrapperBorderRadius: 6, borderRadius: 6,
-  accentColor: '#38450f', oddRowBackgroundColor: '#f7f6f2', rowHoverColor: '#ecebe7', selectedRowBackgroundColor: '#e1dfd9',
+  backgroundColor: '#f4f4f1', foregroundColor: '#38450f', headerBackgroundColor: '#e1dfd9', headerTextColor: '#38450f',
+  chromeBackgroundColor: '#f4f4f1', borderColor: '#e1dfd9', rowBorder: {color: '#ecebe7'}, wrapperBorderRadius: 6, borderRadius: 6,
+  accentColor: '#38450f', oddRowBackgroundColor: '#f4f4f1', rowHoverColor: '#ecebe7', selectedRowBackgroundColor: '#e1dfd9',
   spacing: 7, browserColorScheme: 'light'});
 const DEF = {flex: 1, minWidth: 90, sortable: true, filter: true, resizable: true};
 const DENY_ROW = {background: '#f3e6e3'};
@@ -129,7 +129,7 @@ async function typeInto(node, html) {
   if (REDUCED) { node.innerHTML = html; return; }       // reduced motion: the receipt prints instantly
   const tmp = document.createElement('div'); tmp.innerHTML = html; const text = tmp.textContent; node.textContent = '';
   const caret = document.createElement('span'); caret.className = 'caret';
-  for (let k = 1; k <= text.length; k += 2) { node.textContent = text.slice(0, k); node.appendChild(caret); await new Promise(r => setTimeout(r, 14)); }
+  for (let k = 1; k <= text.length; k += 2) { node.textContent = text.slice(0, k); node.appendChild(caret); feedTrim($('feed')); await new Promise(r => setTimeout(r, 14)); }
   node.innerHTML = html;
 }
 async function feedNext() {
@@ -138,13 +138,23 @@ async function feedNext() {
     const live = FEED.live.shift(); const d = live || FEED.replay[FEED.i++ % (FEED.replay.length || 1)];
     if (!d) return;
     const box = $('feed'), {el, req} = feedEntry(d, !!live); box.appendChild(el);
-    while (box.children.length > 1 && box.scrollHeight > box.clientHeight) box.firstChild.remove();   // the strip shows as many lines as fit
     await typeInto(el.querySelector('.req'), req);
     await new Promise(r => setTimeout(r, REDUCED ? 0 : 380));
     const res = el.querySelector('.res'); res.hidden = false;
     if (!REDUCED) res.querySelector('.stamp.block')?.classList.add('land');
+    feedTrim(box);
   } finally { FEED.busy = false; }
 }
+// The receipt prints at the bottom and older lines scroll up under the tear line, so the paper is always full:
+// a line is dropped only once it has scrolled completely out of view.
+function feedTrim(box) { const top = box.getBoundingClientRect().top;
+  while (box.children.length > 1 && box.firstElementChild.getBoundingClientRect().bottom <= top) box.firstElementChild.remove();
+  for (const e of box.children) e.classList.toggle('past', e.getBoundingClientRect().top < top - 1); }   // partly fed past the tear: dimmed
+function feedFill(box, min = 0) {    // top the paper up with replayed lines until no empty space is left
+  for (let k = 0; k < 16 && FEED.replay.length && (box.children.length < min || !feedFull(box)); k++) {
+    const {el, req} = feedEntry(FEED.replay[FEED.i++ % FEED.replay.length], false); el.querySelector('.req').innerHTML = req; el.querySelector('.res').hidden = false; box.appendChild(el); }
+  feedTrim(box); }
+const feedFull = box => !!box.firstElementChild && box.firstElementChild.getBoundingClientRect().top <= box.getBoundingClientRect().top + 1;
 function feedLive(d) { FEED.live.push(d); const m = $('feedmode'); m.textContent = 'live'; m.classList.add('on');
   $('feedfoot').textContent = 'Live: your demo purchases, judged right now (PayPal sandbox). Between them, eval decisions are replayed as dry runs.'; FEED.visible = true; feedNext(); }
 async function initFeed() {
@@ -154,8 +164,9 @@ async function initFeed() {
     // interleave: attacks and legitimate buys alternate so the feed shows both outcomes
     const atk = ds.filter(d => d.attack), ok = ds.filter(d => !d.attack); FEED.replay = [];
     while (atk.length || ok.length) { if (atk.length) FEED.replay.push(atk.shift()); if (atk.length) FEED.replay.push(atk.shift()); if (ok.length) FEED.replay.push(ok.shift()); }
-    for (let k = 0; k < 7; k++) { const {el, req} = feedEntry(FEED.replay[FEED.i++], false); el.querySelector('.req').innerHTML = req; el.querySelector('.res').hidden = false; $('feed').appendChild(el); }
-    while ($('feed').children.length > 1 && $('feed').scrollHeight > $('feed').clientHeight) $('feed').firstChild.remove();
+    const box = $('feed'); feedFill(box, 3);
+    document.fonts?.ready.then(() => feedFill(box));            // the web font changes line heights: top up once it lands
+    new ResizeObserver(() => { if (!FEED.busy) feedFill(box); }).observe(box);
     new IntersectionObserver(es => { FEED.visible = es[0].isIntersecting; }).observe($('feed'));
     setInterval(feedNext, REDUCED ? 6000 : 3400);
   } catch (e) {}
@@ -395,3 +406,9 @@ window.addEventListener('load', initSchedules);
   else if (q.get('funded')) { $('report').textContent = 'Tab funded through PayPal.'; toast('ok', 'Tab funded through PayPal'); }
   if (q.get('payment_error') || q.get('approved') || q.get('funded')) $('ownerhint').open = true; }
 load(); setInterval(load, 3000); setInterval(dload, 4000);
+
+// The sticky nav tucks away while you scroll down (so it never sits over a heading you are reading) and comes back on scroll up or focus.
+(() => { const nav = document.querySelector('.nav'); if (!nav) return; let last = scrollY;
+  addEventListener('scroll', () => { const y = scrollY, d = y - last; if (Math.abs(d) < 4) return; last = y;
+    nav.classList.toggle('tuck', d > 0 && y > nav.offsetHeight && !nav.contains(document.activeElement)); }, {passive: true});
+  nav.addEventListener('focusin', () => nav.classList.remove('tuck')); })();

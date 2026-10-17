@@ -132,6 +132,7 @@ def test_design_audit_no_gradients_hairlines_or_small_text(server, browser, w, h
     r = pg.evaluate(AUDIT)
     assert r == {"grad": [], "hair": [], "small": [], "body": []}
     assert pg.evaluate("[...document.querySelectorAll('.ag-root-wrapper, .b-scheduler')].every(e => e.closest('[data-ui]'))")
+    pg.close()
 
 
 @pytest.mark.parametrize("w,h", [(1440, 900), (1280, 800), (390, 844)])
@@ -141,6 +142,7 @@ def test_owner_console_open_does_not_overflow_or_overlap_headings(server, browse
     assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
     a = pg.locator("#ownerhint h3", has_text="Agents").bounding_box(); g = pg.locator("#agents").bounding_box()
     assert a["y"] + a["height"] <= g["y"] and a["x"] >= 0 and a["x"] + a["width"] <= w
+    pg.close()
 
 
 @pytest.mark.parametrize("w,h", [(1440, 900), (390, 844)])
@@ -156,6 +158,7 @@ def test_receipt_lines_wrap_inside_the_receipt(server, browser, w, h):
         if (e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflow !== 'visible') out.push(e.className + ' clipped'); }
       return out; }""")
     assert bad == []
+    pg.close()
 
 
 @pytest.mark.parametrize("w,h", [(1440, 900), (390, 844)])
@@ -166,6 +169,7 @@ def test_h1_is_at_most_two_lines(server, browser, w, h):
     assert lines <= 2
     if w <= 640:
         assert pg.inner_text("h1").strip() == "A tab, not your card."
+    pg.close()
 
 
 @pytest.mark.parametrize("w,h", [(1440, 900), (1024, 800), (768, 1024)])
@@ -175,6 +179,7 @@ def test_how_it_works_captions_have_room(server, browser, w, h):
     widths = pg.eval_on_selector_all(".how-caps li", "els => els.map(e => e.getBoundingClientRect().width)")
     assert len(widths) == 5 and min(widths) >= 200
     assert pg.evaluate("document.querySelectorAll('#howbar p').length") == 0
+    pg.close()
 
 
 def test_two_screenshots_each_half_the_page_wide(server, browser):
@@ -183,6 +188,7 @@ def test_two_screenshots_each_half_the_page_wide(server, browser):
     r = pg.evaluate("""() => { const s = document.querySelector('.shots').getBoundingClientRect();
       return [...document.querySelectorAll('.shots .shot')].map(f => f.getBoundingClientRect().width / s.width); }""")
     assert len(r) == 2 and all(x >= 0.48 for x in r)
+    pg.close()
 
 
 def test_feature_list_has_no_boxes(server, browser):
@@ -190,3 +196,106 @@ def test_feature_list_has_no_boxes(server, browser):
     r = pg.eval_on_selector_all(".features li", """els => els.map(e => { const s = getComputedStyle(e), b = getComputedStyle(e, '::before');
       return [s.backgroundColor, s.borderTopStyle, b.content !== 'none' && parseFloat(b.width) <= 14]; })""")
     assert len(r) == 6 and all(bg in ("rgba(0, 0, 0, 0)", "transparent") and bs == "none" and marker for bg, bs, marker in r)
+    pg.close()
+
+
+# ---- review round 3 ----
+
+_COVERED = """sel => { const el = [...document.querySelectorAll(sel[0])].find(e => e.textContent.trim().startsWith(sel[1]));
+  const r = el.getBoundingClientRect(); const out = [];
+  for (const x of [r.left + 2, r.left + r.width / 2, r.right - 2]) for (const y of [r.top + 2, r.top + r.height / 2, r.bottom - 2]) {
+    if (y < 0 || y >= innerHeight || x < 0 || x >= innerWidth) continue;
+    const t = document.elementFromPoint(x, y); if (t && !el.contains(t)) out.push(Math.round(y) + ':' + t.tagName + '.' + t.className); }
+  return [Math.round(r.top), out]; }"""
+
+
+def test_sticky_nav_never_covers_the_agents_heading_while_scrolling_down(server, browser):
+    """Review 3 (a): at 1440 the sticky nav sat over the owner console's 'Agents' heading while scrolling down."""
+    pg = _open(browser, server, 1440, 900)
+    pg.evaluate("document.getElementById('ownerhint').open = true"); pg.wait_for_timeout(800)
+    y0 = pg.evaluate("[...document.querySelectorAll('#ownerhint h3')].find(e => e.textContent.trim() === 'Agents').getBoundingClientRect().top + scrollY")
+    pg.evaluate(f"scrollTo(0, {y0 - 400})"); pg.wait_for_timeout(300); pg.mouse.move(700, 450)
+    seen = []
+    for _ in range(12):                                   # wheel down until the heading sits in the nav's band at the top
+        pg.mouse.wheel(0, 40); pg.wait_for_timeout(350)
+        top, covered = pg.evaluate(_COVERED, ["#ownerhint h3", "Agents"])
+        if 0 <= top <= 70:
+            seen.append(top); assert covered == [], f"Agents heading covered at top={top}: {covered}"
+    assert seen, "the heading never reached the top band"
+    pg.close()
+
+
+def test_anchor_jumps_land_below_the_sticky_nav(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    pg.evaluate("location.hash = '#proof'")
+    pg.wait_for_function("""() => { const y = scrollY, w = window; const ok = w.__lastY === y && y > 0; w.__lastY = y; return ok; }""", polling=250, timeout=10000)
+    top = pg.evaluate("document.getElementById('proof').getBoundingClientRect().top")
+    nav = pg.evaluate("document.querySelector('.nav').offsetHeight")   # full nav height, tucked or not
+    assert top >= nav - 1, (top, nav)
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_proof_tile_names_follow_the_number_not_an_eyebrow(server, browser, w, h):
+    """Review 3 (b): '37 / 47 rules alone', not small label text above the number."""
+    pg = _open(browser, server, w, h)
+    pg.wait_for_function("document.getElementById('tai').textContent.includes('/')")
+    assert pg.evaluate("document.querySelectorAll('.ptile .lbl').length") == 0
+    tiles = pg.evaluate("""() => [...document.querySelectorAll('.ptile .big')].map(b => { const n = b.firstElementChild, u = b.querySelector('.unit');
+      const nr = n.getBoundingClientRect(), ur = u ? u.getBoundingClientRect() : null;
+      return {first: b === b.parentElement.firstElementChild, numid: n.id, unit: u ? u.textContent : null,
+              after: u ? !!(n.compareDocumentPosition(u) & Node.DOCUMENT_POSITION_FOLLOWING) : false,
+              sameLine: ur ? ur.top < nr.bottom && ur.bottom > nr.top : false, above: ur ? ur.bottom <= nr.top + 1 : true,
+              unitPx: u ? parseFloat(getComputedStyle(u).fontSize) : 0}; })""")
+    assert [t["numid"] for t in tiles] == ["tkw", "tai", "tnone", "hlegit", "hlat"]
+    for t in tiles:
+        assert t["first"] and t["unit"] and t["after"] and t["unitPx"] >= 16, t
+        assert not t["above"], t                           # the name never sits above the number
+        if w == 768:                                       # where the review saw the eyebrows: inline with the number
+            assert t["sameLine"], t
+    pg.close()
+
+
+_RGB = """c => { const m = c.match(/^rgba?\\(([^)]+)\\)/); if (m) return m[1].split(/[ ,\\/]+/).filter(Boolean).slice(0, 3).map(Number);
+  const s = c.match(/^color\\(srgb ([^)]+)\\)/); if (s) return s[1].split(/\\s+/).slice(0, 3).map(v => Math.round(parseFloat(v) * 255));
+  return null; }"""
+
+
+def _contrast(a, b):
+    def lum(c):
+        cs = [v / 255 for v in c]
+        cs = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in cs]
+        return 0.2126 * cs[0] + 0.7152 * cs[1] + 0.0722 * cs[2]
+    hi, lo = sorted([lum(a), lum(b)], reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (1024, 800)])
+def test_how_bar_segment_text_has_at_least_4_5_contrast(server, browser, w, h):
+    """Review 3 (c): 'AI guard' / '23 of 67' on the bar were ~3:1; every segment label must reach WCAG AA 4.5:1."""
+    pg = _open(browser, server, w, h)
+    pg.wait_for_timeout(1500)
+    segs = pg.evaluate(f"""() => {{ const rgb = {_RGB}; return [...document.querySelectorAll('#howbar .seg .fill')].map(f => {{
+      const s = getComputedStyle(f); return {{text: f.textContent.trim(), fg: rgb(s.color), bg: rgb(s.backgroundColor), raw: [s.color, s.backgroundColor]}}; }}); }}""")
+    assert len(segs) == 5
+    for s in segs:
+        assert s["fg"] and s["bg"], s["raw"]
+        assert _contrast(s["fg"], s["bg"]) >= 4.5, (s["text"], s["raw"], round(_contrast(s["fg"], s["bg"]), 2))
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_hero_receipt_has_no_empty_area(server, browser, w, h):
+    """Review 3 (d): the fixed-height receipt left a big empty area; the paper must stay full of lines, before and after the feed moves."""
+    pg = _open(browser, server, w, h)
+    pg.evaluate("document.querySelector('.receipt').scrollIntoView({behavior: 'instant', block: 'center'})")
+    pg.wait_for_function("document.querySelectorAll('#feed .fe').length >= 2", timeout=40000)
+    gaps = """() => { const b = document.getElementById('feed').getBoundingClientRect(), k = document.getElementById('feed').children;
+      return {top: k[0].getBoundingClientRect().top - b.top, bottom: b.bottom - k[k.length - 1].getBoundingClientRect().bottom, h: b.height}; }"""
+    for _ in range(2):
+        g = pg.evaluate(gaps)
+        assert g["h"] > 200 and g["top"] <= 1 and g["bottom"] <= 2, g
+        pg.wait_for_timeout(4200)                          # one feed step (3.4 s) prints a new line
+    g = pg.evaluate(gaps)
+    assert g["top"] <= 1 and g["bottom"] <= 2, g
+    pg.close()
