@@ -1,9 +1,12 @@
+**Repo:** https://github.com/JordiBen/agenttab · **Live demo:** https://agenttab.onrender.com
+
 # Devpost submission: PayPal AI Hackathon (deadline Nov 12, 2026, 12:00 PT = 22:00 Israel time)
 
 **Project name:** AgentTab
 **Tagline:** PayPal-funded spending tabs for AI agents, guarded by AI.
 **Prizes to tick:** Grand Prize, Best Use of Agentic Commerce, Best Use of PayPal + AI, Best Use of AG Grid, Best Use of Render (credits)
 **Built with:** paypal-orders-api, paypal-payments-api, python, fastapi, ag-grid, gemini, render, sqlite
+**Try it out:** https://agenttab.onrender.com · https://github.com/JordiBen/agenttab
 
 ## Inspiration
 Agents are starting to buy things on their own, such as data, API calls and compute. Today there are only
@@ -32,7 +35,7 @@ We wanted the same thing a parent gives a teenager: a prepaid tab, clear rules, 
   idempotent `PayPal-Request-Id`, and Payments v2 capture refunds.
 - SQLite ledger in integer micro-dollars.
 - AG Grid Community dashboard: row styling for denials, inline editing that PATCHes policies.
-- LLM through any OpenAI-compatible endpoint (Gemini 3.5 Flash-Lite by default) for the guard, the buyer agent's
+- LLM through any OpenAI-compatible endpoint (Gemini 3.5 Flash-Lite by default, falling back to Gemini 3.8 Flash) for the guard, the buyer agent's
   purchase planning and the owner report.
 - Deterministic fallback, so the guard never fails open.
 - Deployed with a Render Blueprint.
@@ -62,4 +65,10 @@ trusted funding and refund primitives.
 2. Open http://localhost:8000 (admin token `dev-admin`).
 - No credentials are needed: mock PayPal is the default.
 - For the real sandbox, set `PAYPAL_MODE=sandbox` and your sandbox client ID and secret (see the README).
-- Hosted demo: <RENDER_URL> (sandbox mode). Sandbox buyer login: <SANDBOX_BUYER_EMAIL> / <SANDBOX_BUYER_PASSWORD>
+- **Live demo (no login):** https://agenttab.onrender.com. Click **Start demo session**, which funds your own agent with $1.00 through a real PayPal *sandbox* capture. Then follow buttons 2–5:
+  - Allowed purchase.
+  - Facebook blocked by the Gemini guard.
+  - AI report.
+  - Refund back to PayPal.
+- The free Render instance sleeps when idle, so the first load can take about 1 minute.
+- **Repo:** https://github.com/JordiBen/agenttab (MIT)
