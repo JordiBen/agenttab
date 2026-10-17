@@ -84,7 +84,9 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
         if p["vendor"] not in vendors:
             vendors.append(p["vendor"])
     resources = [{"id": aid, "name": agent["name"], "kind": "agent",
-                  "detail": f"tab ${ledger.balance(aid):.2f}"}]
+                  "detail": f"tab ${ledger.balance(aid):.2f}"},
+                 {"id": f"{aid}:paypal", "name": "PayPal (sandbox)", "kind": "paypal",
+                  "detail": "webhooks, refunds", "agent": aid}]
     events: list[dict] = []
     for vid in vendors:
         v = pr.VENDORS.get(vid, {"name": vid, "category": ""})
@@ -109,7 +111,7 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
         if p["status"] in ("pending_approval", "expired", "rejected"):
             end = p["approval_expires"] or p["ts"] + DAY
             events.append(base | {"id": f"appr:{p['id']}", "type": "approval",
-                                  "name": f"Approval: {name} {amt}" + ("" if p["status"] == "pending_approval" else f" ({p['status']})"),
+                                  "name": f"Needs approval: {name} {amt}" + ("" if p["status"] == "pending_approval" else f" ({p['status']})"),
                                   "startDate": iso(p["ts"]), "endDate": iso(end),
                                   "eventColor": "yellow" if p["status"] == "pending_approval" else "gray"})
         elif p["status"] in ("completed", "refunded"):
@@ -119,7 +121,7 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
             closing = p["status"] == "completed" and end - now < SOON
             sg = open_by_purchase.get(p["id"])
             events.append(base | {"id": f"win:{p['id']}", "type": "refund_window",
-                                  "name": (f"Refund window: {name} {amt}" if p["status"] == "completed"
+                                  "name": (f"{name} {amt} · refundable" if p["status"] == "completed"
                                            else f"Refunded: {name} {amt}"),
                                   "startDate": iso(p["ts"]), "endDate": iso(end),
                                   "eventColor": "purple" if p["status"] == "refunded" else "red" if closing else "green",
@@ -142,12 +144,12 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
                            "name": f"Top-up ${e['amount_usd']:.2f}", "startDate": iso(e["ts"]), "endDate": iso(e["ts"]),
                            "eventColor": "green", "reason": e["reason"] or ""})
         elif e["kind"] == "refund":
-            events.append({"id": f"ref:{e['id']}", "resourceId": aid, "type": "paypal_refund",
+            events.append({"id": f"ref:{e['id']}", "resourceId": f"{aid}:paypal", "type": "paypal_refund",
                            "name": f"PayPal refund ${e['amount_usd']:.2f}", "startDate": iso(e["ts"]),
                            "endDate": iso(e["ts"]), "eventColor": "purple", "reason": e["reason"] or ""})
     for w in ledger.webhooks(aid):
-        events.append({"id": f"wh:{w['id']}", "resourceId": aid, "type": "webhook",
-                       "name": f"PayPal webhook: {w['type']}" + ("" if w["verified"] else " (unverified)"),
+        events.append({"id": f"wh:{w['id']}", "resourceId": f"{aid}:paypal", "type": "webhook",
+                       "name": f"⚡ {w['type'].replace('PAYMENT.', '').replace('CHECKOUT.', '')}" + ("" if w["verified"] else " (unverified)"),
                        "startDate": iso(w["ts"]), "endDate": iso(w["ts"]), "eventColor": "indigo",
                        "reason": w["effect"] or "", "purchaseId": w["purchase_id"] or ""})
     return {"now": iso(now), "agent_id": aid, "resources": resources, "events": events,

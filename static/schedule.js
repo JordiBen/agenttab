@@ -19,12 +19,14 @@
     class AtResource extends ResourceModel { static fields = ['kind', 'detail', 'agent']; }
     const now = new Date();
     const sch = new Scheduler({
-      appendTo: el, height: 430, rowHeight: 48, barMargin: 9, eventStyle: 'tonal',
-      startDate: DateHelper.add(now, -9, 'day'), endDate: DateHelper.add(now, 32, 'day'),
-      viewPreset: 'weekAndDay',
+      appendTo: el, autoHeight: true, minHeight: 300, rowHeight: 48, barMargin: 9, eventStyle: 'tonal',
+      startDate: DateHelper.add(now, -8, 'day'), endDate: DateHelper.add(now, 31, 'day'),
+      viewPreset: {base: 'weekAndDay', tickWidth: 40,
+        headers: [{unit: 'week', dateFormat: 'MMM D'}, {unit: 'day', dateFormat: 'D'}]},
+      milestoneLayoutMode: 'estimate', milestoneTextPosition: 'always-outside',
       resourceStore: {modelClass: AtResource}, eventStore: {modelClass: AtEvent},
       columns: [{text: 'Agent / vendor', field: 'name', width: 230, htmlEncode: false,
-        renderer: ({record}) => `<div class="sch-res ${record.kind}"><i class="fa ${record.kind === 'agent' ? 'fa-robot' : 'fa-store'}"></i>
+        renderer: ({record}) => `<div class="sch-res ${record.kind}"><i class="fa ${record.kind === 'agent' ? 'fa-robot' : record.kind === 'paypal' ? 'fa-bolt' : 'fa-store'}"></i>
            <div><b>${enc(record.name)}</b><div class="sch-sub">${enc(record.detail)}</div></div></div>`}],
       features: {
         eventDrag: false, eventResize: false, eventEdit: false, eventDragCreate: false, scheduleMenu: false,

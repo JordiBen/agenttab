@@ -472,7 +472,7 @@ def test_schedule_rows_and_events(client):
     buy(client, k, vendor="giftcards-now", item="giftcard-10", purpose="Reward for our best supplier contact")
     j = client.get("/api/me/schedule", headers={"X-Agent-Key": k}).json()
     kinds = {r["kind"] for r in j["resources"]}
-    assert kinds == {"agent", "vendor"} and len(j["resources"]) == 5   # agent + 3 budget vendors + giftcards (blocked)
+    assert kinds == {"agent", "paypal", "vendor"} and len(j["resources"]) == 6   # agent + PayPal + 3 budget vendors + giftcards
     types = {e["type"] for e in j["events"]}
     assert {"budget", "refund_window", "approval", "denied", "topup"} <= types
     assert j == client.get(f"/api/schedule?agent_id={ag['agent_id']}", headers=A).json() | {"now": j["now"]} or True
