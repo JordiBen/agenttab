@@ -2,8 +2,9 @@
 
 Status: **in progress on this branch, not merged.** The reviewer chose Option 1 (capture-only) on Oct 18 2026; the capture-only
 spike succeeded (see "Capture-only spike") and the code was approved the same day, built behind `VENDOR_PAYOUTS=1` (off by
-default). Done: step 1 (ledger reservation, cents, migration, flag, `payee` layer; `tests/test_vendor_payouts.py`). Not wired
-into the buy flow yet. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
+default). Done: step 1 (ledger reservation, cents, migration, flag, `payee` layer; `tests/test_vendor_payouts.py`) and step 2
+(capture-only buy + owner approval over HTTP, mock PayPal only; `tests/test_vendor_payouts_flow.py`). Not yet: refund
+requests, reconcile replay, webhooks, UI, the local live-sandbox test. Never exercised against real PayPal from the app. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
 not exercised yet is marked **UNSURE**. Code references are to `main` at d4b1dae. Vendor merchant ids never appear in this
 repo: they come from environment variables (section c). Earlier research and spikes: [vendor-payouts-plan.md](vendor-payouts-plan.md).
 
