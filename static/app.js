@@ -115,7 +115,8 @@ const FEED = {queue: [], live: [], busy: false, replay: [], i: 0, visible: true,
 const STAMP = {block: ['block', 'BLOCKED'], approval: ['hold', 'HELD'], refund: ['refund', 'REFUNDED']};
 const stampFor = (outcome, live) => outcome === 'allow' ? (live ? ['paid', 'PAID'] : ['pass', 'ALLOWED']) : (STAMP[outcome] || ['pass', String(outcome).toUpperCase()]);
 const stamp = (outcome, live) => { const [c, w] = stampFor(outcome, live); return `<span class="stamp ${c}">${w}</span>`; };
-const itemName = (vendor, item) => (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.name || item;
+// The page shows each item's short name; the full description stays in the API and the guard's prompt.
+const itemName = (vendor, item) => { const i = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item); return i ? (i.short || i.name) : item; };
 const vendorName = vendor => (CAT || []).find(v => v.vendor === vendor)?.name || vendor;
 // Who decided, in plain words (the layer names stay in the API and the For developers section).
 const STOPPED_BY = {'policy-ai': 'AI guard (Claude)', 'policy-keyword': 'keyword check', 'policy-heuristic': 'keyword check', allowlist: 'vendor not allowed',
@@ -305,7 +306,7 @@ async function pAct(pid, act, owner) { const h = owner ? H() : {'X-Agent-Key': D
   owner ? (load(), OS && OS.refresh()) : (dload(), DS && DS.refresh()); }
 function purchCols(owner) { const o = owner ? 'true' : 'false'; return [
   {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 122, maxWidth: 130},
-  {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => p.data.vendor + ' · ' + p.data.item, tooltipValueGetter: p => p.data.vendor + ' · ' + p.data.item},
+  {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item), tooltipValueGetter: p => p.data.vendor + ' · ' + p.data.item},
   {field: 'amount_usd', headerName: 'Amount', valueFormatter: p => '$' + Number(p.value).toFixed(2), minWidth: 90, maxWidth: 100},
   {field: 'status', cellRenderer: pillCell, minWidth: 165},
   {field: 'funding', headerName: 'Paid from', minWidth: 100, maxWidth: 110},
@@ -324,7 +325,7 @@ let CAT = null;
 async function catalog() { CAT = (await (await fetch('/api/catalog')).json()).vendors || [];
   $('dvendor').innerHTML = CAT.map(v => `<option value="${enc(v.vendor)}">${enc(v.name)}</option>`).join(''); fillItems(); }
 function fillItems() { const v = (CAT || []).find(x => x.vendor === $('dvendor').value);
-  if (v) $('ditem').innerHTML = v.items.map(i => `<option value="${enc(i.item)}">${enc(i.name)} ($${i.price_usd})</option>`).join(''); }
+  if (v) $('ditem').innerHTML = v.items.map(i => `<option value="${enc(i.item)}">${enc(i.short || i.name)} ($${i.price_usd})</option>`).join(''); }
 async function demoReport() { if (!DK()) return show('Start a demo session first.'); let r;
   try { r = await dfetch('/api/demo/report', {headers: {'X-Agent-Key': DK()}}); } catch (e) { return; }
   const j = await r.json(); verdict(r.ok ? pill('charge', 'report · ' + (j.model ? 'AI commentary' : 'template')) : pill('deny', 'error')); show(j.report || j.detail || j);
@@ -406,8 +407,6 @@ async function demoFF() { if (!DK()) return show('Start a demo session first.');
 const CMP_STAMP = {allowed: ['ALLOWED', 'pass'], blocked: ['BLOCKED', 'block'], held: ['HELD', 'hold']};
 const cmpStamp = v => CMP_STAMP[v] || CMP_STAMP.held;
 const cmpWords = s => String(s || '').replace(/[_-]+/g, ' ');
-const CMP_LAYER = {catalog: 'Catalog', unsafe_target: 'Unsafe target', purpose: 'Purpose rule', injection: 'Injection rule', allowlist: 'Vendor allowlist',
-  caps: 'Spending caps', approval: 'Approval threshold', 'policy-ai': 'Claude', 'policy-keyword': 'Keyword check', 'policy-unavailable': 'Claude unavailable', none: 'No guard'};
 let CMP_CASES = [], CMP_CAT = [];
 async function initCompare() { if (!$('compare')) return;
   try {
@@ -415,31 +414,36 @@ async function initCompare() { if (!$('compare')) return;
     CMP_CASES = c.cases || []; CMP_CAT = k.vendors || [];
   } catch (e) { $('cmpstatus').textContent = 'Could not load the purchases. Reload the page to try again.'; return; }
   const sel = $('cmpcase'); sel.textContent = '';
-  for (const x of CMP_CASES) { const o = document.createElement('option'); o.value = x.id;
-    const p = x.purpose.length > 70 ? x.purpose.slice(0, 69) + '…' : x.purpose;
-    o.textContent = `${cmpWords(x.category)}: ${p}`; sel.appendChild(o); }
+  for (const x of CMP_CASES) { const o = document.createElement('option'); o.value = x.id; o.textContent = x.label || x.id; sel.appendChild(o); }
   const own = document.createElement('option'); own.value = ''; own.textContent = 'Write your own purchase…'; sel.appendChild(own);
   const vs = $('cmpvendor'); vs.textContent = '';
   for (const v of CMP_CAT) { const o = document.createElement('option'); o.value = v.vendor; o.textContent = v.name; vs.appendChild(o); }
   cmpItems(); cmpMode(); }
 function cmpItems() { const v = CMP_CAT.find(x => x.vendor === $('cmpvendor').value), is = $('cmpitem'); is.textContent = '';
-  for (const i of (v ? v.items : [])) { const o = document.createElement('option'); o.value = i.item; o.textContent = `${i.name} ($${i.price_usd})`; is.appendChild(o); } }
+  for (const i of (v ? v.items : [])) { const o = document.createElement('option'); o.value = i.item; o.textContent = `${i.short || i.name} ($${i.price_usd})`; is.appendChild(o); } }
 function cmpMode() { $('cmpcustom').hidden = $('cmpcase').value !== ''; }
-function cmpReceipt(side, purchase, latency) {
-  const [word, cls] = cmpStamp(side.verdict);
-  const meta = side.llm_called ? `Claude called · ${enc(side.model)} · ${enc(latency)} ms`
-    : side.cached ? `<span class="cmp-flag">cached</span> same verdict as a recent run · ${enc(side.model)} · Claude not called again`
-    : side.ai_unavailable ? 'Claude gave no verdict, so a human decides'
-    : side.label === 'Rules + AI' ? 'Claude not called: the rules decided first' : 'Keyword check only: never calls an AI';
-  return `<h4>${enc(side.label)}</h4>
-   <dl class="cmp-lines"><div><dt>Vendor</dt><dd>${enc(purchase.vendor_name)}</dd></div>
-    <div><dt>Item</dt><dd>${enc(purchase.item_name)} × ${enc(purchase.quantity)}</dd></div>
-    <div><dt>Amount</dt><dd class="num">${enc(usd(side.amount_usd))}</dd></div>
-    <div><dt>Purpose</dt><dd class="cmp-text">${enc(purchase.purpose) || '<span class="cmp-none">none given</span>'}</dd></div>
-    ${purchase.target ? `<div><dt>Target</dt><dd class="cmp-text">${enc(purchase.target)}</dd></div>` : ''}</dl>
+// The purchase, shown once above both columns.
+function cmpPurchase(p) {
+  const qty = p.quantity > 1 ? ` × ${enc(p.quantity)}` : '';
+  return `<p class="cmp-what"><b>${enc(p.item_short || p.item_name)}</b>${qty} · <span class="num">${enc(usd(p.amount_usd))}</span><span class="cmp-vendor">${enc(p.vendor_name)}</span></p>
+   <p class="cmp-text cmp-purp">${p.purpose ? '“' + enc(p.purpose) + '”' : '<span class="cmp-none">No purpose given</span>'}</p>
+   ${p.target ? `<p class="cmp-text cmp-target"><span class="cmp-k">Target</span> ${enc(p.target)}</p>` : ''}`; }
+// What decided, in plain words. A rule's own wording is replaced; Claude's reason is shown as it came back.
+function cmpReason(side, ai) {
+  if (side.layer === 'policy-unavailable') return 'Claude gave no answer, so a person decides.';
+  if (ai && side.layer === 'policy-ai') return side.reason;
+  if (side.outcome === 'allow') return 'Nothing in the rules forbids it.';
+  return whoLine(side.outcome, side.layer) || 'Stopped by: rules'; }
+function cmpMeta(side) {
+  if (side.llm_called) return `Claude decided in ${(Math.max(0, Number(side.latency_ms) || 0) / 1000).toFixed(1)} s`;
+  if (side.cached) return 'Same answer as a recent check';
+  if (side.layer === 'policy-unavailable') return '';
+  return "Claude wasn't needed: the rules decided first"; }
+function cmpReceipt(side, title, ai) {
+  const [word, cls] = cmpStamp(side.verdict), meta = ai ? cmpMeta(side) : '';
+  return `<h4>${title}</h4>
    <span class="stamp ${cls}${REDUCED ? '' : ' land'}">${word}</span>
-   <p class="cmp-why"><strong>${enc(CMP_LAYER[side.layer] || cmpWords(side.layer))}:</strong> ${enc(side.reason)}</p>
-   <p class="cmp-meta">${meta}</p>`; }
+   <p class="cmp-why">${enc(cmpReason(side, ai))}</p>${meta ? `<p class="cmp-meta">${enc(meta)}</p>` : ''}`; }
 async function runCompare() { const b = $('cmpbtn'), st = $('cmpstatus'); const id = $('cmpcase').value;
   const body = id ? {case_id: id} : {vendor: $('cmpvendor').value, item: $('cmpitem').value, quantity: 1,
     purpose: $('cmppurpose').value.slice(0, 300), target: $('cmptarget').value.trim().slice(0, 300)};
@@ -449,13 +453,34 @@ async function runCompare() { const b = $('cmpbtn'), st = $('cmpstatus'); const 
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { const d = j.detail; st.textContent = r.status === 429 ? 'Comparison limit reached for now. Try again later.'
       : typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg).join('; ') : 'That purchase could not be compared.'; return; }
-    $('cmpl').innerHTML = cmpReceipt(j.rules, j.purchase, j.rules.latency_ms);
-    $('cmpr').innerHTML = cmpReceipt(j.ai, j.purchase, j.ai.latency_ms);
-    st.textContent = `Dry run: ${j.paypal_calls} PayPal calls, ${j.ledger_writes} ledger writes, ${j.fetches} fetches.` + (j.expected ? ` The eval label for this purchase is "${j.expected}".` : '');
+    $('cmpbuyd').innerHTML = cmpPurchase(j.purchase); $('cmpbuy').hidden = false;
+    $('cmpl').innerHTML = cmpReceipt(j.rules, 'Rules only', false);
+    $('cmpr').innerHTML = cmpReceipt(j.ai, 'Rules + Claude', true);
+    st.textContent = 'Nothing was charged. This is a test run.';
   } catch (e) { st.textContent = 'Network error. Nothing was bought.'; }
   finally { b.disabled = false; } }
 
 // ---- boot ----
+// Header: hide while scrolling down, show on scroll up. Passive listener, one rAF per frame, 8 px dead zone against
+// jitter. Always shown near the top, while it has keyboard focus, and while the pointer is over it.
+function initNavHide() { const nav = document.querySelector('.nav'); if (!nav) return;
+  const root = document.documentElement, DEAD = 8; let lastY = scrollY, ticking = false, hover = false;
+  const setH = () => root.style.setProperty('--nav-h', nav.offsetHeight + 'px'); setH(); addEventListener('resize', setH, {passive: true});
+  const keep = () => hover || nav.contains(document.activeElement);
+  // Scrolling up brings the header back, except while a heading sits in its band: it waits until the heading has moved
+  // on, so it never lands on top of the heading you are reading.
+  const heads = [...document.querySelectorAll('h1, h2, h3, h4')].filter(e => !nav.contains(e));
+  const headingUnder = hgt => heads.some(e => { const r = e.getBoundingClientRect(); return r.bottom > 0 && r.top < hgt && r.height > 0; });
+  const update = () => { ticking = false; const y = scrollY, d = y - lastY, hgt = nav.offsetHeight;
+    if (y < hgt) { nav.classList.remove('nav-hidden'); lastY = y; return; }
+    if (Math.abs(d) < DEAD) return;                   // wait until the movement is real
+    const show = keep() || (d < 0 && !headingUnder(hgt));
+    nav.classList.toggle('nav-hidden', !show); lastY = y; };
+  addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(update); } }, {passive: true});
+  nav.addEventListener('pointerenter', () => { hover = true; nav.classList.remove('nav-hidden'); });
+  nav.addEventListener('pointerleave', () => { hover = false; });
+  nav.addEventListener('focusin', () => nav.classList.remove('nav-hidden')); }
+initNavHide();
 initMotion();
 const refreshLive = () => fetch('/healthz').then(r => r.json()).then(setLive).catch(() => {}); setInterval(refreshLive, 30000);
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';

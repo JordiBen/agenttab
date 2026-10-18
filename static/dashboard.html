@@ -86,9 +86,10 @@
    <button class="cmp-btn" id="cmpbtn" type="submit">Compare the two guards</button>
   </form>
   <p class="cmp-status" id="cmpstatus" role="status" aria-live="polite"></p>
+  <div class="cmp-buy" id="cmpbuy" data-ui role="group" aria-label="The purchase" hidden><h4>The purchase</h4><div id="cmpbuyd"></div></div>
   <div class="cmp-pair" id="cmppair">
-   <article class="cmp-r" data-ui id="cmpl" aria-label="Rules + keyword check"><h4>Rules + keyword check</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
-   <article class="cmp-r" data-ui id="cmpr" aria-label="Rules + AI"><h4>Rules + AI</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
+   <article class="cmp-r" data-ui id="cmpl" aria-label="Rules only"><h4>Rules only</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
+   <article class="cmp-r" data-ui id="cmpr" aria-label="Rules + Claude"><h4>Rules + Claude</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
   </div>
 </div>
  <div class="gaunt" id="gauntlet">
@@ -209,7 +210,7 @@
    <li><a href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client"><b>MCP:</b></a> six guarded tools over Streamable HTTP; agent key only; no owner tools. <a id="bentomcp" class="t-link" href="#mcp">Connect a client →</a></li>
    <li><a href="https://github.com/JordiBen/agenttab#tests"><b>Safety:</b></a> integer-cent ledger, per-agent locks, parallel buys can't overspend, SSRF-safe fetching, <span id="testcount"></span>automated tests.</li>
   </ul>
-  <p class="dev-links"><a href="/docs">API docs</a> · <a href="https://github.com/JordiBen/agenttab/blob/main/docs/threat-model.md">Threat model</a> · <a href="https://github.com/JordiBen/agenttab/blob/main/docs/judge-instructions.md">Judge instructions</a> · <a href="https://github.com/JordiBen/agenttab">GitHub</a></p>
+  <p class="dev-links"><a href="/docs">API reference</a> · <a href="https://github.com/JordiBen/agenttab/blob/main/docs/threat-model.md">Threat model</a> · <a href="https://github.com/JordiBen/agenttab/blob/main/docs/judge-instructions.md">Judge instructions</a> · <a href="https://github.com/JordiBen/agenttab">GitHub</a></p>
  </div>
  <div class="card" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue">MCP 2026-07-28</span></h3></div>
     <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
@@ -228,7 +229,7 @@
 <footer class="saw-t"><div class="wrap">
  <div class="wm" aria-label="AgentTab"><b style="--h:72px">A</b><b style="--h:56px">g</b><b style="--h:64px">e</b><b style="--h:52px">n</b><b style="--h:68px">t</b><b style="--h:80px">T</b><b style="--h:58px">a</b><b style="--h:70px">b</b></div>
  <div class="fcols">
-  <div><h3>Project</h3><ul><li><a href="https://github.com/JordiBen/agenttab">GitHub</a></li><li><a href="/docs">API docs</a></li><li>MIT licence</li></ul></div>
+  <div><h3>Project</h3><ul><li><a href="https://github.com/JordiBen/agenttab">GitHub</a></li><li><a href="/docs">API reference</a></li><li>MIT licence</li></ul></div>
   <div><h3>On this page</h3><ul><li><a href="#how">How it works</a></li><li><a href="#try">Try it</a></li><li><a href="#proof">Proof</a></li><li><a href="#developers">Developers</a></li></ul></div>
   <div><h3>Honest labels</h3><ul><li>PayPal sandbox only, no real money</li><li>Bryntum Scheduler evaluation build</li><li>Roundo (SIL OFL) · AG Grid Community (MIT)</li></ul></div>
  </div>

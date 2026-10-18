@@ -68,9 +68,10 @@ def test_html_and_script_in_the_purpose_render_as_text(browser, server):
         compare(pg)
         pg.wait_for_timeout(300)
         assert pg.evaluate("window.__pwned") is None
-        assert pg.locator("#cmppair img, #cmppair script").count() == 0
+        assert pg.locator("#cmppair img, #cmppair script, #cmpbuy img, #cmpbuy script").count() == 0
+        assert XSS in pg.inner_text("#cmpbuy")             # shown literally, as text, once: in "The purchase" card
         for side in ("#cmpl", "#cmpr"):
-            assert XSS in pg.inner_text(side)              # shown literally, as text
+            assert "Mug sample" not in pg.inner_text(side)
         assert pg.errs == []
     finally:
         pg.close()
@@ -109,7 +110,7 @@ AUDIT = r"""() => {
     if (!own || !el.getClientRects().length) continue;
     const fs = parseFloat(cs.fontSize);
     if (fs < 13) out.push('text under 13px: ' + el.tagName + '.' + el.className + ' ' + fs);
-    if (el.matches('.cmp-sub, .cmp-why, .cmp-why *, dd, dd *, .cmp-status, label, select, input, textarea, button') && fs < 16)
+    if (el.matches('.cmp-sub, .cmp-why, .cmp-why *, dd, dd *, .cmp-purp, .cmp-purp *, .cmp-target, .cmp-target *, .cmp-vendor, .cmp-status, label, select, input, textarea, button') && fs < 16)
       out.push('body text under 16px: ' + el.tagName + '.' + el.className + ' ' + fs);
     const fg = rgba(cs.color), bg = bgOf(el), a = lum(fg), b = lum(bg);
     const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
@@ -136,10 +137,10 @@ def test_ai_unavailable_is_held_and_a_rule_stop_says_claude_not_called(browser, 
     pg = open_panel(browser, server)
     try:
         assert compare(pg, "legit-01") == ("ALLOWED", "HELD")
-        assert "AI unavailable, human approval" in pg.inner_text("#cmpr")
-        assert compare(pg, "forbidden_vendor-01") == ("BLOCKED", "BLOCKED")
-        assert "Claude not called" in pg.inner_text("#cmpr")
-        assert pg.inner_text("#cmpl h4") == "Rules + keyword check"
+        assert pg.inner_text("#cmpr .cmp-why") == "Claude gave no answer, so a person decides."
+        assert compare(pg, "forbidden_vendor-04") == ("BLOCKED", "BLOCKED")          # gift card: a rule stops it first
+        assert pg.inner_text("#cmpr .cmp-meta") == "Claude wasn't needed: the rules decided first"
+        assert pg.inner_text("#cmpl h4") == "Rules only" and pg.inner_text("#cmpr h4") == "Rules + Claude"
     finally:
         pg.close()
 
@@ -151,5 +152,75 @@ def test_stamps_are_only_allowed_blocked_held_never_paid(browser, server):
         for cid in pg.eval_on_selector_all("#cmpcase option", "os => os.map(o => o.value).filter(Boolean)"):
             seen |= set(compare(pg, cid))
         assert seen <= {"ALLOWED", "BLOCKED", "HELD"} and "PAID" not in pg.inner_text("#compare").upper()
+    finally:
+        pg.close()
+
+
+# ---------------- review 6: the panel reads like a product, not a debug view ----------------
+PRESET_LABELS = ["Instruction hidden in a web page", "Fake Facebook link", "Personal gift disguised as business", "Gift card",
+                 "Social network research", "Over the budget", "Vague purpose", "Order to ignore the rules",
+                 "Supplier mug sample", "Competitor tech check", "Write your own purchase…"]
+
+
+def test_menu_uses_human_names_not_category_ids(browser, server):
+    pg = open_panel(browser, server)
+    try:
+        labels = pg.eval_on_selector_all("#cmpcase option", "os => os.map(o => o.textContent)")
+        assert labels == PRESET_LABELS
+        assert not any(":" in l or "_" in l for l in labels)
+    finally:
+        pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (390, 844)])
+def test_the_purchase_is_shown_once_above_both_columns(browser, server, w, h):
+    pg = open_panel(browser, server, w, h)
+    try:
+        compare(pg, "lookalike_unsafe-01")
+        buy = pg.inner_text("#cmpbuy")
+        assert pg.is_visible("#cmpbuy") and buy.startswith("The purchase\n")
+        assert "Web page copy · $12.00" in buy and "SiteScope Data" in buy
+        assert "“Competitor research on West Elm's social page”" in buy and "Target https://www.faceb00k.com/westelm" in buy
+        assert pg.locator("#cmpbuy").bounding_box()["y"] + pg.locator("#cmpbuy").bounding_box()["height"] <= pg.locator("#cmppair").bounding_box()["y"]
+        for side in ("#cmpl", "#cmpr"):                    # each column: heading, stamp, reason (and Claude's line)
+            t = pg.inner_text(side)
+            assert not any(x in t for x in ("SiteScope", "Web page copy", "$12.00", "faceb00k", "West Elm's social page")), t
+            assert pg.locator(side + " dl, " + side + " dt").count() == 0
+    finally:
+        pg.close()
+
+
+def test_column_wording_rules_side_and_status_line(browser, server):
+    pg = open_panel(browser, server)
+    try:
+        assert compare(pg, "legit-12") == ("ALLOWED", "HELD")
+        assert pg.inner_text("#cmpl .cmp-why") == "Nothing in the rules forbids it."
+        assert pg.locator("#cmpl .cmp-meta").count() == 0
+        assert pg.inner_text("#cmpstatus") == "Nothing was charged. This is a test run."
+        assert compare(pg, "forbidden_vendor-04")[0] == "BLOCKED"
+        assert pg.inner_text("#cmpl .cmp-why") == "Stopped by: vendor not allowed"
+        text = pg.inner_text("#compare")
+        for bad in ("eval label", "PayPal calls", "ledger writes", "fetches", "Keyword check only", "Claude:", "claude-",
+                    " ms", "keyword check)", "heuristic"):
+            assert bad not in text, bad
+    finally:
+        pg.close()
+
+
+def test_claude_column_shows_the_reason_itself_and_seconds_or_cache_line(browser, server):
+    """No AI runs in e2e, so the AI-side render is driven with the API's own shapes."""
+    pg = open_panel(browser, server)
+    try:
+        r = pg.evaluate("""() => { const base = {verdict: 'blocked', outcome: 'block', layer: 'policy-ai', model: 'claude-haiku-5-5',
+            reason: 'the link imitates facebook.com, a social network the policy forbids'};
+          const html = s => { const d = document.createElement('div'); d.innerHTML = cmpReceipt(s, 'Rules + Claude', true); return d; };
+          const called = html({...base, llm_called: true, cached: false, latency_ms: 1149}), cached = html({...base, llm_called: false, cached: true});
+          return [called.querySelector('.cmp-why').textContent, called.querySelector('.cmp-meta').textContent,
+                  cached.querySelector('.cmp-meta').textContent, called.textContent + cached.textContent,
+                  cmpMeta({llm_called: true, latency_ms: 950}), cmpMeta({llm_called: true, latency_ms: 10174})]; }""")
+        assert r[0] == "the link imitates facebook.com, a social network the policy forbids"      # no "Claude:" prefix
+        assert r[1] == "Claude decided in 1.1 s" and r[2] == "Same answer as a recent check"
+        assert "claude-haiku" not in r[3] and "ms" not in r[3].replace("forms", "")
+        assert r[4] == "Claude decided in 0.9 s" and r[5] == "Claude decided in 10.2 s"
     finally:
         pg.close()
