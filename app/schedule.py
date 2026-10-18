@@ -72,7 +72,8 @@ def sweep(ledger: Ledger, aid: str, now: float | None = None) -> list[str]:
     return created
 
 
-def build(ledger: Ledger, agent, now: float | None = None, agent_detail: str | None = None) -> dict:
+def build(ledger: Ledger, agent, now: float | None = None, agent_detail: str | None = None,
+          vendor_spent: dict | None = None) -> dict:
     """Bryntum Scheduler data for one agent: one row for the agent, one per vendor it has touched.
     agent_detail replaces the agent row's "tab $x" (vendor-funded agents have no tab: the caller passes the budget left)."""
     now = now or time.time()
@@ -98,7 +99,7 @@ def build(ledger: Ledger, agent, now: float | None = None, agent_detail: str | N
         resources.append({"id": rid, "name": v["name"], "kind": "vendor", "detail": detail, "agent": aid})
         if allowed and cfg.vendor_budgets is not None:
             budget = cfg.vendor_budgets[vid]
-            spent = ledger.vendor_spent_since(aid, vid, now - BUDGET_DAYS * DAY)
+            spent = vendor_spent[vid] if vendor_spent and vid in vendor_spent else ledger.vendor_spent_since(aid, vid, now - BUDGET_DAYS * DAY)
             pct = float(spent / budget * 100) if budget else 0
             events.append({"id": f"budget:{rid}", "resourceId": rid, "type": "budget",
                            "name": f"30-day budget: ${spent:.2f} of ${budget:.2f}",

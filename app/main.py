@@ -380,7 +380,15 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             d["funding_model"] = a["funding_model"]
             if a["funding_model"] == "vendor":
                 d["envelope"] = envelope_view(a["id"])
+                d["vendor_budgets"] = [{**v, **vendor_bar_cents(a["id"], v["vendor"])} for v in d["vendor_budgets"]]
         return d
+
+    def vendor_bar_cents(aid: str, vendor: str) -> dict:
+        """A vendor-funded agent's bar counts what its envelope counts (set aside + paid), split like the budget card."""
+        since = time.time() - 30 * 86400
+        used = ledger.vendor_counted_cents(aid, since, vendor=vendor)
+        paid = ledger.vendor_counted_cents(aid, since, vendor=vendor, statuses=VENDOR_PAID)
+        return {"spent_30d_usd": used / 100, "paid_usd": paid / 100, "set_aside_usd": (used - paid) / 100}
 
     def agent_view_base(a) -> dict:
         return {"agent_id": a["id"], "name": a["name"], "owner_email": a["owner_email"],
@@ -2147,11 +2155,19 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         cents = round(e["remaining_usd"] * 100)
         return f"budget ${cents // 100} left" if cents % 100 == 0 else f"budget ${cents // 100}.{cents % 100:02d} left"
 
+    def schedule_vendor_spent(a) -> dict | None:
+        """Vendor-funded agents (flag on): the board's 30-day budget bars count set-aside and paid purchases."""
+        if not (s.vendor_payouts and a["funding_model"] == "vendor"):
+            return None
+        since = time.time() - 30 * 86400
+        return {vid: Decimal(ledger.vendor_counted_cents(a["id"], since, vendor=vid)) / 100
+                for vid in (pr.AgentConfig.from_row(a).vendor_budgets or {})}
+
     @app.get("/api/me/schedule")
     def my_schedule(a=Depends(agent_from_key)):
         sched.sweep(ledger, a["id"])
         a = ledger.agent(a["id"])
-        return sched.build(ledger, a, agent_detail=schedule_agent_detail(a))
+        return sched.build(ledger, a, agent_detail=schedule_agent_detail(a), vendor_spent=schedule_vendor_spent(a))
 
     @app.get("/api/schedule", dependencies=[Depends(admin)])
     def agent_schedule(agent_id: str):
@@ -2159,7 +2175,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not a:
             raise HTTPException(404, "no such agent")
         sched.sweep(ledger, agent_id)
-        return sched.build(ledger, a, agent_detail=schedule_agent_detail(a))
+        return sched.build(ledger, a, agent_detail=schedule_agent_detail(a), vendor_spent=schedule_vendor_spent(a))
 
     def suggestion_for(sid: str, x_admin_token: str, x_agent_key: str):
         sg = ledger.suggestion(sid)

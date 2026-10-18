@@ -60,7 +60,7 @@ const VOUT = {card_required: ['warn', 'No saved card', 'Save a card for this age
   vendor_payouts_disabled: ['warn', 'Vendor payments are off', 'Nothing was bought or charged.']};
 function vendorOutcome(j) { const e = j && (j.error || (j.detail && j.detail.error)); return VOUT[e] || null; }
 function vendorBought(j, g) {
-  toast('ok', 'Bought · ' + usd(j.paid_usd), 'Paid to ' + (j.paid_to || 'the vendor') + ' from the saved card');
+  toast('ok', 'Paid · ' + usd(j.paid_usd), 'Paid to ' + (j.paid_to || 'the vendor') + ' from the saved card');
   return `${g ? g.reason + '\n\n' : ''}Paid ${usd(j.paid_usd)} to ${j.paid_to || 'the vendor'} from the saved card` +
     (j.envelope ? ` · ${usd(j.envelope.remaining_usd)} left of the 30-day budget` : '') +
     (j.status === 'payment_pending' ? ' · PayPal is still finishing the payment' : '') +
@@ -376,9 +376,10 @@ async function pAct(pid, act, owner) { const h = owner ? H() : {'X-Agent-Key': D
   owner ? (load(), OS && OS.refresh()) : (dload(), DS && DS.refresh()); }
 function purchCols(owner) { const o = owner ? 'true' : 'false'; return [
   {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 122, maxWidth: 130},
-  {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item), tooltipValueGetter: p => p.data.vendor + ' · ' + p.data.item},
+  {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => p.data.funding === 'vendor' ? itemName(p.data.vendor, p.data.item) + ' · ' + vendorName(p.data.vendor) : vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item),
+   tooltipValueGetter: p => p.data.funding === 'vendor' ? vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item) : p.data.vendor + ' · ' + p.data.item},
   {field: 'amount_usd', headerName: 'Amount', valueFormatter: p => '$' + Number(p.value).toFixed(2), minWidth: 90, maxWidth: 100},
-  {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 165},
+  {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 250},
   {field: 'funding', headerName: 'Paid from', minWidth: 100, maxWidth: 130, valueGetter: p => p.data.funding === 'vendor' ? 'saved card' : p.data.funding,
    tooltipValueGetter: p => p.data.paid_to ? 'Paid to ' + p.data.paid_to + ' from the saved card' : ''},
   {field: 'refund_deadline', headerName: 'Refundable until', minWidth: 140, valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleDateString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : (p.data.status === 'completed' ? 'final sale' : '')},
@@ -392,7 +393,7 @@ const dPurch = agGrid.createGrid($('dpurch'), {...gopt, columnDefs: purchCols(fa
 const oPurch = agGrid.createGrid($('opurch'), {...gopt, columnDefs: purchCols(true)});
 function bars(list, purchases = []) { return (list || []).map(v => { const p = Math.min(100, 100 * v.spent_30d_usd / (v.budget_usd || 1));
   const c = p >= 90 ? 'var(--stamp-block)' : p >= 60 ? 'var(--stamp-hold)' : 'var(--ink)';
-  return `<div class="vb"><span>${enc(v.name)}</span><span class="track" role="progressbar" aria-label="${enc(v.name)} budget used" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:${c}"></i></span>${spark(vendorSeries(purchases, v.vendor), 84, 24, p >= 90 ? '#a3261b' : '#38450f')}<span class="mono">${usd(v.spent_30d_usd)} / ${usd(v.budget_usd)}</span></div>`; }).join(''); }
+  return `<div class="vb"><span>${enc(v.name)}</span><span class="track" role="progressbar" aria-label="${enc(v.name)} budget used" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:${c}"></i></span>${spark(vendorSeries(purchases, v.vendor), 84, 24, p >= 90 ? '#a3261b' : '#38450f')}<span class="mono">${usd(v.spent_30d_usd)} / ${usd(v.budget_usd)}${v.paid_usd != null ? `<small class="vb-split">${usd(v.paid_usd)} paid · ${usd(v.set_aside_usd)} set aside</small>` : ''}</span></div>`; }).join(''); }
 let CAT = null;
 async function catalog() { CAT = (await (await fetch('/api/catalog')).json()).vendors || [];
   $('dvendor').innerHTML = CAT.map(v => `<option value="${enc(v.vendor)}">${enc(v.name)}</option>`).join(''); fillItems(); }

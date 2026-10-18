@@ -264,6 +264,7 @@ textarea{min-height:70px;resize:vertical}
 .mcp-row .mcp-val{flex:1 1 200px}
 .bal{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
 .bal b{font-size:var(--step-head);font-weight:500;letter-spacing:-0.025em;font-variant-numeric:tabular-nums}
+.vb-split{display:block;color:var(--muted);font-size:var(--step-meta)}
 .vb{display:grid;grid-template-columns:110px 1fr 84px auto;gap:10px;align-items:center;font-size:var(--step-small);margin:8px 0}
 .spark{display:block;width:100%;height:auto;max-width:150px}
 .grid-h{height:320px}
