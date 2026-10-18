@@ -3,6 +3,7 @@ Amounts are stored as integer micro-dollars to avoid float drift."""
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 import threading
@@ -18,6 +19,50 @@ def to_micro(d: Decimal) -> int:
 
 def from_micro(m: int) -> Decimal:
     return (Decimal(m) / MICRO).quantize(Decimal("0.0001"))
+
+
+# Vendor payouts use whole cents (integers). Floats never become money.
+def to_cents(d: Decimal) -> int:
+    if not isinstance(d, Decimal):
+        raise TypeError("amounts must be Decimal")
+    if not d.is_finite() or d < 0:
+        raise ValueError("amount must be a finite, non-negative Decimal")
+    c = d * 100
+    if c != c.to_integral_value():
+        raise ValueError("amount has more than 2 decimal places")
+    return int(c)
+
+
+def _is_cents(c) -> bool:
+    return type(c) is int     # excludes bool, float, Decimal, str
+
+
+def cents_str(c: int) -> str:
+    """PayPal `value` string, formatted from cents: 1000 -> '10.00'."""
+    if not _is_cents(c):
+        raise TypeError("cents must be an int")
+    if c < 0:
+        raise ValueError("negative amount")
+    return f"{c // 100}.{c % 100:02d}"
+
+
+_VALUE = re.compile(r"([0-9]+)(?:\.([0-9]{1,2}))?")
+
+
+def parse_cents(s: str) -> int:
+    """A PayPal `value` string back to cents, refusing anything that isn't plain whole cents."""
+    m = _VALUE.fullmatch(s) if isinstance(s, str) else None
+    if not m:
+        raise ValueError("not a whole-cent amount")
+    return int(m.group(1)) * 100 + int((m.group(2) or "0").ljust(2, "0"))
+
+
+# Vendor-funded purchases that count against the caps (reserved + in flight + paid + refund not yet confirmed).
+VENDOR_COUNTED = ("reserved", "pending_approval", "completing", "payment_pending", "payment_unknown", "flagged",
+                  "completed", "refund_requested", "partially_refunded")
+# Fields a status move may also set. Never status, amounts, payee or agent.
+MOVABLE_FIELDS = frozenset({"paypal_order", "paypal_capture", "reason", "fulfillment", "flag", "refund_deadline",
+                            "approval_expires", "paypal_confirmed", "refunded_ts", "decision_source"})
 
 
 SCHEMA = """
@@ -53,6 +98,8 @@ AGENT_MIGRATIONS = [
     ("vault_card", "TEXT"),                # display only, e.g. "VISA 1111"
     ("auto_topup_micro", "INTEGER"),       # saved-card auto top-up size; NULL = off
     ("auto_topup_cap_micro", "INTEGER"),   # max saved-card top-ups per rolling 30 days
+    ("funding_model", "TEXT DEFAULT 'tab'"),  # tab (today) | vendor (VENDOR_PAYOUTS: paid straight to vendors)
+    ("envelope_cents_30d", "INTEGER"),     # vendor-funded: owner-set rolling 30-day total, whole cents
 ]
 ORDER_MIGRATIONS = [
     ("intent", "TEXT DEFAULT 'CAPTURE'"),  # AUTHORIZE for approval links (hold, then capture on delivery)
@@ -66,6 +113,8 @@ PURCHASE_MIGRATIONS = [
     ("refunded_ts", "REAL"),
     ("flag", "TEXT"),               # e.g. capture reversed / denied (from webhooks)
     ("paypal_authorization", "TEXT"),  # approval purchases: the PayPal hold, captured after delivery
+    ("amount_cents", "INTEGER"),    # vendor-funded purchases: whole cents (old rows keep amount_micro only)
+    ("payee_merchant_id", "TEXT"),  # vendor-funded: the PayPal merchant id paid (from env; never in API responses)
 ]
 
 
@@ -326,6 +375,128 @@ class Ledger:
                 if db.in_transaction:
                     db.execute("ROLLBACK")
                 raise
+
+    # vendor-funded agents (capture-only vendor payouts)
+    def set_funding_model(self, aid: str, model: str, envelope_cents: int | None = None) -> tuple[bool, str]:
+        """Per-agent cutover, never automatic. To 'vendor' only with a whole-cent envelope and an empty tab
+        (a positive balance is refunded first); back to 'tab' only with no vendor purchase in flight."""
+        if model not in ("tab", "vendor"):
+            return False, "unknown funding model"
+        if model == "vendor" and not (_is_cents(envelope_cents) and envelope_cents >= 0):
+            return False, "envelope must be whole cents"
+        with self.lock:
+            db = self.db
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                if self.agent(aid) is None:
+                    db.execute("ROLLBACK")
+                    return False, "unknown agent"
+                if model == "vendor":
+                    if self.balance(aid) != 0:
+                        db.execute("ROLLBACK")
+                        return False, "tab balance must be refunded before switching to vendor payouts"
+                    db.execute("UPDATE agents SET funding_model='vendor', envelope_cents_30d=? WHERE id=?",
+                               (envelope_cents, aid))
+                else:
+                    busy = db.execute("SELECT 1 FROM purchases WHERE agent_id=? AND funding='vendor' AND status IN"
+                                      " ('reserved','pending_approval','completing','payment_pending','payment_unknown',"
+                                      "'flagged')", (aid,)).fetchone()
+                    if busy:
+                        db.execute("ROLLBACK")
+                        return False, "vendor purchases still in flight"
+                    db.execute("UPDATE agents SET funding_model='tab', envelope_cents_30d=NULL WHERE id=?", (aid,))
+                db.execute("COMMIT")
+                return True, ""
+            except BaseException:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
+    def vendor_counted_cents(self, aid: str, since: float, vendor: str | None = None) -> int:
+        q = (f"SELECT COALESCE(SUM(amount_cents),0) FROM purchases WHERE agent_id=? AND funding='vendor'"
+             f" AND status IN ({','.join('?' * len(VENDOR_COUNTED))}) AND ts>=?")
+        args = [aid, *VENDOR_COUNTED, since]
+        if vendor is not None:
+            q += " AND vendor=?"
+            args.append(vendor)
+        return int(self.db.execute(q, args).fetchone()[0])
+
+    def reserve_vendor_purchase(self, aid: str, vendor: str, item: str, quantity: int, amount_cents: int, target: str,
+                                purpose: str, status: str, payee_merchant_id: str | None, limits: dict,
+                                decision_source: str, reason: str, approval_expires: float | None = None,
+                                refund_deadline: float | None = None) -> tuple[str | None, str]:
+        """Reserve a vendor-funded purchase BEFORE fulfilment and before any PayPal call: one BEGIN IMMEDIATE
+        transaction re-checks the per-purchase max, the 24 h cap, the vendor's 30-day budget and the 30-day
+        envelope against reserved + paid amounts (VENDOR_COUNTED), then inserts the row as `reserved` or
+        `pending_approval`. A parallel buy (same process or another one on the same file) sees it at once.
+        limits = {"per_purchase_max_cents", "daily_cap_cents", "vendor_budget_cents" | None,
+        "envelope_cents_30d" | None}; the agent's own envelope always applies too. Returns (pid, "") or (None, why)."""
+        from .vendorpay import valid_merchant_id
+        if status not in ("reserved", "pending_approval"):
+            raise ValueError("a reservation is 'reserved' or 'pending_approval'")
+        if not _is_cents(amount_cents):
+            raise TypeError("amount must be whole cents (int)")
+        if amount_cents <= 0:
+            raise ValueError("amount must be positive")
+        if not valid_merchant_id(payee_merchant_id):
+            return None, "vendor has no PayPal account configured"
+        now = time.time()
+        with self.lock:
+            db = self.db
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                a = self.agent(aid)
+                why = ""
+                if a is None:
+                    why = "unknown agent"
+                elif a["funding_model"] != "vendor":
+                    why = "agent is not vendor-funded"
+                elif a["frozen_reason"]:
+                    why = f"agent is frozen: {a['frozen_reason']}"
+                if not why:
+                    env = a["envelope_cents_30d"] if _is_cents(a["envelope_cents_30d"]) else 0
+                    if limits.get("envelope_cents_30d") is not None:
+                        env = min(env, limits["envelope_cents_30d"])
+                    day = self.vendor_counted_cents(aid, now - 86400)
+                    month = self.vendor_counted_cents(aid, now - 30 * 86400)
+                    if amount_cents > limits["per_purchase_max_cents"]:
+                        why = f"${cents_str(amount_cents)} exceeds the per-purchase max ${cents_str(limits['per_purchase_max_cents'])}"
+                    elif day + amount_cents > limits["daily_cap_cents"]:
+                        why = f"daily cap ${cents_str(limits['daily_cap_cents'])} would be exceeded (${cents_str(day)} in 24h)"
+                    elif limits.get("vendor_budget_cents") is not None and \
+                            self.vendor_counted_cents(aid, now - 30 * 86400, vendor) + amount_cents > limits["vendor_budget_cents"]:
+                        why = f"30-day budget ${cents_str(limits['vendor_budget_cents'])} for {vendor} would be exceeded"
+                    elif month + amount_cents > env:
+                        why = f"30-day envelope ${cents_str(env)} would be exceeded (${cents_str(month)} used)"
+                if why:
+                    db.execute("ROLLBACK")
+                    return None, why
+                pid = "pu_" + secrets.token_hex(6)
+                db.execute("INSERT INTO purchases(id,agent_id,ts,vendor,item,quantity,amount_micro,amount_cents,target,"
+                           "purpose,status,funding,refund_deadline,approval_expires,paypal_order,paypal_capture,"
+                           "decision_source,reason,fulfillment,payee_merchant_id)"
+                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (pid, aid, now, vendor, item, quantity, amount_cents * 10_000, amount_cents, target, purpose,
+                            status, "vendor", refund_deadline, approval_expires, "", "", decision_source, reason, "",
+                            payee_merchant_id))
+                db.execute("COMMIT")
+                return pid, ""
+            except BaseException:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
+    def move_purchase(self, pid: str, frm: tuple[str, ...], to: str, **fields) -> bool:
+        """One conditional UPDATE: only the caller that finds the purchase in `frm` moves it (and sets `fields`)."""
+        bad = set(fields) - MOVABLE_FIELDS
+        if bad or not frm:
+            raise ValueError(f"not movable: {sorted(bad)}")
+        sets = ", ".join(["status=?"] + [f"{k}=?" for k in fields])
+        q = f"UPDATE purchases SET {sets} WHERE id=? AND status IN ({','.join('?' * len(frm))})"
+        with self.lock:
+            n = self.db.execute(q, (to, *fields.values(), pid, *frm)).rowcount
+            self.db.commit()
+        return n == 1
 
     def claim_purchase(self, pid: str, frm: str, to: str) -> bool:
         """Atomic status transition (e.g. pending_approval -> completing): exactly one caller wins."""

@@ -47,6 +47,8 @@ class Settings:
     admin_token: str = _env("ADMIN_TOKEN")
     # Public demo: anyone can open a sandboxed demo session; owner endpoints stay admin-only.
     demo_mode: bool = field(default_factory=lambda: os.getenv("DEMO_MODE", "0") == "1")
+    # Vendor payouts, capture-only (docs/vendor-payouts-impl-plan.md). Off unless exactly "1".
+    vendor_payouts: bool = field(default_factory=lambda: os.getenv("VENDOR_PAYOUTS", "0") == "1")
     demo_sessions_per_ip_hour: int = _env_int("DEMO_SESSIONS_PER_IP_HOUR", 3)
     demo_sessions_per_day: int = _env_int("DEMO_SESSIONS_PER_DAY", 40)
     tool_calls_per_ip_hour: int = _env_int("TOOL_CALLS_PER_IP_HOUR", 40)

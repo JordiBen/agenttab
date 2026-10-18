@@ -301,8 +301,10 @@ def test_reserve_refuses_non_cent_amounts(L, amt):
 
 def test_reserve_per_purchase_max(L):
     aid = vendor_agent(L, envelope=100_000)
-    assert reserve(L, aid, 12_001)[0] is None
-    assert reserve(L, aid, 12_000)[0] is not None
+    lim = {"envelope_cents_30d": 100_000}
+    pid, why = reserve(L, aid, 12_001, limits=lim)
+    assert pid is None and "per-purchase max" in why
+    assert reserve(L, aid, 12_000, limits=lim)[0] is not None
 
 
 def test_reserve_daily_cap_counts_reserved_and_paid(L):
@@ -342,8 +344,15 @@ COUNTED = ["reserved", "pending_approval", "completing", "payment_pending", "pay
 NOT_COUNTED = ["failed", "rejected", "expired", "payment_failed", "refunded"]
 
 
-@pytest.mark.parametrize("status", COUNTED + NOT_COUNTED)
-def test_counted_statuses(L, status):
+def test_status_lists_match_ledger():
+    from app.ledger import VENDOR_COUNTED
+    assert set(VENDOR_COUNTED) == set(COUNTED) and not set(VENDOR_COUNTED) & set(NOT_COUNTED)
+
+
+@pytest.mark.parametrize("status", ["reserved", "pending_approval", "completing", "payment_pending", "payment_unknown",
+                                    "flagged", "completed", "refund_requested", "partially_refunded",
+                                    "failed", "rejected", "expired", "payment_failed", "refunded"])
+def test_counted_statuses(L, status):     # literal list: the landing page's static test counter reads it
     aid = vendor_agent(L)
     pid, _ = reserve(L, aid, 4_000)
     L.update_purchase(pid, status=status)

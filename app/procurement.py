@@ -11,7 +11,8 @@ Deterministic layers, in order:
   2. unsafe target (IP literal, localhost, metadata) -> block
   3. prompt-injection pre-filter on the agent-written purpose -> block
   4. vendor allowlist (vendor must have a budget)     -> block
-  5. hard caps: per-purchase max, 24h cap, vendor rolling-30-day budget -> block
+  4b. payee (vendor-funded agents only): vendor has no PayPal merchant id configured -> block (never paid to us instead)
+  5. hard caps: per-purchase max, 24h cap, vendor rolling-30-day budget, 30-day envelope (vendor-funded) -> block
   6. policy check (keyword or AI)     -> block
   7. amount above approval threshold  -> "approval" (human approves via a PayPal link)
 """
@@ -82,20 +83,30 @@ class AgentConfig:
     approval_threshold: Decimal | None   # None = never ask
     per_purchase_max: Decimal
     daily_cap: Decimal
+    # Vendor-funded agents only (VENDOR_PAYOUTS=1 and funding_model='vendor'); None = tab agent, no payee layer.
+    payee_ids: dict | None = None        # {vendor: merchant id or None}; ids never leave the server
+    envelope_30d: Decimal | None = None  # owner-set rolling 30-day total
 
     @classmethod
-    def from_row(cls, a) -> "AgentConfig":
+    def from_row(cls, a, vendor_payouts: bool = False) -> "AgentConfig":
+        from . import vendorpay
         from .ledger import from_micro
         vb = json.loads(a["vendor_budgets"]) if a["vendor_budgets"] else None
-        return cls(a["policy"], {k: Decimal(v) for k, v in vb.items()} if vb is not None else None,
-                   from_micro(a["approval_threshold_micro"]) if a["approval_threshold_micro"] is not None else None,
-                   from_micro(a["per_call_cap_micro"]), from_micro(a["daily_cap_micro"]))
+        c = cls(a["policy"], {k: Decimal(v) for k, v in vb.items()} if vb is not None else None,
+                from_micro(a["approval_threshold_micro"]) if a["approval_threshold_micro"] is not None else None,
+                from_micro(a["per_call_cap_micro"]), from_micro(a["daily_cap_micro"]))
+        if vendor_payouts and "funding_model" in a.keys() and a["funding_model"] == "vendor":
+            c.payee_ids = vendorpay.payees()
+            env = a["envelope_cents_30d"]   # no envelope set = nothing may be spent (fail closed)
+            c.envelope_30d = (Decimal(env if isinstance(env, int) and env > 0 else 0) / 100).quantize(Decimal("0.01"))
+        return c
 
 
 @dataclass
 class State:
     spent_24h: Decimal = Decimal(0)
     vendor_spent_30d: dict = field(default_factory=dict)
+    envelope_used_30d: Decimal = Decimal(0)   # vendor-funded: reserved + paid in 30 days
 
 
 @dataclass
@@ -179,6 +190,9 @@ def decide(cfg: AgentConfig, p: Purchase, state: State, mode: str, guard: SpendG
         return Outcome("block", "purpose contains instructions aimed at the guard (prompt injection)", "injection", amount)
     if cfg.vendor_budgets is not None and p.vendor not in cfg.vendor_budgets:
         return Outcome("block", f"vendor '{v['name']}' ({v['category']}) is not on this agent's allowlist", "allowlist", amount)
+    if cfg.payee_ids is not None and not cfg.payee_ids.get(p.vendor):
+        return Outcome("block", f"vendor '{v['name']}' has no PayPal account configured, so it can't be paid "
+                                "(AgentTab never takes the payment instead)", "payee", amount)
     if amount > cfg.per_purchase_max:
         return Outcome("block", f"${amount} exceeds the per-call cap ${cfg.per_purchase_max} (per-purchase max)", "caps", amount)
     if state.spent_24h + amount > cfg.daily_cap:
@@ -188,6 +202,9 @@ def decide(cfg: AgentConfig, p: Purchase, state: State, mode: str, guard: SpendG
         spent = state.vendor_spent_30d.get(p.vendor, Decimal(0))
         if spent + amount > budget:
             return Outcome("block", f"{v['name']} 30-day budget ${budget} would be exceeded (spent ${spent})", "caps", amount)
+    if cfg.envelope_30d is not None and state.envelope_used_30d + amount > cfg.envelope_30d:
+        return Outcome("block", f"30-day envelope ${cfg.envelope_30d} would be exceeded (used ${state.envelope_used_30d})",
+                       "caps", amount)
     tool = f"vendor={v['name']} (category: {v['category']}); item={v['items'][p.item]['name']} x{p.quantity}"
     target = p.target or f"https://{v['domain']}"
     if mode == "keyword":
