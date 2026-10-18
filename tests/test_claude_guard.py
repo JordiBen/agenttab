@@ -139,7 +139,38 @@ def test_anthropic_client_uses_short_timeout_and_one_retry(monkeypatch):
     llm._CLIENTS.clear()
     llm._anthropic_client(Settings(guard_provider="anthropic", anthropic_api_key="test-not-a-key-2"))
     llm._CLIENTS.clear()
-    assert seen == {"api_key": "test-not-a-key-2", "timeout": 8.0, "max_retries": 1}
+    assert seen == {"api_key": "test-not-a-key-2", "timeout": 6.0, "max_retries": 1}   # was 8 s: 6 s + one retry
+
+
+def test_anthropic_client_is_built_at_startup_not_on_the_first_purchase(tmp_path, monkeypatch):
+    """Live latency report: the first compare after a deploy took 10.2 s; the SDK import and client were created lazily
+    inside that visitor's request. create_app now builds the client; no request is sent at startup."""
+    made = []
+
+    class Rec:
+        def __init__(self, **kw):
+            made.append(kw)
+            self.messages = None                      # any API call at startup would fail loudly
+    monkeypatch.setattr(anthropic, "Anthropic", Rec)
+    llm._CLIENTS.clear()
+    try:
+        app = create_app(Settings(paypal_mode="mock", admin_token="test-admin-token-long-enough-xyz", db_path=str(tmp_path / "a.db"),
+                                  guard_provider="anthropic", anthropic_api_key="test-not-a-key-3"))
+        assert app.state.ai_client_ready is True
+        assert [m["api_key"] for m in made] == ["test-not-a-key-3"] and "test-not-a-key-3" in llm._CLIENTS
+        llm._anthropic_client(app.state.settings)      # the first purchase reuses it
+        assert len(made) == 1
+    finally:
+        llm._CLIENTS.clear()
+
+
+def test_no_client_and_no_import_cost_without_a_key(tmp_path, monkeypatch):
+    made = []
+    monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: made.append(kw))
+    llm._CLIENTS.clear()
+    app = create_app(Settings(paypal_mode="mock", admin_token="test-admin-token-long-enough-xyz", db_path=str(tmp_path / "b.db"),
+                              guard_provider="anthropic", anthropic_api_key=""))
+    assert app.state.ai_client_ready is False and made == []
 
 
 @pytest.mark.parametrize("err", [RATE_LIMIT, OVERLOADED, NO_NET], ids=["429", "529", "connection"])

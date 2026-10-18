@@ -357,7 +357,7 @@ def test_rendered_page_has_no_forbidden_words_outside_the_developer_section(serv
     text = pg.evaluate(f"""() => {{ const c = document.body.cloneNode(true);
       c.querySelectorAll('{_QUOTED}, script, style').forEach(e => e.remove()); return c.innerText; }}""")
     assert forbidden_in(text) == [], forbidden_in(text)
-    assert "Stopped by:" in text and "Rules + keyword check" in text      # the rendered parts really were there
+    assert "Stopped by:" in text and "Rules only" in text and "Nothing was charged" in text   # the rendered parts were there
     pg.close()
 
 
@@ -439,8 +439,180 @@ def test_owner_console_headings_are_not_covered_with_agents_listed(server, brows
     pg.wait_for_function("document.querySelectorAll('#agents .ag-row').length >= 2", timeout=10000)
     for name in ("Agents", "Schedule of selected agent"):
         y0 = pg.evaluate(f"[...document.querySelectorAll('#ownerhint h3')].find(e => e.textContent.trim() === '{name}').getBoundingClientRect().top + scrollY")
-        for off in (20, 60, h // 2):
-            pg.evaluate(f"scrollTo(0, {y0 - off})"); pg.wait_for_timeout(200)
+        for off in (h // 2, 60, 20):                   # each step scrolls down: the header slides away, as when reading
+            pg.evaluate(f"scrollTo(0, {y0 - off})"); pg.wait_for_timeout(350)
             top, covered = pg.evaluate(_COVERED, ["#ownerhint h3", name])
             assert covered == [], (name, top, covered)
+    pg.close()
+
+
+
+# ---------------- header: sticky, hides on scroll down, returns on scroll up ----------------
+_NAV = """() => { const n = document.querySelector('.nav'), r = n.getBoundingClientRect(), s = getComputedStyle(n);
+  return {top: r.top, bottom: r.bottom, h: n.offsetHeight, hidden: n.classList.contains('nav-hidden'), pos: s.position, stop: s.top,
+          tp: s.transitionProperty, td: s.transitionDuration, tf: s.transitionTimingFunction, shadow: s.boxShadow,
+          blur: s.backdropFilter || s.webkitBackdropFilter || 'none', bb: s.borderBottomStyle, bg: s.backgroundColor,
+          pagebg: getComputedStyle(document.body).backgroundColor, y: scrollY}; }"""
+
+
+# A scroll position (in the lower part of the page) where no heading would sit in the header's band: scrolling up to
+# it must bring the header back. Over a heading the header waits (see the guard tests below).
+_CLEAR = """nh => { document.documentElement.style.scrollBehavior = 'auto';
+  const hs = [...document.querySelectorAll('h1,h2,h3,h4')].filter(e => !e.closest('.nav')).map(e => { const r = e.getBoundingClientRect();
+    return [r.top + scrollY, r.bottom + scrollY]; }).filter(([a, b]) => b > a);
+  for (let y = 1500; y < document.documentElement.scrollHeight - innerHeight - 700; y += 40)
+    if (!hs.some(([a, b]) => b > y - 8 && a < y + nh + 8)) return y; return null; }"""
+
+
+def _up_to_clear_spot(pg, wait=450):
+    """Scroll down past a clear spot, then up to it: returns the spot."""
+    y = pg.evaluate(_CLEAR, pg.evaluate("document.querySelector('.nav').offsetHeight")); assert y
+    pg.evaluate(f"scrollTo(0, {y + 500})"); pg.wait_for_timeout(wait)
+    pg.evaluate(f"scrollTo(0, {y})"); pg.wait_for_timeout(wait)
+    return y
+
+
+def _wheel(pg, dy, steps=1, wait=400):
+    for _ in range(steps):
+        pg.mouse.wheel(0, dy); pg.wait_for_timeout(120)
+    pg.wait_for_timeout(wait)
+
+
+def test_header_is_sticky_and_hides_on_scroll_down_and_returns_on_scroll_up(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    pg.mouse.move(700, 600)
+    n = pg.evaluate(_NAV)
+    assert n["pos"] == "sticky" and n["stop"] == "0px" and not n["hidden"] and n["top"] == 0
+    _wheel(pg, 300, 4)                                         # down, well past the header height
+    n = pg.evaluate(_NAV)
+    assert n["y"] > n["h"] and n["hidden"] and n["bottom"] <= 0.5, n
+    _up_to_clear_spot(pg)                                      # up: back, at the top of the screen
+    n = pg.evaluate(_NAV)
+    assert not n["hidden"] and abs(n["top"]) < 0.5, n
+    pg.evaluate("scrollBy(0, 4)"); pg.wait_for_timeout(300)    # under the 8 px dead zone: no flicker
+    assert not pg.evaluate(_NAV)["hidden"]
+    assert pg.errs == []
+    pg.close()
+
+
+def test_header_is_always_shown_near_the_top_with_no_shadow_glass_or_line(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    pg.mouse.move(700, 600)
+    _wheel(pg, 40, wait=300)                                   # scrollY < header height
+    n = pg.evaluate(_NAV)
+    assert n["y"] < n["h"] and not n["hidden"] and n["top"] == 0, n
+    assert n["shadow"] == "none" and n["blur"] == "none" and n["bb"] == "none" and n["bg"] == n["pagebg"], n
+    _up_to_clear_spot(pg)                                      # mid-page, reappeared: same solid page tone
+    n = pg.evaluate(_NAV)
+    assert not n["hidden"] and n["bg"] == n["pagebg"] and n["shadow"] == "none" and n["blur"] == "none" and n["bb"] == "none", n
+    pg.close()
+
+
+def test_header_moves_by_transform_only_in_220ms_ease_out_and_keeps_its_space(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    pg.mouse.move(700, 600)
+    n = pg.evaluate(_NAV)
+    assert (n["tp"], n["td"], n["tf"]) == ("transform", "0.22s", "ease-out"), n
+    main_top = pg.evaluate("document.getElementById('top') ? document.querySelector('.hero').getBoundingClientRect().top + scrollY : 0")
+    _wheel(pg, 300, 4)
+    assert pg.evaluate("getComputedStyle(document.querySelector('.nav')).transform").startswith("matrix(1, 0, 0, 1, 0, -")
+    assert pg.evaluate("document.querySelector('.hero').getBoundingClientRect().top + scrollY") == main_top   # no layout shift
+    pg.close()
+
+
+def test_header_hides_instantly_with_reduced_motion(server, browser):
+    pg = _open(browser, server, 1440, 900, reduced_motion="reduce")
+    pg.mouse.move(700, 600)
+    assert pg.evaluate(_NAV)["td"] == "0s"
+    _wheel(pg, 300, 4, wait=150)
+    assert pg.evaluate(_NAV)["hidden"] and pg.evaluate(_NAV)["bottom"] <= 0.5
+    _up_to_clear_spot(pg, wait=150)
+    assert abs(pg.evaluate(_NAV)["top"]) < 0.5
+    pg.close()
+
+
+def test_header_stays_while_it_has_keyboard_focus_or_the_pointer(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    pg.mouse.move(700, 600)
+    _wheel(pg, 300, 4)
+    assert pg.evaluate(_NAV)["hidden"]
+    pg.focus(".nav-links a[href='#proof']"); pg.wait_for_timeout(400)   # Tab into it: it comes back...
+    assert not pg.evaluate(_NAV)["hidden"]
+    pg.evaluate("scrollBy(0, 400)"); pg.wait_for_timeout(400)          # ...and stays while focus is inside
+    assert not pg.evaluate(_NAV)["hidden"]
+    pg.evaluate("document.activeElement.blur()")
+    pg.evaluate("scrollBy(0, 400)"); pg.wait_for_timeout(400)
+    assert pg.evaluate(_NAV)["hidden"]
+    _up_to_clear_spot(pg); pg.mouse.move(400, 30); pg.wait_for_timeout(200)  # pointer over it
+    _wheel(pg, 300, 3)                                                   # the wheel over the header scrolls the page
+    n = pg.evaluate(_NAV)
+    assert n["y"] > n["h"] and not n["hidden"], n
+    pg.mouse.move(700, 600); _wheel(pg, 300, 2)
+    assert pg.evaluate(_NAV)["hidden"]
+    pg.close()
+
+
+def test_scroll_listener_is_passive_and_runs_in_animation_frames(server, browser):
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    pg.add_init_script("""(() => { window.__scroll = []; window.__raf = 0;
+      const add = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (t, f, o) { if (t === 'scroll' && this === window) window.__scroll.push(o); return add.call(this, t, f, o); };
+      const raf = window.requestAnimationFrame.bind(window); window.requestAnimationFrame = cb => { window.__raf++; return raf(cb); }; })()""")
+    pg.goto(server + "/"); pg.wait_for_selector("#demo", state="visible"); pg.mouse.move(700, 600)
+    opts = pg.evaluate("window.__scroll")
+    assert opts and all(isinstance(o, dict) and o.get("passive") is True for o in opts), opts
+    before = pg.evaluate("window.__raf"); _wheel(pg, 300, 3)
+    assert pg.evaluate("window.__raf") > before and pg.evaluate(_NAV)["hidden"]
+    pg.close()
+
+
+def test_the_header_is_the_only_sticky_element(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    # Sticky to the page, that is: the scheduler's date headers stick inside its own scroll box, not over the page.
+    sticky = pg.evaluate("""[...document.querySelectorAll('*')].filter(e => { const s = getComputedStyle(e);
+      if (s.position !== 'sticky' && s.position !== 'fixed') return false;
+      for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) { const ps = getComputedStyle(p);
+        if (/(auto|scroll|hidden|clip)/.test(ps.overflowX + ps.overflowY)) return false; }
+      return true; }).map(e => e.className || e.id)""")
+    assert sticky in (["nav"], ["nav", "toasts"]), sticky          # the toast stack is fixed, not sticky, and only holds toasts
+    assert pg.evaluate("[...document.querySelectorAll('*')].filter(e => getComputedStyle(e).position === 'sticky' && !e.closest('[data-ui]')).length") == 1
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_anchor_targets_are_not_covered_by_the_header_jumping_up_or_down(server, browser, w, h):
+    pg = _open(browser, server, w, h)
+    pad = pg.evaluate("parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop)")
+    assert pad == pg.evaluate("document.querySelector('.nav').offsetHeight")        # scroll-padding = header height
+    for target, start in (("#proof", "0"), ("#how", "document.body.scrollHeight - innerHeight")):   # jump down, then up
+        pg.evaluate(f"scrollTo(0, {start})"); pg.wait_for_timeout(500)
+        pg.evaluate(f"location.hash = ''; location.hash = '{target}'")
+        pg.wait_for_function("""() => { const y = scrollY, w = window; const ok = w.__ly === y; w.__ly = y; return ok; }""", polling=300, timeout=10000)
+        pg.wait_for_timeout(400)
+        top, covered = pg.evaluate(_COVERED, [target + " h2", ""])
+        assert covered == [] and top >= 0, (target, top, covered)
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_scrolling_up_never_brings_the_header_back_over_a_heading(server, browser, w, h):
+    """The header returns on scroll up, but waits while a heading sits in its band; it shows again once the heading
+    has moved below it. Checked for every section heading, landing in the band from below."""
+    pg = _open(browser, server, w, h)
+    pg.evaluate("document.documentElement.style.scrollBehavior = 'auto'")
+    ids = pg.eval_on_selector_all("section[id] h2", "els => els.filter(e => e.getClientRects().length).map(e => e.closest('section').id)")
+    assert len(ids) >= 6
+    shown = 0
+    for sid in ids:
+        y0 = pg.evaluate(f"document.querySelector('#{sid} h2').getBoundingClientRect().top + scrollY")
+        pg.evaluate(f"scrollTo(0, {y0 + 700})"); pg.wait_for_timeout(300)
+        pg.evaluate(f"scrollTo(0, {y0 - 10})"); pg.wait_for_timeout(400)    # up: heading lands 10 px from the top
+        top, covered = pg.evaluate(_COVERED, [f"#{sid} h2", ""])
+        assert covered == [], (sid, top, covered)
+        pg.evaluate(f"scrollTo(0, {y0 - 300})"); pg.wait_for_timeout(400)   # further up: heading well below the header
+        busy = pg.evaluate("""nh => [...document.querySelectorAll('h1,h2,h3,h4')].filter(e => !e.closest('.nav'))
+          .some(e => { const r = e.getBoundingClientRect(); return r.height > 0 && r.bottom > 0 && r.top < nh; })""", pg.evaluate(_NAV)["h"])
+        assert pg.evaluate(_NAV)["hidden"] == busy, sid           # back, unless another heading now sits in the band
+        shown += not busy
+    assert shown >= len(ids) // 2
     pg.close()

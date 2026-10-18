@@ -167,8 +167,12 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     s = settings or get_settings()
     if allow_private_targets is None:  # local dev only: some sandboxes resolve public hosts to 198.18.x
         allow_private_targets = os.getenv("ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV") == "1"
-    app = FastAPI(title="AgentTab", version="1.0.0",
-                  description="PayPal-funded spending tabs for AI agents, guarded by AI.")
+    # Our own /docs page (below) replaces FastAPI's default Swagger and ReDoc pages, which load unpinned assets from a CDN.
+    app = FastAPI(title="AgentTab API", version="1.0.0", docs_url=None, redoc_url=None,
+                  description=("PayPal-funded spending tabs for AI agents, guarded by rules and Claude. These are the same "
+                               "endpoints the demo and the MCP tools use. Sandbox only: PayPal sandbox, test money."),
+                  contact={"name": "AgentTab on GitHub", "url": "https://github.com/JordiBen/agenttab"},
+                  license_info={"name": "MIT", "url": "https://github.com/JordiBen/agenttab/blob/main/LICENSE"})
     app.add_middleware(GZipMiddleware, minimum_size=1024)     # the self-hosted AG Grid bundle is ~1.7 MB raw
 
     @app.exception_handler(RequestValidationError)
@@ -213,6 +217,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                        require_ai=production)
     # keyword only when no AI provider is configured at all, and only outside production
     guard_mode = "ai" if (llm.guard_enabled(s) or production) else "keyword"
+    app.state.ai_client_ready = llm.warm_up(s)        # import + client at startup, not on the first purchase
     if production and not llm.guard_enabled(s):
         log.warning("no AI guard provider configured (%s): every purchase that reaches the policy check waits for "
                     "human approval", s.guard_provider)
@@ -369,7 +374,16 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                     # real screenshots of AgentTab itself (local mock run), used on the landing page
                     "img/guard-console.jpg": "image/jpeg", "img/schedule-close.jpg": "image/jpeg",
                     "vendor/ag-grid-community-33.3.2.min.js": "application/javascript",
-                    "vendor/ag-grid-LICENSE.txt": "text/plain"}
+                    "vendor/ag-grid-LICENSE.txt": "text/plain",
+                    # API reference: Swagger UI 5.33.3 self-hosted (Apache-2.0), our page, script and style
+                    "vendor/swagger-ui-5.33.3/swagger-ui-bundle.js": "application/javascript",
+                    "vendor/swagger-ui-5.33.3/swagger-ui.css": "text/css",
+                    "vendor/swagger-ui-5.33.3/LICENSE": "text/plain", "vendor/swagger-ui-5.33.3/NOTICE": "text/plain",
+                    "docs.js": "application/javascript", "docs.css": "text/css"}
+
+    @app.get("/docs", include_in_schema=False)
+    def api_reference():
+        return FileResponse(STATIC / "docs.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/static/{path:path}", include_in_schema=False)
     def static_file(path: str):
@@ -394,7 +408,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
              "endpoint": f"/api/tools/{n}", "body": {"url": "https://...", "purpose": "why you need it"}}
             for n in TOOLS],
             "vendors": [{"vendor": vid, "name": v["name"], "category": v["category"], "fulfillment": v["fulfillment"],
-                         "items": [{"item": iid, "name": it["name"], "price_usd": float(it["price"])}
+                         "items": [{"item": iid, "name": it["name"], "short": it.get("short") or it["name"], "price_usd": float(it["price"])}
                                    for iid, it in v["items"].items()]} for vid, v in pr.VENDORS.items()],
             "purchase_endpoint": {"method": "POST", "path": "/api/purchases",
                                   "body": {"vendor": "samplebox", "item": "ceramic-mug-sample", "quantity": 1,
@@ -1669,23 +1683,23 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         t = " ".join((text or "").split()).lower()
         return any(chunk in t for chunk in SYSTEM_CHUNKS)
 
+    # The menu's presets, in order, with human names (the category ids stay in the API). The first is the demo video's
+    # step-6 twin: rules allow it, the AI blocks it. A preset whose case is missing from cases.json is skipped.
+    COMPARE_PRESETS = (("indirect_injection-05", "Instruction hidden in a web page"), ("lookalike_unsafe-01", "Fake Facebook link"),
+                       ("personal_use-01", "Personal gift disguised as business"), ("forbidden_vendor-04", "Gift card"),
+                       ("social_target-01", "Social network research"), ("caps-01", "Over the budget"),
+                       ("vague-01", "Vague purpose"), ("direct_injection-01", "Order to ignore the rules"),
+                       ("legit-12", "Supplier mug sample"), ("legit-01", "Competitor tech check"))
+
     def compare_presets() -> list[str]:
-        """One preset per category (first case of each), indirect injection first, then two legitimate buys."""
-        first: dict[str, str] = {}
         ids = {c["id"] for c in gauntlet_cases()}
-        if "indirect_injection-05" in ids:   # the demo video's step-6 twin: rules allow it, the AI blocks it
-            first["indirect_injection"] = "indirect_injection-05"
-        for c in gauntlet_cases():
-            first.setdefault(c["category"], c["id"])
-        legit = [c["id"] for c in gauntlet_cases() if not c["attack"]][:2]
-        cats = ("indirect_injection",) + tuple(k for k in GAUNTLET_CATS if k != "indirect_injection")
-        return [first[k] for k in cats if k in first] + legit
+        return [i for i, _ in COMPARE_PRESETS if i in ids]
 
     @app.get("/api/compare/cases")
     def compare_cases():
-        cases = {c["id"]: c for c in gauntlet_cases()}
-        return {"cases": [{"id": i, "category": cases[i]["category"], "vendor": cases[i]["vendor"], "item": cases[i]["item"],
-                           "quantity": cases[i].get("quantity", 1), "target": cases[i].get("target", ""),
+        cases, label = {c["id"]: c for c in gauntlet_cases()}, dict(COMPARE_PRESETS)
+        return {"cases": [{"id": i, "label": label[i], "category": cases[i]["category"], "vendor": cases[i]["vendor"],
+                           "item": cases[i]["item"], "quantity": cases[i].get("quantity", 1), "target": cases[i].get("target", ""),
                            "purpose": cases[i]["purpose"], "expected": cases[i]["expected"]} for i in compare_presets()]}
 
     def compare_side(out) -> dict:
@@ -1740,7 +1754,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         a["latency_ms"] = ms
         return {"dry_run": True, "paypal_calls": 0, "ledger_writes": 0, "fetches": 0,
                 "purchase": {"vendor": p.vendor, "vendor_name": pr.VENDORS[p.vendor]["name"], "item": p.item,
-                             "item_name": pr.VENDORS[p.vendor]["items"][p.item]["name"], "quantity": p.quantity,
+                             "item_name": pr.VENDORS[p.vendor]["items"][p.item]["name"], "item_short": pr.short_name(p.vendor, p.item),
+                             "quantity": p.quantity, "amount_usd": float(pr.VENDORS[p.vendor]["items"][p.item]["price"] * p.quantity),
                              "target": p.target, "purpose": p.purpose},
                 "rules": {"label": "Rules + keyword check", **compare_side(rules)},
                 "ai": {"label": "Rules + AI", **a}, "expected": VERDICT_WORD.get(expected) if expected else None,

@@ -89,12 +89,28 @@ def guard_models(s: Settings) -> list[str]:
 _CLIENTS: dict = {}
 
 
+# Per attempt. With one retry the worst case is about 2 x 6 s before the purchase goes to a human; a normal Haiku
+# verdict takes about 1 to 2 s (eval: p50 1.0 s, p95 2.2 s on the held-out set).
+ANTHROPIC_TIMEOUT_S = 6.0
+ANTHROPIC_MAX_RETRIES = 1
+
+
 def _anthropic_client(s: Settings):
     import anthropic
     c = _CLIENTS.get(s.anthropic_api_key)
     if c is None:
-        c = _CLIENTS[s.anthropic_api_key] = anthropic.Anthropic(api_key=s.anthropic_api_key, timeout=8.0, max_retries=1)
+        c = _CLIENTS[s.anthropic_api_key] = anthropic.Anthropic(api_key=s.anthropic_api_key, timeout=ANTHROPIC_TIMEOUT_S,
+                                                                max_retries=ANTHROPIC_MAX_RETRIES)
     return c
+
+
+def warm_up(s: Settings) -> bool:
+    """Import the Anthropic SDK and build its client now, at startup, instead of on the first visitor's purchase: on
+    the free instance the import alone cost seconds of that visitor's wait. No request is sent. True if a client exists."""
+    if s.guard_provider != "anthropic" or not s.anthropic_api_key:
+        return False
+    _anthropic_client(s)
+    return True
 
 
 def anthropic_verdict(s: Settings, system: str, user_json: str) -> tuple[dict | None, str, str]:

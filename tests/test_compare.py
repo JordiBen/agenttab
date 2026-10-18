@@ -109,7 +109,7 @@ def test_zero_paypal_calls_zero_ledger_writes_zero_fetches(tmp_path, monkeypatch
     monkeypatch.setattr(tools, "_resolve", lambda host: ["93.184.216.34"])    # check_url: DNS only, never HTTP
     c = _client(tmp_path, **CLAUDE)
     before = _rows(tmp_path / "r.db")
-    for body in ({"case_id": "indirect_injection-05"}, {"case_id": "legit-02"},
+    for body in ({"case_id": "indirect_injection-05"}, {"case_id": "legit-01"},     # legit-02 left the presets (review 6)
                  custom(target="https://www.example.com/catalog", purpose="Mug sample to check glaze quality")):
         j = c.post("/api/compare", json=body, headers=ip(1)).json()
         assert (j["paypal_calls"], j["ledger_writes"], j["fetches"]) == (0, 0, 0)
@@ -140,8 +140,10 @@ def test_defaults_5_per_ip_hour_60_runs_and_40_ai_calls_a_day():
 def test_compare_ai_budget_is_separate_and_never_starves_the_gauntlet(tmp_path, monkeypatch):
     fake = _fake(monkeypatch, [V()])
     c = _client(tmp_path, compare_llm_calls_per_day=1, gauntlet_llm_calls_per_day=1, **CLAUDE)
-    assert c.post("/api/compare", json={"case_id": "legit-01"}, headers=ip(1)).json()["ai"]["llm_called"] is True
-    second = c.post("/api/compare", json={"case_id": "legit-02"}, headers=ip(2)).json()["ai"]
+    # Custom purchases, not presets: the Gauntlet samples eval cases at random and shares the verdict cache, so a preset
+    # used here could come back from the cache as a second policy-ai row with no call (the old ~1-in-10 flake).
+    assert c.post("/api/compare", json=custom(purpose="Mug sample to check the glaze before we stock it"), headers=ip(1)).json()["ai"]["llm_called"] is True
+    second = c.post("/api/compare", json=custom(purpose="Second mug sample, another glaze"), headers=ip(2)).json()["ai"]
     assert second["verdict"] == "held" and len(fake.calls) == 1        # compare budget (1) used up
     g = c.post("/api/gauntlet", headers=ip(3)).json()
     assert len(fake.calls) == 2 and sum(r["layer"] == "policy-ai" for r in g["cases"]) == 1   # its own 1 call is intact
@@ -151,9 +153,9 @@ def test_compare_calls_count_against_the_visitors_per_ip_ai_budget(tmp_path, mon
     fake = _fake(monkeypatch, [V()])
     c = _client(tmp_path, llm_calls_per_ip_day=1, **CLAUDE)
     c.post("/api/compare", json={"case_id": "legit-01"}, headers=ip(1))
-    held = c.post("/api/compare", json={"case_id": "legit-02"}, headers=ip(1)).json()["ai"]
+    held = c.post("/api/compare", json={"case_id": "legit-12"}, headers=ip(1)).json()["ai"]
     assert held["verdict"] == "held" and len(fake.calls) == 1
-    other = c.post("/api/compare", json={"case_id": "legit-02"}, headers=ip(2)).json()["ai"]
+    other = c.post("/api/compare", json={"case_id": "legit-12"}, headers=ip(2)).json()["ai"]
     assert other["llm_called"] is True and len(fake.calls) == 2
 
 
@@ -206,4 +208,47 @@ def test_ui_stamp_words_are_allowed_blocked_held_and_the_left_receipt_says_rules
     words = re.search(r"const CMP_STAMP = \{(.*?)\};", js).group(1)
     assert set(re.findall(r"\['([A-Z]+)'", words)) == {"ALLOWED", "BLOCKED", "HELD"}
     html = open("static/dashboard.html", encoding="utf-8").read()
-    assert 'id="cmpl" aria-label="Rules + keyword check"><h4>Rules + keyword check</h4>' in html
+    # review 6: the column headings match the proof table
+    assert 'id="cmpl" aria-label="Rules only"><h4>Rules only</h4>' in html
+    assert 'id="cmpr" aria-label="Rules + Claude"><h4>Rules + Claude</h4>' in html
+
+
+# ---------- review 6 ----------
+def test_presets_carry_human_labels_mapped_to_matching_cases(tmp_path):
+    cases = {c["id"]: c for c in _client(tmp_path).get("/api/compare/cases").json()["cases"]}
+    want = {"indirect_injection-05": ("Instruction hidden in a web page", "indirect_injection"),
+            "lookalike_unsafe-01": ("Fake Facebook link", "lookalike_unsafe"),
+            "personal_use-01": ("Personal gift disguised as business", "personal_use"),
+            "forbidden_vendor-04": ("Gift card", "forbidden_vendor"), "social_target-01": ("Social network research", "social_target"),
+            "caps-01": ("Over the budget", "caps"), "vague-01": ("Vague purpose", "vague"),
+            "direct_injection-01": ("Order to ignore the rules", "direct_injection"),
+            "legit-12": ("Supplier mug sample", "legit"), "legit-01": ("Competitor tech check", "legit")}
+    assert {i: (c["label"], c["category"]) for i, c in cases.items()} == want
+    assert "faceb00k" in cases["lookalike_unsafe-01"]["target"] and cases["forbidden_vendor-04"]["vendor"] == "giftcards-now"
+    assert cases["legit-12"]["item"] == "ceramic-mug-sample" and cases["legit-01"]["item"] == "tech_detect"
+
+
+def test_compare_returns_the_short_item_name_and_the_price(tmp_path):
+    j = _client(tmp_path).post("/api/compare", json={"case_id": "lookalike_unsafe-01"}, headers=ip(1)).json()["purchase"]
+    assert (j["item_short"], j["amount_usd"], j["vendor_name"]) == ("Web page copy", 12.0, "SiteScope Data")
+    assert j["item_name"].startswith("Clean, LLM-ready Markdown")              # the API keeps the full description
+
+
+def test_every_catalog_item_has_a_short_name_and_the_page_uses_it(tmp_path):
+    from app import procurement as pr
+    cat = _client(tmp_path).get("/api/catalog").json()["vendors"]
+    shorts = {(v["vendor"], i["item"]): i["short"] for v in cat for i in v["items"]}
+    assert all(s and len(s) <= 26 for s in shorts.values()) and len(shorts) == sum(len(v["items"]) for v in pr.VENDORS.values())
+    assert shorts[("sitescope-data", "page_markdown")] == "Web page copy"
+    assert shorts[("sitescope-data", "tech_detect")] == "Tech stack check"
+    assert shorts[("sitescope-data", "seo_audit")] == "SEO audit"
+    assert pr.VENDORS["sitescope-data"]["items"]["page_markdown"]["name"].startswith("Clean, LLM-ready")   # prompt input unchanged
+    js = open("static/app.js", encoding="utf-8").read()
+    assert "return i ? (i.short || i.name) : item;" in js                 # receipts, feed, Gauntlet, showcase
+    assert "${enc(i.short || i.name)} ($${i.price_usd})" in js and "`${i.short || i.name} ($${i.price_usd})`" in js
+
+
+def test_schedule_board_uses_short_item_names():
+    from app import schedule
+    assert schedule._item_name("sitescope-data", "seo_audit") == "SEO audit"
+    assert schedule._item_name("nope", "x") == "x"

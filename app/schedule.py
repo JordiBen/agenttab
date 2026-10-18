@@ -25,7 +25,7 @@ def iso(ts: float) -> str:
 
 
 def _item_name(vendor: str, item: str) -> str:
-    return pr.VENDORS.get(vendor, {}).get("items", {}).get(item, {}).get("name", item)
+    return pr.short_name(vendor, item)                  # the board shows the short name (full one stays in the API)
 
 
 def sweep(ledger: Ledger, aid: str, now: float | None = None) -> list[str]:

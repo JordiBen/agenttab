@@ -83,8 +83,11 @@ section{padding:clamp(64px,9vw,128px) 0}
 .act.alt{background:var(--ink);color:var(--accent-ink)}
 
 /* ---- nav ---- */
-html{scroll-padding-top:76px}   /* anchor jumps keep a nav's height of room above the target */
-.nav{position:relative;z-index:20;background:var(--bg)}   /* not sticky: nothing ever sits over a heading, scrolling either way */
+/* The header is the page's one sticky element. It slides away while you scroll down (so it never sits over the heading
+   you are reading) and comes back when you scroll up. Solid page tone, no glass, no blur, no line, no shadow. */
+html{scroll-padding-top:var(--nav-h,64px)}   /* anchor jumps land just below the header (JS keeps --nav-h = its height) */
+.nav{position:sticky;top:0;z-index:20;background:var(--bg);box-shadow:none;transition:transform 220ms ease-out}
+.nav.nav-hidden{transform:translateY(-100%)}
 .nav .wrap{display:flex;align-items:center;gap:22px;height:64px}
 .logo{font-weight:600;font-size:1.15rem;text-decoration:none;letter-spacing:-0.02em}
 .nav-links{display:flex;gap:18px;flex:1;font-size:var(--step-small)}
@@ -347,6 +350,7 @@ footer a{color:var(--field-1-ink)}
 }
 @media (prefers-reduced-motion: reduce){
   html{scroll-behavior:auto}
+  .nav{transition:none}
   *,*::before,*::after{animation:none !important;transition:none !important}
   .reveal{opacity:1;transform:none}
 }
@@ -369,11 +373,22 @@ footer a{color:var(--field-1-ink)}
 .cmp-btn:active{transform:translateY(1px)} .cmp-btn:disabled{cursor:wait;opacity:1;background:var(--muted)}
 .cmp-status{min-height:1.5em;margin:16px 0;color:var(--ink)}
 .cmp-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(16px,3vw,40px);align-items:start}
-.cmp-r{background:var(--paper);color:var(--ink);padding:28px clamp(20px,3vw,32px) calc(30px + var(--tooth)/2);min-width:0;min-height:320px;
+.cmp-r{background:var(--paper);color:var(--ink);padding:28px clamp(20px,3vw,32px) calc(30px + var(--tooth)/2);min-width:0;min-height:200px;
  -webkit-mask:var(--saw-down) bottom/var(--tooth) calc(var(--tooth)/2) repeat-x,var(--solid) top/100% calc(100% - var(--tooth)/2 + 1px) no-repeat;
  mask:var(--saw-down) bottom/var(--tooth) calc(var(--tooth)/2) repeat-x,var(--solid) top/100% calc(100% - var(--tooth)/2 + 1px) no-repeat}
 .cmp-r h4{color:var(--ink);font-size:var(--step-lead);font-weight:600;letter-spacing:-.01em;margin-bottom:14px}
 .cmp-empty{color:var(--muted);margin:0}
+/* the purchase, once, above both receipts: same paper, a tone step, no outline */
+.cmp-buy{background:var(--paper);color:var(--ink);padding:24px clamp(20px,3vw,32px);margin:0 0 clamp(16px,3vw,28px);border-radius:var(--radius)}
+.cmp-buy[hidden]{display:none}
+.cmp-buy h4{font-size:1rem;font-weight:600;color:var(--muted);margin:0 0 8px}
+.cmp-what{margin:0 0 8px;font-size:var(--step-lead);line-height:1.3}
+.cmp-what .num{font-variant-numeric:tabular-nums}
+.cmp-vendor{display:block;font-size:1rem;color:var(--muted);margin-top:2px}
+.cmp-purp{margin:0 0 6px;font-size:1rem;max-width:70ch}
+.cmp-target{margin:0;font-size:1rem;color:var(--ink)}
+.cmp-k{color:var(--muted);margin-right:6px}
+.cmp-r .stamp{margin-bottom:16px}
 .cmp-lines{margin:0 0 18px;display:grid;gap:8px}
 .cmp-lines div{display:grid;grid-template-columns:6.5em 1fr;gap:12px}
 .cmp-lines dt{color:var(--muted)} .cmp-lines dd{margin:0;min-width:0}
