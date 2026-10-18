@@ -10,7 +10,7 @@ detects refunds, releases cut-off rows, never approves or unfreezes; `tests/test
 (review findings 1-4: 401 token refresh, MCP outcomes, owner `resolve-unknown`, partial refund amounts,
 `tests/test_vendor_payouts_review.py`; webhooks that re-read PayPal, `tests/test_vendor_payouts_webhooks.py`; 410 on top-ups
 for vendor-funded agents, vendor-funded demo sessions, envelope with paid/set-aside, dashboard statuses incl. "refund with
-<vendor>", `tests/test_vendor_payouts_ui.py` and `tests/test_e2e_vendor_payouts.py`). Not yet: the local live-sandbox run. Never exercised against real PayPal from the app. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
+<vendor>", `tests/test_vendor_payouts_ui.py` and `tests/test_e2e_vendor_payouts.py`). Local live-sandbox run done 2026-10-18 (app in-process on a dev box, flag on locally, never the live site): a $24 buy below the approval threshold completed automatically (order 1T448776XW3862058, capture 63D26177RW479782G) and a $64 buy above it completed after owner approval (order 9AN45975JX143933J, capture 30B74061SS1779840); order GET showed the US sandbox vendor as payee, custom_id = purchase id, no authorization; reconcile ok. With real PayPal and no AI provider, a below-threshold buy waits for approval (fail closed). Debug ids are in the private notes. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
 not exercised yet is marked **UNSURE**. Code references are to `main` at d4b1dae. Vendor merchant ids never appear in this
 repo: they come from environment variables (section c). Earlier research and spikes: [vendor-payouts-plan.md](vendor-payouts-plan.md).
 
