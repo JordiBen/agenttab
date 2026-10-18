@@ -44,18 +44,19 @@ from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
 from . import procurement as pr
 
 
-def count_tests(tests_dir: Path) -> int | None:
-    """How many tests pytest collects from tests/, read from the source (no import, no run): every test_ function, times
-    the length of each literal @pytest.mark.parametrize list. tests/test_landing.py checks it equals pytest --collect-only."""
+def count_tests_by_file(tests_dir: Path) -> dict[str, int] | None:
+    """How many tests pytest collects from each tests/test_*.py, read from the source (no import, no run): every test_
+    function, times the length of each literal @pytest.mark.parametrize list. Keys are paths relative to tests_dir's parent."""
     import ast
     if not tests_dir.is_dir():
         return None
-    total = 0
+    out = {}
     for f in sorted(tests_dir.glob("test_*.py")):
         try:
-            tree = ast.parse(f.read_text())
+            tree = ast.parse(f.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             return None
+        total = 0
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
                 n = 1
@@ -64,7 +65,15 @@ def count_tests(tests_dir: Path) -> int | None:
                             and len(d.args) >= 2 and isinstance(d.args[1], (ast.List, ast.Tuple))):
                         n *= len(d.args[1].elts)
                 total += n
-    return total
+        out[f"{tests_dir.name}/{f.name}"] = total
+    return out
+
+
+def count_tests(tests_dir: Path) -> int | None:
+    """All tests in the suite, browser e2e modules included (they skip at collection without Playwright, but they exist).
+    tests/test_landing.py checks this against pytest --collect-only, with and without Playwright importable."""
+    by_file = count_tests_by_file(tests_dir)
+    return None if by_file is None else sum(by_file.values())
 
 
 TEST_COUNT = count_tests(Path(__file__).resolve().parent.parent / "tests")
@@ -178,7 +187,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     if not admin_token:
         admin_token = secrets.token_urlsafe(32)
         tok_file = Path(".admin_token")
-        tok_file.write_text(admin_token)
+        tok_file.write_text(admin_token, encoding="utf-8")
         tok_file.chmod(0o600)
         log.warning("ADMIN_TOKEN not set: generated a random one in %s (chmod 600)", tok_file.resolve())
     if s.demo_mode and (len(admin_token) < 24 or admin_token in ("dev-admin", "admin", "changeme")):
@@ -1549,7 +1558,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         f = Path(__file__).resolve().parent.parent / "eval" / "results.json"
         if not f.exists():
             raise HTTPException(404, "no eval results yet")
-        j = json.loads(f.read_text())
+        j = json.loads(f.read_text(encoding="utf-8"))
         out = {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "stale_modes", "notes") if k in j}
         held = heldout_summary()
         if held:
@@ -1562,8 +1571,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         Only the per-mode summary numbers are served; no rows, so no case text leaves the file."""
         root = Path(__file__).resolve().parent.parent / "eval"
         try:
-            res = json.loads((root / "heldout-results.json").read_text())
-            run = json.loads((root / "heldout-run.json").read_text())
+            res = json.loads((root / "heldout-results.json").read_text(encoding="utf-8"))
+            run = json.loads((root / "heldout-run.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         keys = ("attacks_stopped", "attacks_total", "legit_correct", "legit_total", "false_blocks", "models")
@@ -1577,8 +1586,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         the landing page's feed. Read from files: no LLM or PayPal calls."""
         root = Path(__file__).resolve().parent.parent / "eval"
         try:
-            rows = json.loads((root / "results.json").read_text())["modes"]["ai"]["rows"]
-            cases = {c["id"]: c for c in json.loads((root / "cases.json").read_text())}
+            rows = json.loads((root / "results.json").read_text(encoding="utf-8"))["modes"]["ai"]["rows"]
+            cases = {c["id"]: c for c in json.loads((root / "cases.json").read_text(encoding="utf-8"))}
         except (OSError, KeyError, ValueError):
             raise HTTPException(404, "no eval results yet")
         out = []
@@ -1593,7 +1602,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                         "purpose": c["purpose"][:240], "target": c.get("target", "")[:200], "outcome": r["got"],
                         "layer": r["layer"], "model": r.get("model"), "latency_ms": r.get("latency_ms"),
                         "reason": (r.get("reason") or "")[:240]})
-        return {"source": "eval/results.json (AI mode)", "run_at": json.loads((root / "results.json").read_text())["modes"]["ai"].get("run_at"),
+        return {"source": "eval/results.json (AI mode)", "run_at": json.loads((root / "results.json").read_text(encoding="utf-8"))["modes"]["ai"].get("run_at"),
                 "decisions": out}
 
     # ---------------- live Gauntlet: sampled attacks through the real guard ----------------
@@ -1604,7 +1613,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     def gauntlet_cases() -> list[dict]:
         f = Path(__file__).resolve().parent.parent / "eval" / "cases.json"
-        return json.loads(f.read_text()) if f.exists() else []
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
 
     @app.post("/api/gauntlet")
     def gauntlet(request: Request):

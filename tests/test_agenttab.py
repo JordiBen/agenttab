@@ -433,7 +433,7 @@ def test_decide_modes_offline():
 def test_eval_cases_file_and_scorecard(client):
     import json as _json
     from pathlib import Path as _P
-    cases = _json.loads((_P(__file__).parent.parent / "eval" / "cases.json").read_text())
+    cases = _json.loads((_P(__file__).parent.parent / "eval" / "cases.json").read_text(encoding="utf-8"))
     assert len(cases) >= 55 and {c["expected"] for c in cases} == {"allow", "approval", "block"}
     assert len({c["id"] for c in cases}) == len(cases)
     for c in cases:

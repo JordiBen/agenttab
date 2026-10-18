@@ -53,7 +53,7 @@ def test_proof_table_comes_from_the_results_files_with_previous_catalog_label(se
     the held-out row from eval/heldout-results.json, the indirect-injection sentence and the footnote counts."""
     pg = _open(browser, server, 1440, 900)
     sc = httpx.get(server + "/api/scorecard").json()
-    res = json.loads((ROOT / "eval/results.json").read_text()); held = json.loads((ROOT / "eval/heldout-results.json").read_text())
+    res = json.loads((ROOT / "eval/results.json").read_text(encoding="utf-8")); held = json.loads((ROOT / "eval/heldout-results.json").read_text(encoding="utf-8"))
     pg.wait_for_function("document.querySelectorAll('#scoretbl tbody tr').length === 3")
     rows = pg.eval_on_selector_all("#scoretbl tbody tr", "trs => trs.map(t => [...t.cells].map(c => c.innerText.replace(/\\s+/g, ' ').trim()))")
     for (mode, name), row in zip((("none", "No guard"), ("keyword", "Rules only"), ("ai", "Rules + Claude")), rows):
@@ -61,12 +61,14 @@ def test_proof_table_comes_from_the_results_files_with_previous_catalog_label(se
         assert row == [name + stale, f"{m['attacks_stopped']} / {m['attacks_total']}", f"{m['legit_correct']} / {m['legit_total']}", str(m["false_blocks"])]
     ind = res["by_category"]["indirect_injection"]
     assert f"{ind['keyword']} of {ind['total']} with rules alone, {ind['ai']} of {ind['total']} with Claude." in pg.inner_text("#proofline")
-    hs = {m: held[m]["summary"] for m in ("none", "keyword", "ai")}; n = len(held["ai"]["rows"])
-    att = ", ".join(f"{name} {hs[m]['attacks_stopped']} / {hs[m]['attacks_total']}"
-                    for m, name in (("none", "no guard"), ("keyword", "rules only"), ("ai", "rules + Claude")))
-    assert pg.is_visible("#heldout") and pg.inner_text("#heldout") == (f"A test the builder never saw: {n} cases written separately "
-        f"and run once. Attacks stopped: {att}. Legit buys allowed with Claude: {hs['ai']['legit_correct']} / {hs['ai']['legit_total']}, "
-        f"wrongly blocked: {hs['ai']['false_blocks']}.")
+    ai, kw = held["ai"]["summary"], held["keyword"]["summary"]; n = len(held["ai"]["rows"])
+    assert pg.is_visible("#heldout") and pg.inner_text("#heldout") == (
+        f"A test the builder never saw: Claude stopped {ai['attacks_stopped']} / {ai['attacks_total']} attacks and allowed "
+        f"{ai['legit_correct']} / {ai['legit_total']} legit buys, {ai['false_blocks']} wrongly blocked. "
+        f"Rules alone: {kw['attacks_stopped']} / {kw['attacks_total']}. ({n} cases written separately, run once.)")
+    # the reviewer's wording, checked once against today's file so a silent number change shows up here too
+    assert pg.inner_text("#heldout") == ("A test the builder never saw: Claude stopped 26 / 26 attacks and allowed 14 / 14 legit buys, "
+                                         "0 wrongly blocked. Rules alone: 19 / 26. (40 cases written separately, run once.)")
     foot = pg.inner_text("#prooffoot")
     assert foot.startswith(f"{res['cases']} labeled purchases") and f"the separate {len(held['ai']['rows'])}-case set" in foot
     assert pg.inner_text("#hown") == str(res["cases"]) and pg.inner_text("#testcount").strip() == str(sc["test_count"])
@@ -361,13 +363,13 @@ def test_rendered_page_has_no_forbidden_words_outside_the_developer_section(serv
 
 def test_problem_example_shows_the_real_verdicts_of_its_eval_case(server, browser):
     pg = _open(browser, server, 1440, 900)
-    res = json.loads((ROOT / "eval/results.json").read_text())
+    res = json.loads((ROOT / "eval/results.json").read_text(encoding="utf-8"))
     case = pg.get_attribute("#probex", "data-case")
     got = {m: next(r["got"] for r in res["modes"][m]["rows"] if r["id"] == case) for m in ("none", "ai")}
     word = {"allow": "BOUGHT", "block": "BLOCKED", "approval": "HELD"}
     pg.wait_for_function("document.getElementById('probai').textContent !== '…' && document.getElementById('probq').textContent !== '…'")
     assert pg.inner_text("#probnone") == word[got["none"]] and pg.inner_text("#probai") == word[got["ai"]]
-    purpose = next(c["purpose"] for c in json.loads((ROOT / "eval/cases.json").read_text()) if c["id"] == case)
+    purpose = next(c["purpose"] for c in json.loads((ROOT / "eval/cases.json").read_text(encoding="utf-8")) if c["id"] == case)
     assert pg.inner_text("#probq") in purpose and len(pg.inner_text("#probq")) > 20
     pg.close()
 
@@ -389,4 +391,56 @@ def test_vendor_budget_bars_still_render_after_the_proof_section_rewrite(server,
     r = pg.evaluate("""() => [...document.querySelectorAll('#dbudgets .track')].map(t => { const b = t.getBoundingClientRect();
       return [b.width, b.height, getComputedStyle(t).backgroundColor]; })""")
     assert r and all(w >= 20 and h >= 4 and bg != "rgba(0, 0, 0, 0)" for w, h, bg in r), r
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_problem_headline_fits_in_two_lines(server, browser, w, h):
+    pg = _open(browser, server, w, h)
+    lines = pg.evaluate("""() => { const e = document.querySelector('#problem h2'), s = getComputedStyle(e);
+      const lh = parseFloat(s.lineHeight) || 1.2 * parseFloat(s.fontSize);
+      return [e.textContent, e.getBoundingClientRect().height / lh]; }""")
+    assert lines[0] == "One web page can spend your money." and lines[1] <= 2.05, lines
+    pg.close()
+
+
+def test_try_it_links_down_to_the_full_demo_shop(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    pg.locator("#demolink").scroll_into_view_if_needed(); pg.click("#demolink"); pg.wait_for_timeout(1200)
+    assert pg.evaluate("location.hash") == "#demoshop"
+    assert -5 <= pg.evaluate("document.getElementById('demoshop').getBoundingClientRect().top") < 200
+    order = pg.evaluate("[...document.querySelectorAll('main > section, body > section')].map(s => s.id)")
+    assert order.index("whynow") < order.index("demoshop") < order.index("developers"), order
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_owner_fields_fill_whole_rows_so_no_label_sits_alone_like_an_eyebrow(server, browser, w, h):
+    """Review 5: at 768 'Per-call cap $' wrapped onto a row of its own under the other three fields."""
+    pg = _open(browser, server, w, h)
+    pg.evaluate("document.getElementById('ownerhint').open = true"); pg.wait_for_timeout(400)
+    tops = pg.eval_on_selector_all("#ownerhint .ofields > div", "els => els.map(e => Math.round(e.getBoundingClientRect().top))")
+    rows = {}
+    for t in tops: rows[t] = rows.get(t, 0) + 1
+    assert len(tops) == 4 and len(set(rows.values())) == 1, rows               # 4, 2+2 or 1+1+1+1: never 3+1
+    assert {1440: 1, 768: 2, 390: 4}[w] == len(rows), rows
+    pg.close()
+
+
+@pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
+def test_owner_console_headings_are_not_covered_with_agents_listed(server, browser, w, h):
+    """Review 5 reported 'Agents' and 'Schedule of selected agent' covered. Not reproduced here (Linux Chrome); this guards it
+    with two agents in the grid, the headings anywhere from the top band to mid-screen."""
+    pg = _open(browser, server, w, h)
+    pg.evaluate("document.getElementById('ownerhint').open = true"); pg.wait_for_timeout(300)
+    pg.fill("#tok", "e2e-admin-token-not-secret"); pg.dispatch_event("#tok", "change"); pg.wait_for_timeout(600)
+    for _ in range(2):
+        pg.click("text=Create agent"); pg.wait_for_timeout(900)
+    pg.wait_for_function("document.querySelectorAll('#agents .ag-row').length >= 2", timeout=10000)
+    for name in ("Agents", "Schedule of selected agent"):
+        y0 = pg.evaluate(f"[...document.querySelectorAll('#ownerhint h3')].find(e => e.textContent.trim() === '{name}').getBoundingClientRect().top + scrollY")
+        for off in (20, 60, h // 2):
+            pg.evaluate(f"scrollTo(0, {y0 - off})"); pg.wait_for_timeout(200)
+            top, covered = pg.evaluate(_COVERED, ["#ownerhint h3", name])
+            assert covered == [], (name, top, covered)
     pg.close()

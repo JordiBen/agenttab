@@ -18,7 +18,7 @@ def test_runner_records_the_commit_of_each_mode(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     out = tmp_path / "r.json"
     run_eval.main(["--modes", "none,keyword", "--out", str(out)])
-    res = json.loads(out.read_text())
+    res = json.loads(out.read_text(encoding="utf-8"))
     for mode in ("none", "keyword"):
         assert res["modes"][mode]["git_sha"] == _git("rev-parse", "HEAD")
         assert isinstance(res["modes"][mode]["git_dirty"], bool)
@@ -41,7 +41,7 @@ def test_readme_scorecard_names_the_commit_of_each_run():
 
 
 def test_committed_results_name_a_clean_commit_for_every_mode():
-    res = json.loads((ROOT / "eval" / "results.json").read_text())
+    res = json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8"))
     for mode, m in res["modes"].items():
         assert re.fullmatch(r"[0-9a-f]{40}", m.get("git_sha", "")), mode
         assert m["git_dirty"] is False, mode
@@ -49,7 +49,7 @@ def test_committed_results_name_a_clean_commit_for_every_mode():
 
 @pytest.mark.skipif(not HAS_GIT, reason="needs the git checkout")
 def test_committed_results_commit_is_in_this_history():
-    res = json.loads((ROOT / "eval" / "results.json").read_text())
+    res = json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8"))
     for mode, m in res["modes"].items():
         r = subprocess.run(["git", "merge-base", "--is-ancestor", m["git_sha"], "HEAD"], cwd=ROOT)
         assert r.returncode == 0, f"{mode} ran on {m['git_sha'][:7]}, not an ancestor of HEAD"

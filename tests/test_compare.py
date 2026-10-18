@@ -202,8 +202,8 @@ def test_verdicts_are_only_allowed_blocked_held_never_paid(tmp_path, monkeypatch
 
 
 def test_ui_stamp_words_are_allowed_blocked_held_and_the_left_receipt_says_rules_keyword_check():
-    js = open("static/app.js").read()
+    js = open("static/app.js", encoding="utf-8").read()
     words = re.search(r"const CMP_STAMP = \{(.*?)\};", js).group(1)
     assert set(re.findall(r"\['([A-Z]+)'", words)) == {"ALLOWED", "BLOCKED", "HELD"}
-    html = open("static/dashboard.html").read()
+    html = open("static/dashboard.html", encoding="utf-8").read()
     assert 'id="cmpl" aria-label="Rules + keyword check"><h4>Rules + keyword check</h4>' in html

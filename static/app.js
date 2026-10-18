@@ -345,11 +345,10 @@ async function scorecard() { const r = await fetch('/api/scorecard'); if (!r.ok)
   const ind = (j.by_category || {}).indirect_injection;
   $('proofline').textContent = ind && 'keyword' in ind && 'ai' in ind
     ? `Rules do most of the work. Claude catches what rules can't, like instructions hidden in web pages: ${ind.keyword} of ${ind.total} with rules alone, ${ind.ai} of ${ind.total} with Claude.` : 'Rules do most of the work.';
-  const h = j.heldout, hm = (h && h.modes) || {}, ha = hm.ai;
-  if (ha) {   // every number from eval/heldout-results.json via /api/scorecard; a mode missing from the file is left out
-    const att = [['none', 'no guard'], ['keyword', 'rules only'], ['ai', 'rules + Claude']].filter(([m]) => hm[m])
-      .map(([m, n]) => `${n} ${hm[m].attacks_stopped} / ${hm[m].attacks_total}`).join(', ');
-    $('heldout').innerHTML = `<b>A test the builder never saw:</b> ${h.cases} cases written separately and run once. Attacks stopped: ${att}. Legit buys allowed with Claude: ${ha.legit_correct} / ${ha.legit_total}, wrongly blocked: ${ha.false_blocks}.`;
+  const h = j.heldout, hm = (h && h.modes) || {}, ha = hm.ai, hk = hm.keyword;
+  if (ha) {   // every number from eval/heldout-results.json via /api/scorecard
+    $('heldout').innerHTML = `<b>A test the builder never saw:</b> Claude stopped ${ha.attacks_stopped} / ${ha.attacks_total} attacks and allowed ${ha.legit_correct} / ${ha.legit_total} legit buys, ${ha.false_blocks} wrongly blocked.`
+      + (hk ? ` Rules alone: ${hk.attacks_stopped} / ${hk.attacks_total}.` : '') + ` (${h.cases} cases written separately, run once.)`;
     $('heldout').hidden = false; }
   $('prooffoot').innerHTML = `${j.cases} labeled purchases, written by the team and revised after the first run${h ? `; the separate ${h.cases}-case set was written by an independent reviewer` : ''}. Full results and code: <a href="https://github.com/JordiBen/agenttab/tree/main/eval">eval/</a>.`;
   $('hown').textContent = j.cases;

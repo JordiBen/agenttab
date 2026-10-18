@@ -45,7 +45,7 @@
 </header>
 
 <section id="problem"><div class="wrap problem">
- <div class="sec-head reveal" style="margin:0"><h2>An agent with your card does what a web page tells it.</h2>
+ <div class="sec-head reveal" style="margin:0"><h2>One web page can spend your money.</h2>
   <p>AI agents can now buy things on their own. But they read the web, and one line of text on a supplier page can talk them into spending your money.</p></div>
  <div class="frag saw-tb reveal" id="probex" data-ui data-case="indirect_injection-01">
   <p class="frag-q">Supplier page: <q id="probq">…</q></p>
@@ -96,9 +96,30 @@
   <div class="g-sum" id="gsum"></div>
   <div class="g-list" id="glist"></div>
  </div>
+ <p class="ws-link"><a class="t-link" id="demolink" href="#demoshop">Run the full demo shop ↓</a></p>
+</div></section>
+
+<section id="proof" class="band saw-tb"><div class="wrap">
+ <div class="sec-head reveal"><h2>Measured, not claimed.</h2></div>
+ <div class="tbl-wrap reveal" data-ui><table class="tbl proof-tbl" id="scoretbl"><thead><tr><th scope="col"><span class="vh">Mode</span></th><th scope="col">Attacks stopped</th><th scope="col">Legit buys allowed</th><th scope="col">Wrongly blocked</th></tr></thead><tbody></tbody></table></div>
+ <p class="proof-line reveal" id="proofline"></p>
+ <p class="proof-held reveal" id="heldout" hidden></p>
+ <p class="proof-foot reveal" id="prooffoot"></p>
+</div></section>
+
+<section id="whynow"><div class="wrap">
+ <div class="sec-head reveal"><h2>People will let agents spend, with limits.</h2></div>
+ <ul class="facts reveal">
+  <li><p>61% say spending limits would make them comfortable letting an AI agent buy.</p><a href="https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay">Nuvei consumer survey, 2026</a></li>
+  <li><p>84% say being able to reverse an AI purchase is very important.</p><a href="https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay">Nuvei, 2026</a></li>
+  <li><p>PayPal launched Agent Ready so merchants can accept payments from AI agents. AgentTab is the other side: the payer's rules.</p><a href="https://developer.paypal.com/agent-ready/overview">PayPal Developer docs, 2026</a></li>
+ </ul>
+</div></section>
+
+<section id="demoshop"><div class="wrap">
  <div class="ws" id="workspace">
-  <h3 class="ws-h">Or run the full demo shop</h3>
-  <p class="ws-sub">Lumen &amp; Loom, a small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p>
+  <div class="sec-head reveal"><h2 class="ws-h">Run the full demo shop</h2>
+  <p class="ws-sub">Lumen &amp; Loom, a small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p></div>
  <div id="demo" class="stack" style="display:none">
   <div class="grid-ws">
    <div class="stack">
@@ -140,7 +161,7 @@
  <div id="nodemo" class="card" style="display:none"><h3>Public demo is off on this server</h3><p class="sub">Use the owner console below with your admin token.</p></div>
 
  <details class="owner" style="margin-top:20px" id="ownerhint"><summary>Owner console <span class="dim">(admin token required)</span></summary><div class="inner">
-  <div class="row">
+  <div class="row ofields">
    <div><label for="tok">Admin token</label><input id="tok" type="password" placeholder="admin token" onchange="sessionStorage.tok=this.value;load()"></div>
    <div><label for="name">Agent name</label><input id="name" value="research-agent"></div>
    <div><label for="cap">Daily cap $</label><input id="cap" value="250.00"></div>
@@ -160,23 +181,6 @@
   <div><h3>Live ledger</h3><div id="ledger" class="grid-h" data-ui style="margin-top:8px"></div></div>
  </div></details>
  </div>
-</div></section>
-
-<section id="proof" class="band saw-tb"><div class="wrap">
- <div class="sec-head reveal"><h2>Measured, not claimed.</h2></div>
- <div class="tbl-wrap reveal" data-ui><table class="tbl proof-tbl" id="scoretbl"><thead><tr><th scope="col"><span class="vh">Mode</span></th><th scope="col">Attacks stopped</th><th scope="col">Legit buys allowed</th><th scope="col">Wrongly blocked</th></tr></thead><tbody></tbody></table></div>
- <p class="proof-line reveal" id="proofline"></p>
- <p class="proof-held reveal" id="heldout" hidden></p>
- <p class="proof-foot reveal" id="prooffoot"></p>
-</div></section>
-
-<section id="whynow"><div class="wrap">
- <div class="sec-head reveal"><h2>People will let agents spend, with limits.</h2></div>
- <ul class="facts reveal">
-  <li><p>61% say spending limits would make them comfortable letting an AI agent buy.</p><a href="https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay">Nuvei consumer survey, 2026</a></li>
-  <li><p>84% say being able to reverse an AI purchase is very important.</p><a href="https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay">Nuvei, 2026</a></li>
-  <li><p>PayPal launched Agent Ready so merchants can accept payments from AI agents. AgentTab is the other side: the payer's rules.</p><a href="https://developer.paypal.com/agent-ready/overview">PayPal Developer docs, 2026</a></li>
- </ul>
 </div></section>
 
 <section id="showcase" class="band saw-tb"><div class="wrap">

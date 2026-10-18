@@ -176,8 +176,8 @@ def test_ai_unavailable_purchase_says_guard_busy_waiting_for_human(tmp_path, mon
     assert r.status_code == 202 and j["status"] == "approval_required" and j["ai_unavailable"] is True
     assert j["message"] == "AI guard is busy, purchase is waiting for human approval, by design"
     assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("100.00")  # nothing charged, nothing auto-approved
-    js = (ROOT / "static/app.js").read_text()
-    assert "j.ai_unavailable" in js and "dbusy" in js and 'id="dbusy"' in (ROOT / "static/dashboard.html").read_text()
+    js = (ROOT / "static/app.js").read_text(encoding="utf-8")
+    assert "j.ai_unavailable" in js and "dbusy" in js and 'id="dbusy"' in (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
 
 
 def test_normal_approval_has_no_busy_message(tmp_path):
@@ -190,7 +190,7 @@ def test_normal_approval_has_no_busy_message(tmp_path):
 
 # ---------- (4) MCP prominence ----------
 def _html():
-    return (ROOT / "static/dashboard.html").read_text()
+    return (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
 
 
 def test_mcp_line_in_the_developer_section_claims_only_what_was_verified():

@@ -10,9 +10,9 @@ from app.config import Settings
 from app.main import create_app
 
 ROOT = Path(__file__).parent.parent
-HTML = (ROOT / "static/dashboard.html").read_text()
-CSS = (ROOT / "static/app.css").read_text()
-JS = (ROOT / "static/app.js").read_text()
+HTML = (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
+CSS = (ROOT / "static/app.css").read_text(encoding="utf-8")
+JS = (ROOT / "static/app.js").read_text(encoding="utf-8")
 
 
 def _client(tmp_path):
@@ -35,7 +35,7 @@ def test_roundo_is_self_hosted_with_its_ofl_licence_next_to_it_and_inter_is_gone
 
 def test_scorecard_api_carries_stale_modes_for_the_previous_catalog_label(tmp_path):
     j = _client(tmp_path).get("/api/scorecard").json()
-    assert j["stale_modes"] == json.loads((ROOT / "eval/results.json").read_text()).get("stale_modes", [])
+    assert j["stale_modes"] == json.loads((ROOT / "eval/results.json").read_text(encoding="utf-8")).get("stale_modes", [])
 
 
 def test_design_tokens_and_remove_list():
@@ -71,10 +71,18 @@ def test_stamp_vocabulary_and_honest_replay_wording():
 
 
 def test_sections_in_design_order_and_existing_selectors_kept():
-    # landing-copy v2 order: hero, problem, how, try it (compare panel, Gauntlet, demo shop), proof, why now, scenarios, developers
+    # landing-copy v2 order, review 5: the full demo shop moved out of Try it to after Why now, before Developers;
+    # Try it keeps a link down to it.
     order = [HTML.index(s) for s in ('<header class="hero"', 'id="problem"', 'id="how"', 'id="try"', 'id="compare"', 'id="gbtn"',
-                                     'id="workspace"', 'id="proof"', 'id="whynow"', 'id="showcase"', 'id="developers"', 'id="mcp"', "<footer")]
+                                     'id="demolink"', 'id="proof"', 'id="whynow"', 'id="demoshop"', 'id="workspace"', 'id="dguided"',
+                                     'id="dsched"', 'id="ownerhint"', 'id="developers"', 'id="mcp"', "<footer")]
     assert order == sorted(order)
+    tri = HTML[HTML.index('<section id="try"'):HTML.index("</section>", HTML.index('<section id="try"'))]
+    assert 'id="workspace"' not in tri and 'id="demo"' not in tri and "grid-h" not in tri       # no grids or board left in Try it
+    assert re.search(r'<a class="t-link" id="demolink" href="#demoshop">Run the full demo shop ↓</a>', tri)
+    shop = HTML[HTML.index('<section id="demoshop"'):HTML.index("</section>", HTML.index('<section id="demoshop"'))]
+    for sel in ('id="workspace"', 'id="demo"', 'id="nodemo"', 'id="dsched"', 'id="ownerhint"', 'id="agents"', 'id="ledger"'):
+        assert sel in shop, sel
     for sel in ('id="bentomcp"', 'id="dguided"', 'id="mcp"', 'id="dbusy"', 'id="dsched"', 'id="navlive"',
                 'id="howbar"', 'id="stage"', 'id="scoretbl"', 'id="gbtn"', 'id="cmpl"', 'id="cmpr"', 'id="feed"'):
         assert sel in HTML, sel
@@ -95,7 +103,7 @@ def test_two_large_close_crop_screenshots_are_served(tmp_path):
 
 def test_no_gradients_and_no_emoji_or_symbol_glyphs_as_ui():
     """Review: remove the 3 gradients (the sawtooth masks were conic-gradients) and the 5 emoji used as UI."""
-    sched = (ROOT / "static/schedule.js").read_text()
+    sched = (ROOT / "static/schedule.js").read_text(encoding="utf-8")
     for name, src in (("app.css", CSS), ("dashboard.html", HTML), ("app.js", JS), ("schedule.js", sched)):
         assert "gradient" not in src.lower(), name
         assert not re.search("[\u2713\u2715\u21BA\u2726\u25D4\U0001F300-\U0001FAFF]", src), name
@@ -194,10 +202,10 @@ def test_page_numbers_are_not_typed_into_the_html():
 
 def test_scorecard_serves_the_held_out_summary_and_the_test_count(tmp_path):
     j = _client(tmp_path).get("/api/scorecard").json()
-    res = json.loads((ROOT / "eval/heldout-results.json").read_text())
-    run = json.loads((ROOT / "eval/heldout-run.json").read_text())
+    res = json.loads((ROOT / "eval/heldout-results.json").read_text(encoding="utf-8"))
+    run = json.loads((ROOT / "eval/heldout-run.json").read_text(encoding="utf-8"))
     h = j["heldout"]
-    assert h["cases"] == len(res["ai"]["rows"]) == len(json.loads((ROOT / "eval/heldout.json").read_text()))
+    assert h["cases"] == len(res["ai"]["rows"]) == len(json.loads((ROOT / "eval/heldout.json").read_text(encoding="utf-8")))
     assert h["runs"] == 1 and h["git_sha"] == run["git_sha"]
     for mode in ("none", "keyword", "ai"):
         for k in ("attacks_stopped", "attacks_total", "legit_correct", "legit_total", "false_blocks"):
@@ -206,13 +214,44 @@ def test_scorecard_serves_the_held_out_summary_and_the_test_count(tmp_path):
     assert isinstance(j["test_count"], int) and j["test_count"] > 0
 
 
+def _collect(extra_path: str | None = None):
+    """pytest --collect-only over tests/: (collected count, modules skipped at collection)."""
+    import os, subprocess, sys
+    env = {k: v for k, v in os.environ.items()}
+    if extra_path:
+        env["PYTHONPATH"] = extra_path + os.pathsep + env.get("PYTHONPATH", "")
+    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-rs", "-p", "no:cacheprovider", "tests"],
+                         cwd=ROOT, capture_output=True, text=True, encoding="utf-8", env=env).stdout
+    collected = int(re.search(r"(\d+) tests? collected", out).group(1)) if re.search(r"(\d+) tests? collected", out) else 0
+    skipped = set(re.findall(r"^SKIPPED \[\d+\] (tests[/\\]test_\w+\.py):\d+:", out, re.M))
+    return collected, {p.replace("\\", "/") for p in skipped}, out
+
+
+def _assert_count_matches(collected, skipped):
+    from app.main import TEST_COUNT, count_tests, count_tests_by_file
+    by_file = count_tests_by_file(ROOT / "tests")
+    assert TEST_COUNT == count_tests(ROOT / "tests") == sum(by_file.values())     # the page shows the whole suite
+    assert skipped <= set(by_file)
+    # Only the browser modules may skip at collection, and only because Playwright is missing (pytest.importorskip).
+    for f in skipped:
+        assert 'pytest.importorskip("playwright.sync_api")' in (ROOT / f).read_text(encoding="utf-8"), f
+    assert collected == sum(n for f, n in by_file.items() if f not in skipped)    # every other test is really collected
+
+
 def test_test_count_equals_what_pytest_collects():
-    import subprocess, sys
-    from app.main import TEST_COUNT, count_tests
-    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", str(ROOT / "tests")],
-                         cwd=ROOT, capture_output=True, text=True).stdout
-    collected = int(re.search(r"(\d+) tests? collected", out).group(1))
-    assert TEST_COUNT == count_tests(ROOT / "tests") == collected
+    collected, skipped, out = _collect()
+    _assert_count_matches(collected, skipped)
+
+
+def test_test_count_still_matches_when_playwright_is_not_installed(tmp_path):
+    """Windows report: count_tests 327 vs 271 collected, because the e2e modules skip at collection without Playwright.
+    Simulate that here with a playwright package that fails to import, ahead of the real one on sys.path."""
+    (tmp_path / "playwright").mkdir()
+    (tmp_path / "playwright" / "__init__.py").write_text('raise ModuleNotFoundError("simulated: no module named playwright", name="playwright")\n', encoding="utf-8")
+    collected, skipped, out = _collect(str(tmp_path))
+    e2e = {f"tests/{p.name}" for p in (ROOT / "tests").glob("test_e2e_*.py")}
+    assert skipped == e2e and len(e2e) >= 5, out[-2000:]                          # the simulation really hid Playwright
+    _assert_count_matches(collected, skipped)
 
 
 def test_why_now_facts_each_carry_a_source_link():
@@ -222,3 +261,10 @@ def test_why_now_facts_each_carry_a_source_link():
     assert len(items) == 3 and all(re.search(r'<a href="https://[^"]+">[^<]+</a>', i) for i in items)
     assert "61%" in items[0] and "84%" in items[1] and "Agent Ready" in items[2]
     assert "58%" not in sec                                   # the source says 59%; the 58% clause was dropped, not retyped
+
+
+def test_problem_headline_is_the_short_one():
+    sec = HTML[HTML.index('<section id="problem"'):HTML.index("</section>", HTML.index('<section id="problem"'))]
+    assert "<h2>One web page can spend your money.</h2>" in sec and "An agent with your card" not in HTML
+    assert ("AI agents can now buy things on their own. But they read the web, and one line of text on a supplier page can talk "
+            "them into spending your money.") in sec                                  # the rest of the section is unchanged

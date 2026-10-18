@@ -192,8 +192,7 @@ html{scroll-padding-top:76px}   /* anchor jumps keep a nav's height of room abov
 .g-row .p{margin-top:6px} .g-row .r{color:var(--muted);margin-top:2px}
 .gaunt{margin-top:clamp(28px,4vw,48px)}
 .g-row .who{color:var(--ink);font-weight:600}
-.ws-sub{max-width:68ch;margin:0 0 18px;color:var(--muted)}
-.ws-h{margin:clamp(48px,7vw,88px) 0 18px;font-size:var(--step-lead)}
+.ws-link{margin:clamp(32px,4vw,48px) 0 0;font-size:var(--step-lead)}
 
 /* ---- showcase ---- */
 .show{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:clamp(24px,4vw,56px);align-items:start}
@@ -271,6 +270,11 @@ textarea{min-height:70px;resize:vertical}
 .owner summary{cursor:pointer;padding:18px 22px;font-weight:600}
 .owner .inner{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;padding:0 22px 22px}
 .owner .inner>*{min-width:0}
+.owner .ofields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end}   /* 4, 2 or 1 per row: a field never sits alone under three */
+@media (max-width:1000px){.owner .ofields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:520px){.owner .ofields{grid-template-columns:minmax(0,1fr)}}
+.owner .ofields>div{min-width:0}
+.owner .ofields input{width:100%}
 /* status pills (grids, verdicts): flat fills from the palette; text keeps its case */
 .pill{display:inline-flex;align-items:center;gap:6px;border-radius:var(--radius);padding:2px 8px;font-size:var(--step-meta);font-weight:600;line-height:1.5;white-space:nowrap;background:var(--surface);color:var(--ink)}
 .pill.ok{background:var(--ink);color:var(--accent-ink)}

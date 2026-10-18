@@ -20,7 +20,7 @@ STALE = " (previous catalog)"
 
 
 def load_archive() -> dict | None:
-    return json.loads(ARCHIVE.read_text()) if ARCHIVE.exists() else None
+    return json.loads(ARCHIVE.read_text(encoding="utf-8")) if ARCHIVE.exists() else None
 
 
 def _row(label: str, m: dict) -> str:
@@ -58,7 +58,7 @@ def category_table(r: dict, archive: dict | None) -> str:
 
 
 def apply(readme: str, r: dict | None = None, archive: dict | None = None) -> str:
-    r = r or json.loads(RESULTS.read_text())
+    r = r or json.loads(RESULTS.read_text(encoding="utf-8"))
     archive = archive if archive is not None else load_archive()
     for (start, end), body in zip(MARKERS, (scorecard_table(r, archive), category_table(r, archive))):
         pat = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
@@ -69,5 +69,5 @@ def apply(readme: str, r: dict | None = None, archive: dict | None = None) -> st
 
 
 if __name__ == "__main__":
-    README.write_text(apply(README.read_text()))
+    README.write_text(apply(README.read_text(encoding="utf-8")), encoding="utf-8")
     print("README scorecard tables regenerated from", RESULTS.relative_to(ROOT))

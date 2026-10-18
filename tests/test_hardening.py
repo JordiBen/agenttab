@@ -529,7 +529,7 @@ def test_replay_feed_is_real_eval_data_without_side_effects(tmp_path):
     from pathlib import Path
     c = _client(tmp_path)
     j = c.get("/api/replay").json()
-    res = json.loads((Path(__file__).resolve().parent.parent / "eval" / "results.json").read_text())["modes"]["ai"]["rows"]
+    res = json.loads((Path(__file__).resolve().parent.parent / "eval" / "results.json").read_text(encoding="utf-8"))["modes"]["ai"]["rows"]
     assert len(j["decisions"]) == len(res) == 67
     by_id = {r["id"]: r for r in res}
     for d in j["decisions"]:                       # every replayed verdict is exactly the committed one
