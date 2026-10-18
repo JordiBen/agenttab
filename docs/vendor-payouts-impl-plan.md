@@ -1,8 +1,9 @@
 # Implementation plan: pay vendors directly, capture-only (envelope model)
 
-Status: **plan only, no code on this branch.** The reviewer chose Option 1 (capture-only) on Oct 18 2026, conditional on one
-more sandbox spike; **that spike succeeded** (see "Capture-only spike"). Code waits for the go-ahead and will be built behind
-`VENDOR_PAYOUTS=1` (off by default). Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
+Status: **in progress on this branch, not merged.** The reviewer chose Option 1 (capture-only) on Oct 18 2026; the capture-only
+spike succeeded (see "Capture-only spike") and the code was approved the same day, built behind `VENDOR_PAYOUTS=1` (off by
+default). Done: step 1 (ledger reservation, cents, migration, flag, `payee` layer; `tests/test_vendor_payouts.py`). Not wired
+into the buy flow yet. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
 not exercised yet is marked **UNSURE**. Code references are to `main` at d4b1dae. Vendor merchant ids never appear in this
 repo: they come from environment variables (section c). Earlier research and spikes: [vendor-payouts-plan.md](vendor-payouts-plan.md).
 
