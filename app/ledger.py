@@ -63,7 +63,8 @@ VENDOR_COUNTED = ("reserved", "pending_approval", "completing", "payment_pending
 # Fields a status move may also set. Never status, amounts, payee or agent.
 MOVABLE_FIELDS = frozenset({"paypal_order", "paypal_capture", "reason", "fulfillment", "flag", "refund_deadline",
                             "approval_expires", "paypal_confirmed", "refunded_ts", "decision_source", "started_ts",
-                            "pay_attempt_ts", "pay_vault_id", "refund_requested_ts", "refund_requested_by", "refund_note"})
+                            "pay_attempt_ts", "pay_vault_id", "refund_requested_ts", "refund_requested_by", "refund_note",
+                            "refunded_cents"})
 INTERNAL_PURCHASE_FIELDS = frozenset({"payee_merchant_id", "pay_vault_id"})   # never in API responses
 
 
@@ -123,6 +124,7 @@ PURCHASE_MIGRATIONS = [
     ("refund_requested_ts", "REAL"),
     ("refund_requested_by", "TEXT"),
     ("refund_note", "TEXT"),
+    ("refunded_cents", "INTEGER"),  # vendor-funded partial refund: what PayPal's order shows refunded (None = unknown)
 ]
 
 
@@ -441,7 +443,9 @@ class Ledger:
         return self.db.execute("SELECT 1 FROM purchases WHERE agent_id=? AND funding='vendor' LIMIT 1", (aid,)).fetchone() is not None
 
     def vendor_counted_cents(self, aid: str, since: float, vendor: str | None = None) -> int:
-        q = (f"SELECT COALESCE(SUM(amount_cents),0) FROM purchases WHERE agent_id=? AND funding='vendor'"
+        # A partial refund counts what is left, but only when PayPal showed the refunded amount (refunded_cents).
+        q = (f"SELECT COALESCE(SUM(amount_cents - CASE WHEN status='partially_refunded' THEN COALESCE(refunded_cents,0)"
+             f" ELSE 0 END),0) FROM purchases WHERE agent_id=? AND funding='vendor'"
              f" AND status IN ({','.join('?' * len(VENDOR_COUNTED))}) AND ts>=?")
         args = [aid, *VENDOR_COUNTED, since]
         if vendor is not None:

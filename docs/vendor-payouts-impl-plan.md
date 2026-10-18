@@ -70,13 +70,20 @@ vendor, in **one** PayPal call made **only after the vendor delivered**.
    the reservation in cents, `payee.merchant_id` equal to the configured vendor id (the spike's response carries all of these,
    `f1488058ce2f1`, `f7416798d75bf`). Then `completed` with order id and capture id.
 6. **Outcomes after delivery, all fail closed:**
-   - Card declined or PayPal refuses the order (a definite 4xx): `payment_failed`, the vendor delivered unpaid, the agent is
-     **frozen** for the owner to reconcile. Nothing was charged, so it stops counting against the caps.
+   - Card declined or PayPal refuses the order (a definite 400/403/404/422): `payment_failed`, the vendor delivered unpaid, the
+     agent is **frozen** for the owner to reconcile. Nothing was charged, so it stops counting against the caps.
+   - `401` is our own OAuth token expiring, not a refusal: the client fetches a new token and retries once with the **same**
+     Request-Id; only a second `401` is `payment_failed` (review finding 1, Oct 18).
    - Capture `PENDING`: `payment_pending`, keeps counting; reconcile resolves it.
    - Timeout or 5xx: retry once with the **same** Request-Id (the idempotency page: a repeat returns the first request's latest
      status). Still unknown: `payment_unknown`, keeps counting, agent frozen until reconcile replays the same Request-Id.
    - Response doesn't match (amount, payee, status, more than one capture): `flagged`, keeps counting, agent frozen, never
      retried automatically.
+   - `payment_unknown` older than the 5-hour replay window (PayPal keeps a Request-Id 6 hours): reconcile no longer replays it.
+     The owner settles it with `POST /api/purchases/{pid}/resolve-unknown` (owner only): either a PayPal capture id, checked
+     with `GET /v2/payments/captures/{id}` (vendor, amount in cents, USD, `custom_id` = pid, `COMPLETED`, not already on
+     another purchase) before it becomes `completed`, or `not_paid: true` (`payment_failed`, stops counting). It never
+     unfreezes; the owner unfreezes the usual way (review finding 3).
 
 ### Above the approval threshold
 1. `decide()` returns `approval` (as today). Reserve as `pending_approval` (counts against the caps), expiry 24 h. **No hold,
@@ -139,9 +146,12 @@ their tests.
   (atomic claim), records who asked and why, and the owner console and the agent both see "Refund requested: with SampleBox.
   The vendor refunds through PayPal; AgentTab never holds this money."
 - **Reconcile** confirms it: `GET /v2/payments/captures/{id}` (allowed, `f7416798d75bf`) showing `REFUNDED` moves it to
-  `refunded`, and the amount stops counting. `PARTIALLY_REFUNDED` becomes `partially_refunded` and the full amount keeps
-  counting. **UNSURE:** how to read the refunded amount from the capture (not exercised); until then partial refunds are shown,
-  not credited.
+  `refunded`, and the amount stops counting. `PARTIALLY_REFUNDED` becomes `partially_refunded`. The capture `GET` has no
+  refunded amount, so reconcile reads the order (`GET /v2/checkout/orders/{id}`): the sum of
+  `purchase_units[0].payments.refunds[]` with status `COMPLETED` (https://developer.paypal.com/api/orders/v2/definitions/payment_collection)
+  is stored as `refunded_cents` and only the rest keeps counting. If the order can't be read, shows no refunds, or the sum
+  isn't plain USD cents between zero and the purchase amount, the **full amount keeps counting** (fail closed). Re-read on
+  every reconcile. Never a tab credit (review finding 4). **UNSURE:** not exercised against a real partial refund.
 - A `PAYMENT.CAPTURE.REFUNDED` webhook, if PayPal delivers it (**UNSURE**), does the same.
 - Demo (reviewer decision, Oct 18): no simulated vendor action and no per-vendor REST apps. The demo shows `refund_requested`
   with the explanation; no fake "refunded" state.

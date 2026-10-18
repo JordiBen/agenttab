@@ -50,11 +50,14 @@ def request_id(pid: str, action: str) -> str:
 
 # A definite refusal: PayPal answered and made no payment (card declined, bad request, not allowed). Anything else
 # (no answer, 5xx, 409 for a simultaneous duplicate Request-Id, 429) is unknown: retried once with the same id.
-DEFINITE_REFUSAL = frozenset({400, 401, 403, 404, 422})
+# 401 is our own OAuth token expiring, not a refusal: PayPalClient.pay_vendor refreshes the token and retries once
+# with the same Request-Id; only a 401 on that retry (marked auth_retried) counts as a refusal.
+DEFINITE_REFUSAL = frozenset({400, 403, 404, 422})
 
 
 def definite_refusal(e) -> bool:
-    return getattr(e, "status", 0) in DEFINITE_REFUSAL
+    st = getattr(e, "status", 0)
+    return st in DEFINITE_REFUSAL or (st == 401 and getattr(e, "auth_retried", False) is True)
 
 
 def check_payment(j: dict, amount_cents: int, payee_merchant_id: str, pid: str) -> tuple[str, dict]:

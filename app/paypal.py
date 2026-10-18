@@ -60,6 +60,12 @@ class PayPalClient:
         self.mock_vendor_orders: dict[str, dict] = {}
         self.mock_vendor_script: list = []   # "ok" | "timeout_before" | "timeout_after" | ("error", http, issue)
         self.mock_vendor_tamper = None       # callable(response) -> None, edits the returned copy
+        self.mock_token_resets = 0
+
+    def reset_token(self) -> None:
+        """Forget the OAuth token (PayPal said 401), so the next request fetches a fresh one."""
+        self._token, self._token_exp = None, 0.0
+        self.mock_token_resets += 1
 
     # ---------- auth ----------
     def _access_token(self) -> str:
@@ -108,9 +114,9 @@ class PayPalClient:
         if code:
             raise PayPalError(f"{op}: 422 {code}", code, 422)
 
-    def _mock_record_capture(self, cid: str, amount: Decimal, payee: str | None = None) -> None:
+    def _mock_record_capture(self, cid: str, amount: Decimal, payee: str | None = None, **extra) -> None:
         self._mock_captures.setdefault(cid, {"amount": Decimal(amount), "refunded": Decimal(0), "status": "COMPLETED",
-                                             **({"payee": payee} if payee else {})})
+                                             **({"payee": payee} if payee else {}), **extra})
 
     @property
     def mock(self) -> bool:
@@ -318,7 +324,8 @@ class PayPalClient:
         return j.get("status", "VOIDED")
 
     def get_capture(self, capture_id: str) -> dict:
-        """PayPal's view of one capture, for reconciliation: {status, amount, payee (merchant id or None)}."""
+        """PayPal's view of one capture, for reconciliation: {status, amount, currency, payee (merchant id or None),
+        custom_id, order_id}."""
         if self.mock:
             code = self.mock_fail.pop("get_capture", "")
             if code:                              # offline tests: PayPal unavailable for this lookup
@@ -326,10 +333,18 @@ class PayPalClient:
             c = self._mock_captures.get(capture_id)
             if not c:
                 raise PayPalError("unknown capture", "INVALID_RESOURCE_ID", 404)
-            return {"status": c["status"], "amount": c["amount"], "payee": c.get("payee")}
-        j = self._req("GET", f"/v2/payments/captures/{capture_id}")
+            return {"status": c["status"], "amount": c["amount"], "currency": c.get("currency", "USD"),
+                    "payee": c.get("payee"), "custom_id": c.get("custom_id"), "order_id": c.get("order_id")}
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", capture_id or ""):
+            raise PayPalError("bad capture id", "INVALID_RESOURCE_ID", 404)
+        try:
+            j = self._req("GET", f"/v2/payments/captures/{capture_id}")
+        except httpx.HTTPError as e:
+            raise PayPalError(f"GET capture: {type(e).__name__}", "NETWORK", 0)
         return {"status": j["status"], "amount": Decimal(j["amount"]["value"]),
-                "payee": (j.get("payee") or {}).get("merchant_id")}
+                "currency": (j.get("amount") or {}).get("currency_code"),
+                "payee": (j.get("payee") or {}).get("merchant_id"), "custom_id": j.get("custom_id"),
+                "order_id": ((j.get("supplementary_data") or {}).get("related_ids") or {}).get("order_id")}
 
     def get_order(self, order_id: str) -> dict:
         """PayPal's order JSON (GET /v2/checkout/orders/{id}), unchanged; vendor payouts check it like a create answer."""
@@ -436,7 +451,24 @@ class PayPalClient:
     def pay_vendor(self, vault_id: str, amount_cents: int, payee_merchant_id: str, pid: str, description: str) -> dict:
         """Pay the vendor straight from the owner's saved card: POST /v2/checkout/orders, PayPal-Request-Id
         at-{pid}-pay (a repeat returns the first request's result). Returns PayPal's order JSON unchanged; the
-        caller checks status, payee and amount. No answer (timeout, network) raises PayPalError with status 0."""
+        caller checks status, payee and amount. No answer (timeout, network) raises PayPalError with status 0.
+        A 401 means our OAuth token expired (PayPal did nothing): fetch a new token and retry once with the same
+        Request-Id. A second 401 is raised with auth_retried=True (vendorpay.definite_refusal counts only that)."""
+        try:
+            return self._pay_vendor_once(vault_id, amount_cents, payee_merchant_id, pid, description)
+        except PayPalError as e:
+            if e.status != 401:
+                raise
+        self.reset_token()
+        try:
+            return self._pay_vendor_once(vault_id, amount_cents, payee_merchant_id, pid, description)
+        except PayPalError as e:
+            if e.status == 401:
+                e.auth_retried = True
+            raise
+
+    def _pay_vendor_once(self, vault_id: str, amount_cents: int, payee_merchant_id: str, pid: str,
+                         description: str) -> dict:
         from .vendorpay import request_id
         rid = request_id(pid, "pay")
         body = self.vendor_order_body(vault_id, amount_cents, payee_merchant_id, pid, description)
@@ -457,7 +489,7 @@ class PayPalClient:
                 u["payments"] = {"captures": [{"id": cid, "status": "COMPLETED", "amount": dict(u["amount"]),
                                                "final_capture": True, "custom_id": pid}]}
                 self.mock_vendor_orders[rid] = {"id": oid, "status": "COMPLETED", "purchase_units": [u]}
-                self._mock_record_capture(cid, Decimal(u["amount"]["value"]), payee_merchant_id)
+                self._mock_record_capture(cid, Decimal(u["amount"]["value"]), payee_merchant_id, custom_id=pid, order_id=oid)
             if step == "timeout_after":          # PayPal made the order, the answer was lost
                 raise PayPalError("POST /v2/checkout/orders: timeout", "TIMEOUT", 0)
             out = copy.deepcopy(self.mock_vendor_orders[rid])

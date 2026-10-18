@@ -194,9 +194,7 @@ def test_mcp_vendor_bought_and_approval(env):
 
 def test_mcp_vendor_flag_off_outcome(tmp_path, ids):
     c, pp, L = make(tmp_path, vendor_payouts=False)
-    r = c.post("/api/agents", json={"name": "v", "daily_cap_usd": 100.0}, headers=A)
-    a = r.json()
-    L.set_funding_model(a["agent_id"], "vendor", 10000)
+    a = agent(c, L, card=False)
     sc = mcp_buy(c, a)["structuredContent"]
     assert sc["outcome"] == "unavailable", sc
 
@@ -248,7 +246,7 @@ def test_resolve_with_a_verified_capture_completes(env):
     no_ids_in(r.text)
 
 
-@pytest.mark.parametrize("change", ["payee", "amount", "custom_id", "status_pending", "status_refunded",
+@pytest.mark.parametrize("change", ["payee", "amount", "currency", "custom_id", "status_pending", "status_refunded",
                                     "status_declined", "no_payee", "not_found"])
 def test_resolve_refuses_a_capture_that_does_not_match(env, change):
     c, pp, L = env
@@ -258,6 +256,8 @@ def test_resolve_refuses_a_capture_that_does_not_match(env, change):
         kw["payee"] = "OTHERMERCH001"
     elif change == "amount":
         kw["amount"] = "23.99"
+    elif change == "currency":
+        kw["currency"] = "EUR"
     elif change == "custom_id":
         kw["pid"] = "pu_aaaaaaaaaaaa"
     elif change == "status_pending":
