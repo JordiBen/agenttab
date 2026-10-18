@@ -35,7 +35,7 @@ const VTIP = {reserved: 'Budget set aside. The vendor is about to deliver; nothi
   partially_refunded: 'The vendor refunded part of it through PayPal.'};
 Object.assign(TIP, VTIP);
 function vstatus(d) {
-  if (d.status === 'refund_requested' && d.refund && d.refund.with) return pill('refund_requested', 'refund with ' + d.refund.with, d.refund.note);
+  if (d.status === 'refund_requested' && d.refund && d.refund.with) return pill('refund_requested', 'Refund requested', d.refund.note);   // the note names the vendor
   if (d.status === 'partially_refunded' && d.refund) return pill('partially_refunded', d.refund.refunded_usd != null ? usd(d.refund.refunded_usd) + ' refunded' : 'partly refunded', d.refund.note);
   return pill(d.status); }
 function vactions(d, o) {
@@ -65,6 +65,20 @@ function vendorBought(j, g) {
     (j.envelope ? ` · ${usd(j.envelope.remaining_usd)} left of the 30-day budget` : '') +
     (j.status === 'payment_pending' ? ' · PayPal is still finishing the payment' : '') +
     (j.refund_deadline ? ` · refund can be requested until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : ''); }
+// Vendor-mode Purchases table: short item name, the vendor in its own narrow column; fits a 1280 px window. Every vendor
+// row is paid from the saved card, so that column is folded into the Amount tooltip.
+let VMODE = false, OVMODE = false;
+const vendorShort = vendor => (CAT || []).find(v => v.vendor === vendor)?.short || vendorName(vendor);
+function vendorPurchCols(o) { return [
+  {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 112, maxWidth: 124},
+  {colId: 'item', headerName: 'Item', minWidth: 136, flex: 1.2, valueGetter: p => itemName(p.data.vendor, p.data.item), tooltipValueGetter: p => vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item)},
+  {colId: 'vendor', headerName: 'Vendor', minWidth: 100, maxWidth: 120, valueGetter: p => vendorShort(p.data.vendor), tooltipValueGetter: p => vendorName(p.data.vendor)},
+  {field: 'amount_usd', headerName: 'Amount', valueFormatter: p => '$' + Number(p.value).toFixed(2), minWidth: 98, maxWidth: 106,
+   tooltipValueGetter: p => p.data.paid_to ? 'Paid to ' + p.data.paid_to + ' from the saved card' : 'From the saved card'},
+  {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 156},
+  {field: 'refund_deadline', headerName: 'Refund until', minWidth: 138, valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleDateString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : (p.data.status === 'completed' ? 'final sale' : '')},
+  {field: 'decision_source', headerName: 'Decided by', minWidth: 118, tooltipField: 'decision_source'}, {field: 'reason', flex: 1.5, minWidth: 76, tooltipField: 'reason'},
+  {headerName: 'Actions', minWidth: 162, sortable: false, filter: false, cellRenderer: p => p.data.funding === 'vendor' ? vactions(p.data, o) : ''}]; }
 // VENDOR_PAYOUTS=1 with a vendor-funded demo agent: budget wording, and no tab refund (the server answers 410).
 function vendorModeUI() {
   $('dintro').textContent = `Start a session: the agent gets a $100 30-day budget, and each purchase is paid by PayPal straight to the vendor from the owner's saved sandbox card`;
@@ -73,6 +87,8 @@ function vendorModeUI() {
   $('drefundbtn').style.display = 'none';
   const ph = $('dbudgets').querySelector('p.sub');
   if (ph && ph.textContent.startsWith('Start a session')) ph.textContent = 'Start a session to see the budget.';
+  $('drefundtext').innerHTML = 'you can ask the vendor for a refund within <b>7 days</b>';
+  if (!VMODE) { VMODE = true; dPurch.setGridOption('columnDefs', purchCols(false, true)); }
 }
 // ---- end vendor payouts ----
 
@@ -126,6 +142,7 @@ async function load() {
   const vendorAgent = !!(a0 && a0.funding_model === 'vendor');    // no tab: no top-ups or tab refunds (the server answers 410)
   for (const id of ['amt', 'fundbtn', 'refundbtn']) $(id).hidden = vendorAgent;
   $('cardbtn').hidden = vendorAgent;
+  if (vendorAgent !== OVMODE) { OVMODE = vendorAgent; oPurch.setGridOption('columnDefs', purchCols(true, vendorAgent)); }
 }
 const sel = () => { const r = agentsGrid.getSelectedRows()[0] || agentsGrid.getDisplayedRowAtIndex(0)?.data; if (!r) toast('warn', 'Create an agent first'); return r; };
 async function createAgent() {
@@ -359,7 +376,7 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
     toast('warn', 'AI guard is busy', 'Purchase is waiting for human approval, by design.');
     $('dbusy').textContent = j.message; $('dbusy').style.display = '';
     show(`${j.message}.\n\n${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or reject it.`); }
-  else if (r.status === 202) { verdict('<span class="stamp hold">Held</span> ' + pill('approval', 'Needs your approval') + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
+  else if (r.status === 202) { verdict('<span class="stamp hold">Held</span> ' + (VMODE ? '' : pill('approval', 'Needs your approval')) + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
     show(j.approve ? `${g.reason}\n\nApprove or reject it in the Purchases table. Nothing is charged unless you approve; it expires in 24 h.`
       : `${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or right-click it on the schedule. The approval link expires in 24 h.`); }
   else if (r.status === 403) { verdict(`<span class="stamp block${REDUCED ? '' : ' land'}">Blocked</span> ` + who); live('block'); toast('bad', 'Blocked by the guard', g.reason); show(g.reason); }
@@ -374,7 +391,7 @@ async function pAct(pid, act, owner) { const h = owner ? H() : {'X-Agent-Key': D
   r.ok ? toast(...(j.status === 'refund_requested' ? ['violet', 'Refund requested', 'With ' + (j.with || 'the vendor') + '. The vendor refunds through PayPal.'] : ACT_DONE[act] || ['ok', 'Done'])) : toast('bad', 'Could not ' + act.replace(/-/g, ' '), typeof j.detail === 'string' ? j.detail : '');
   if (owner) $('report').textContent = out; else { verdict(r.ok ? pill('allow', act.replace(/-/g, ' ') + ' done') : pill('deny', 'error')); show(out); }
   owner ? (load(), OS && OS.refresh()) : (dload(), DS && DS.refresh()); }
-function purchCols(owner) { const o = owner ? 'true' : 'false'; return [
+function purchCols(owner, vendor = false) { const o = owner ? 'true' : 'false'; if (vendor) return vendorPurchCols(o); return [
   {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 122, maxWidth: 130},
   {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => p.data.funding === 'vendor' ? itemName(p.data.vendor, p.data.item) + ' · ' + vendorName(p.data.vendor) : vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item),
    tooltipValueGetter: p => p.data.funding === 'vendor' ? vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item) : p.data.vendor + ' · ' + p.data.item},
@@ -393,7 +410,7 @@ const dPurch = agGrid.createGrid($('dpurch'), {...gopt, columnDefs: purchCols(fa
 const oPurch = agGrid.createGrid($('opurch'), {...gopt, columnDefs: purchCols(true)});
 function bars(list, purchases = []) { return (list || []).map(v => { const p = Math.min(100, 100 * v.spent_30d_usd / (v.budget_usd || 1));
   const c = p >= 90 ? 'var(--stamp-block)' : p >= 60 ? 'var(--stamp-hold)' : 'var(--ink)';
-  return `<div class="vb"><span>${enc(v.name)}</span><span class="track" role="progressbar" aria-label="${enc(v.name)} budget used" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:${c}"></i></span>${spark(vendorSeries(purchases, v.vendor), 84, 24, p >= 90 ? '#a3261b' : '#38450f')}<span class="mono">${usd(v.spent_30d_usd)} / ${usd(v.budget_usd)}${v.paid_usd != null ? `<small class="vb-split">${usd(v.paid_usd)} paid · ${usd(v.set_aside_usd)} set aside</small>` : ''}</span></div>`; }).join(''); }
+  return `<div class="vb"><span>${enc(v.name)}</span><span class="track" role="progressbar" aria-label="${enc(v.name)} budget used" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p}%;background:${c}"></i></span>${spark(v.series_usd || vendorSeries(purchases, v.vendor), 84, 24, p >= 90 ? '#a3261b' : '#38450f')}<span class="mono">${usd(v.spent_30d_usd)} / ${usd(v.budget_usd)}${v.paid_usd != null ? `<small class="vb-split">${usd(v.paid_usd)} paid · ${usd(v.set_aside_usd)} set aside</small>` : ''}</span></div>`; }).join(''); }
 let CAT = null;
 async function catalog() { CAT = (await (await fetch('/api/catalog')).json()).vendors || [];
   $('dvendor').innerHTML = CAT.map(v => `<option value="${enc(v.vendor)}">${enc(v.name)}</option>`).join(''); fillItems(); }

@@ -185,8 +185,20 @@ class ToolCall(BaseModel):
     purpose: str = Field(default="", max_length=500)
 
 
+def _app_logging() -> None:
+    """uvicorn configures only its own loggers, so without this the app's INFO lines (PayPal debug ids) never show."""
+    if not any(getattr(h, "_agenttab", False) for h in log.handlers):
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        h._agenttab = True
+        log.addHandler(h)
+    if log.level == logging.NOTSET or log.level > logging.INFO:
+        log.setLevel(logging.INFO)
+
+
 def create_app(settings: Settings | None = None, allow_private_targets: bool | None = None) -> FastAPI:
     s = settings or get_settings()
+    _app_logging()
     if allow_private_targets is None:  # local dev only: some sandboxes resolve public hosts to 198.18.x
         allow_private_targets = os.getenv("ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV") == "1"
     # Our own /docs page (below) replaces FastAPI's default Swagger and ReDoc pages, which load unpinned assets from a CDN.
@@ -388,7 +400,11 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         since = time.time() - 30 * 86400
         used = ledger.vendor_counted_cents(aid, since, vendor=vendor)
         paid = ledger.vendor_counted_cents(aid, since, vendor=vendor, statuses=VENDOR_PAID)
-        return {"spent_30d_usd": used / 100, "paid_usd": paid / 100, "set_aside_usd": (used - paid) / 100}
+        # Sparkline: the same count at the end of each of the 30 days (what was counted since then is not yet in it).
+        now = time.time()
+        series = [(used - ledger.vendor_counted_cents(aid, now - d * 86400, vendor=vendor)) / 100 for d in range(29, -1, -1)]
+        return {"spent_30d_usd": used / 100, "paid_usd": paid / 100, "set_aside_usd": (used - paid) / 100,
+                "series_usd": series}
 
     def agent_view_base(a) -> dict:
         return {"agent_id": a["id"], "name": a["name"], "owner_email": a["owner_email"],
@@ -461,7 +477,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             {"name": n, "price_usd": float(PRICES[n]), "description": DESCRIPTIONS[n],
              "endpoint": f"/api/tools/{n}", "body": {"url": "https://...", "purpose": "why you need it"}}
             for n in TOOLS],
-            "vendors": [{"vendor": vid, "name": v["name"], "category": v["category"], "fulfillment": v["fulfillment"],
+            "vendors": [{"vendor": vid, "name": v["name"], "short": pr.VENDOR_SHORT.get(vid, v["name"]), "category": v["category"], "fulfillment": v["fulfillment"],
                          "items": [{"item": iid, "name": it["name"], "short": it.get("short") or it["name"], "price_usd": float(it["price"])}
                                    for iid, it in v["items"].items()]} for vid, v in pr.VENDORS.items()],
             "purchase_endpoint": {"method": "POST", "path": "/api/purchases",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import time
 import uuid
@@ -17,6 +18,31 @@ from decimal import Decimal
 import httpx
 
 from .config import Settings
+
+log = logging.getLogger("agenttab.paypal")
+_PID = re.compile(r"pu_[0-9a-f]{12}")
+_TOKEN_PATH = re.compile(r"(/v3/vault/(?:payment|setup)-tokens/)[^/?]+")
+
+
+def _safe_path(path: str) -> str:
+    """Vault token ids in a path are never logged."""
+    return _TOKEN_PATH.sub(r"\1<id>", path)
+
+
+def _debug_id(r) -> str:
+    h = getattr(r, "headers", None)          # some tests stand in a bare response object
+    return (h.get("paypal-debug-id") if h is not None else None) or "-"
+
+
+def _purchase_of(request_id: str, body: dict | None) -> str:
+    m = _PID.search(request_id or "")
+    if m:
+        return m.group(0)
+    try:
+        cid = str((body or {})["purchase_units"][0].get("custom_id", ""))
+    except (KeyError, IndexError, TypeError, AttributeError):
+        cid = ""
+    return cid if _PID.fullmatch(cid) else "-"
 
 
 class PayPalError(RuntimeError):
@@ -77,6 +103,7 @@ class PayPalClient:
             data={"grant_type": "client_credentials"},
             timeout=20,
         )
+        log.info("paypal POST /v1/oauth2/token status=%s debug_id=%s", r.status_code, _debug_id(r))
         if r.status_code != 200:
             raise PayPalError(f"oauth failed: {r.status_code} {r.text[:200]}")
         j = r.json()
@@ -93,7 +120,16 @@ class PayPalClient:
         if simulate:
             headers["PayPal-Mock-Response"] = self._mock_header(simulate)
             headers["PayPal-Request-Id"] = f"sim-{uuid.uuid4().hex}"   # never replay a real result
-        r = httpx.request(method, f"{self.s.paypal_base}{path}", json=json, headers=headers, timeout=30)
+        rid, pid = headers["PayPal-Request-Id"], _purchase_of(request_id, json)
+        try:
+            r = httpx.request(method, f"{self.s.paypal_base}{path}", json=json, headers=headers, timeout=30)
+        except httpx.HTTPError as e:
+            log.info("paypal %s %s no answer (%s) request_id=%s purchase_id=%s", method, _safe_path(path),
+                     type(e).__name__, rid, pid)
+            raise
+        # PayPal's debug id is what PayPal support asks for; the token, cards, vault and merchant ids are never logged.
+        log.info("paypal %s %s status=%s debug_id=%s request_id=%s purchase_id=%s", method, _safe_path(path),
+                 r.status_code, _debug_id(r), rid, pid)
         if r.status_code >= 400:
             raise PayPalError(f"{method} {path}: {r.status_code} {r.text[:300]}", _issue_of(r.text), r.status_code)
         return {} if r.status_code == 204 else r.json()

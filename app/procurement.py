@@ -52,6 +52,10 @@ VENDORS: dict[str, dict] = {
                                 "giftcard-25": {"name": "$25 store gift card", "price": Decimal("25.00")}}},
 }
 
+# Short vendor names for narrow places on the page (the vendor-mode Purchases column); "name" stays the full name.
+VENDOR_SHORT = {"sitescope-data": "SiteScope", "samplebox": "SampleBox", "shopsuite": "ShopSuite",
+                "adboost-social": "AdBoost", "giftcards-now": "GiftCards"}
+
 # Short names for the page (receipts, grids, menus, schedule). "name" stays the full description: the guard's prompt,
 # the eval and the API use it, so the AI's inputs don't change.
 SHORT_NAMES = {
