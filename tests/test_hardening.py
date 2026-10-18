@@ -36,8 +36,8 @@ def _slow_decide(monkeypatch, delay=0.05):
 
 def test_parallel_purchases_never_overspend_balance(tmp_path, monkeypatch):
     c = _client(tmp_path)
-    ag = shop_agent(c, daily_cap_usd=5.0, vendor_budgets={"samplebox": 5.0})
-    fund(c, ag["agent_id"], 1.0)                          # $1.00 tab, 10 parallel $0.20 buys -> max 5
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
+    fund(c, ag["agent_id"], 90.0)                         # $90 tab, 10 parallel $18 buys -> max 5
     _slow_decide(monkeypatch)
     with ThreadPoolExecutor(10) as ex:
         codes = list(ex.map(lambda _: buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample").status_code,
@@ -51,16 +51,16 @@ def test_parallel_purchases_never_overspend_balance(tmp_path, monkeypatch):
 
 def test_parallel_purchases_respect_vendor_budget_and_daily_cap(tmp_path, monkeypatch):
     c = _client(tmp_path)
-    ag = shop_agent(c)                                    # samplebox 30-day budget $0.60, daily cap $0.90
-    fund(c, ag["agent_id"], 5.0)
+    ag = shop_agent(c, vendor_budgets={"samplebox": 54.0})   # samplebox 30-day budget $54, daily cap $250
+    fund(c, ag["agent_id"], 200.0)
     _slow_decide(monkeypatch)
     with ThreadPoolExecutor(10) as ex:
         codes = list(ex.map(lambda _: buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample").status_code,
                             range(10)))
-    assert codes.count(200) == 3, codes                   # 3 x $0.20 = the $0.60 vendor budget
+    assert codes.count(200) == 3, codes                   # 3 x $18 = the $54 vendor budget
     led = c.app.state.ledger
-    assert led.vendor_spent_since(ag["agent_id"], "samplebox", 0) == Decimal("0.60")
-    assert led.balance(ag["agent_id"]) == Decimal("4.40")
+    assert led.vendor_spent_since(ag["agent_id"], "samplebox", 0) == Decimal("54.00")
+    assert led.balance(ag["agent_id"]) == Decimal("146.00")
 
 
 def test_commit_recheck_blocks_overspend_even_without_the_lock(tmp_path):
@@ -81,13 +81,13 @@ def test_commit_recheck_blocks_overspend_even_without_the_lock(tmp_path):
 def test_demo_mode_does_not_turn_regular_agents_into_owners(tmp_path):
     c = _demo_client(tmp_path)
     adm = {"X-Admin-Token": "x" * 32}
-    ag = c.post("/api/agents", json={"name": "real", "policy": pr.SHOP_POLICY, "daily_cap_usd": 2, "per_call_cap_usd": 0.5,
-                                     "vendor_budgets": {"samplebox": 1, "shopsuite": 1}, "approval_threshold_usd": 0.3},
+    ag = c.post("/api/agents", json={"name": "real", "policy": pr.SHOP_POLICY, "daily_cap_usd": 250, "per_call_cap_usd": 120,
+                                     "vendor_budgets": {"samplebox": 200, "shopsuite": 300}, "approval_threshold_usd": 60},
                 headers=adm).json()
     k = {"X-Agent-Key": ag["api_key"]}
-    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 1}, headers=adm)
+    c.post(f"/api/agents/{ag['agent_id']}/topup-sandbox-card", json={"amount_usd": 100}, headers=adm)
     pid = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]
-    appr = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat",
+    appr = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat", quantity=2,
                purpose="Inventory software to track stock across our two warehouses").json()["purchase_id"]
     # a regular agent can't act as its own owner, even though the server is in demo mode
     assert c.post(f"/api/purchases/{pid}/refund", headers=k).status_code == 401
@@ -144,10 +144,10 @@ def test_guard_and_report_have_separate_llm_budgets(tmp_path, monkeypatch):
             return "All spending looks normal.", "m1"
         return '{"target_allowed": true, "purpose_fits_policy": true, "injection_attempt": false, "reason": "ok"}', "m1"
     monkeypatch.setattr(llm, "chat", fake_chat)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_report_calls_per_day=1,
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_report_calls_per_day=1,
                 llm_calls_per_day=50)
     ag = shop_agent(c)
-    fund(c, ag["agent_id"], 2)
+    fund(c, ag["agent_id"], 100)
     for _ in range(3):        # report budget (1/day) is used up...
         c.get(f"/api/agents/{ag['agent_id']}/report", headers=A)
     r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample")
@@ -160,21 +160,21 @@ def test_ai_unavailable_routes_to_human_not_heuristic(tmp_path, monkeypatch):
     def down(*a, **k):
         raise llm.LLMError("m1: HTTP 429")
     monkeypatch.setattr(llm, "chat", down)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     ag = shop_agent(c)
-    fund(c, ag["agent_id"], 2)
-    r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample")    # $0.20, normally auto-approved
+    fund(c, ag["agent_id"], 100)
+    r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample")    # $18, normally auto-approved
     assert r.status_code == 202 and r.json()["guard"]["layer"] == "policy-unavailable"
-    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("2.00")        # nothing charged from the tab
+    assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("100.00")      # nothing charged from the tab
 
 
 def test_ai_budget_exhausted_routes_to_human(tmp_path, monkeypatch):
     import app.llm as llm
     monkeypatch.setattr(llm, "chat", lambda *a, **k: ('{"target_allowed": true, "purpose_fits_policy": true, '
                                                       '"injection_attempt": false, "reason": "ok"}', "m1"))
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", llm_calls_per_day=1)
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini", llm_calls_per_day=1)
     ag = shop_agent(c)
-    fund(c, ag["agent_id"], 2)
+    fund(c, ag["agent_id"], 100)
     assert buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample").status_code == 200
     r = buy(c, ag["api_key"], vendor="samplebox", item="ceramic-mug-sample")
     assert r.status_code == 202 and "budget" in r.json()["guard"]["reason"]
@@ -281,21 +281,21 @@ def test_tab_refund_tracks_refunded_amount_per_capture(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
     aid, k = ag["agent_id"], ag["api_key"]
-    fund(c, aid, 1.0)                                   # capture A (older)
+    fund(c, aid, 100.0)                                 # capture A (older)
     time.sleep(0.01)
-    fund(c, aid, 1.0)                                   # capture B (newer)
-    pid = buy(c, k, vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]     # balance 1.80
+    fund(c, aid, 100.0)                                 # capture B (newer)
+    pid = buy(c, k, vendor="samplebox", item="ceramic-mug-sample").json()["purchase_id"]     # balance 182.00
     pp = c.app.state.paypal
     r = c.post(f"/api/agents/{aid}/refund", headers=A).json()
-    assert r["refunded_usd"] == 1.80 and [x["amount_usd"] for x in r["refunds"]] == [1.0, 0.8]
+    assert r["refunded_usd"] == 182.0 and [x["amount_usd"] for x in r["refunds"]] == [100.0, 82.0]
     capA, capB = r["refunds"][1]["capture"], r["refunds"][0]["capture"]
-    # the purchase is refunded to the tab -> $0.20 credit. B is fully refunded, so it must come from A.
+    # the purchase is refunded to the tab -> $18 credit. B is fully refunded, so it must come from A.
     c.post(f"/api/purchases/{pid}/refund", headers=A)
     r = c.post(f"/api/agents/{aid}/refund", headers=A).json()
-    assert r["refunds"] == [{"capture": capA, "refund": r["refunds"][0]["refund"], "amount_usd": 0.2}]
+    assert r["refunds"] == [{"capture": capA, "refund": r["refunds"][0]["refund"], "amount_usd": 18.0}]
     led = c.app.state.ledger
-    assert led.refunded_on_capture(capA) == Decimal("1.00") and led.refunded_on_capture(capB) == Decimal("1.00")
-    assert sum(a for cap, a in pp.mock_refund_log if cap == capB) == Decimal("1.00")
+    assert led.refunded_on_capture(capA) == Decimal("100.00") and led.refunded_on_capture(capB) == Decimal("100.00")
+    assert sum(a for cap, a in pp.mock_refund_log if cap == capB) == Decimal("100.00")
     assert c.post(f"/api/agents/{aid}/refund", headers=A).json()["refunds"] == []
 
 
@@ -341,7 +341,7 @@ def test_capture_error_redirects_instead_of_raw_402(tmp_path):
 def test_double_card_approval_charges_once(tmp_path, monkeypatch):
     c = _client(tmp_path)
     ag = shop_agent(c)
-    pid = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat",
+    pid = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat", quantity=2,
               purpose="Inventory software to track stock across our two warehouses").json()["purchase_id"]
     pp = c.app.state.paypal
     real, n = pp.card_authorize, []
@@ -362,7 +362,7 @@ def test_double_card_approval_charges_once(tmp_path, monkeypatch):
 def test_paypal_link_after_card_payment_is_not_captured(tmp_path):
     c = _client(tmp_path)
     ag = shop_agent(c)
-    j = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat",
+    j = buy(c, ag["api_key"], vendor="shopsuite", item="inventory-seat", quantity=2,
             purpose="Inventory software to track stock across our two warehouses").json()
     oid = j["approve_url"].rsplit("/", 1)[1]
     assert c.post(f"/api/purchases/{j['purchase_id']}/approve-sandbox-card", headers=A).status_code == 200
@@ -391,13 +391,13 @@ def test_live_items_quantity_one_and_non_refundable(tmp_path, monkeypatch):
     from tests.test_agenttab import site as _  # noqa: F401  (fixture module import only)
     c = _client(tmp_path)
     ag = shop_agent(c)
-    fund(c, ag["agent_id"], 1)
-    r = buy(c, ag["api_key"], vendor="webintel-data", item="tech_detect", quantity=3, target="https://acme.example",
+    fund(c, ag["agent_id"], 100)
+    r = buy(c, ag["api_key"], vendor="sitescope-data", item="tech_detect", quantity=3, target="https://acme.example",
             purpose="Competitor tech stack research for our pricing page")
     assert r.status_code == 422 and "quantity" in r.text
     monkeypatch.setitem(__import__("app.main", fromlist=["TOOLS"]).TOOLS, "tech_detect", lambda url, ap=False: {"ok": 1})
     monkeypatch.setattr("app.main.check_url", lambda u, allow_private=False: u)
-    r = buy(c, ag["api_key"], vendor="webintel-data", item="tech_detect", target="https://acme.example",
+    r = buy(c, ag["api_key"], vendor="sitescope-data", item="tech_detect", target="https://acme.example",
             purpose="Competitor tech stack research for our pricing page")
     assert r.status_code == 200 and r.json()["refundable"] is False
     assert c.post(f"/api/purchases/{r.json()['purchase_id']}/refund", headers=A).status_code == 409
@@ -454,7 +454,7 @@ def test_mock_approve_rejects_html(tmp_path):
 def test_report_numbers_come_from_ledger_not_model(tmp_path, monkeypatch):
     import app.llm as llm
     monkeypatch.setattr(llm, "chat", lambda s, m, **k: ("The agent spent $999 and everything was approved.", "m1"))
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     ag = shop_agent(c)
     rep = c.get(f"/api/agents/{ag['agent_id']}/report", headers=A).json()
     assert rep["report"].startswith(rep["summary"]) and "0 paid purchases for $0.00" in rep["summary"]
@@ -496,7 +496,7 @@ def test_gauntlet_ai_unavailable_is_held_not_allowed(tmp_path, monkeypatch):
     def down(*a, **k):
         raise llm.LLMError("quota")
     monkeypatch.setattr(llm, "chat", down)
-    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid")
+    c = _client(tmp_path, llm_api_key="k", llm_base_url="http://llm.invalid", guard_provider="gemini")
     j = c.post("/api/gauntlet").json()
     assert j["live_ai"] and j["attacks_stopped"] == j["attacks_total"]
     assert all(r["outcome"] != "allow" for r in j["cases"] if r["attack"])
@@ -504,7 +504,7 @@ def test_gauntlet_ai_unavailable_is_held_not_allowed(tmp_path, monkeypatch):
 
 def test_static_files_are_an_allowlist(tmp_path):
     c = _client(tmp_path)
-    for ok in ("/static/app.css", "/static/app.js", "/static/schedule.js", "/static/fonts/InterVariable.woff2"):
+    for ok in ("/static/app.css", "/static/app.js", "/static/schedule.js", "/static/fonts/roundo/Roundo-Variable.woff2"):
         assert c.get(ok).status_code == 200, ok
     for bad in ("/static/../app/main.py", "/static/%2e%2e/app/config.py", "/static/dashboard.html", "/static/fonts/",
                 "/static/..%2fapp%2fmain.py"):
@@ -529,7 +529,7 @@ def test_replay_feed_is_real_eval_data_without_side_effects(tmp_path):
     from pathlib import Path
     c = _client(tmp_path)
     j = c.get("/api/replay").json()
-    res = json.loads((Path(__file__).resolve().parent.parent / "eval" / "results.json").read_text())["modes"]["ai"]["rows"]
+    res = json.loads((Path(__file__).resolve().parent.parent / "eval" / "results.json").read_text(encoding="utf-8"))["modes"]["ai"]["rows"]
     assert len(j["decisions"]) == len(res) == 67
     by_id = {r["id"]: r for r in res}
     for d in j["decisions"]:                       # every replayed verdict is exactly the committed one

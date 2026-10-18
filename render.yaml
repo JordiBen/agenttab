@@ -20,6 +20,10 @@ services:
         sync: false
       - key: DEMO_MODE
         value: "1"
+      - key: GUARD_PROVIDER
+        value: anthropic
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: LLM_MODEL

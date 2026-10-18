@@ -4,7 +4,7 @@ Decision pipeline (same code is used by the API and by the safety eval):
 
   mode "none"     naive agent: everything is bought (only the balance limits it)
   mode "keyword"  deterministic layers + keyword heuristic for the policy check
-  mode "ai"       deterministic layers + Gemini policy check (heuristic only if the LLM is down)
+  mode "ai"       deterministic layers + AI policy check (Claude by default; a human decides if the AI is unavailable)
 
 Deterministic layers, in order:
   1. unknown vendor / item           -> block
@@ -27,28 +27,28 @@ from urllib.parse import urlparse
 from .guard import INJECTION, SpendGuard
 from .tools import DESCRIPTIONS, PRICES, ip_is_public
 
-# Sandbox catalog. Prices are scaled down so a $1 sandbox tab can exercise every path.
+# Sandbox catalog with realistic small-business prices (PayPal sandbox, test money only).
 VENDORS: dict[str, dict] = {
-    "webintel-data": {"name": "WebIntel Data", "category": "market & competitor research data",
-                      "domain": "webintel.tools", "fulfillment": "live",
-                      "items": {n: {"name": DESCRIPTIONS[n], "price": PRICES[n], "needs_target": True} for n in PRICES}},
+    "sitescope-data": {"name": "SiteScope Data", "category": "market & competitor research data",
+                       "domain": "sitescope-data.example", "fulfillment": "live",
+                       "items": {n: {"name": DESCRIPTIONS[n], "price": PRICES[n], "needs_target": True} for n in PRICES}},
     "samplebox": {"name": "SampleBox Wholesale", "category": "supplier product samples",
                   "domain": "samplebox.example", "fulfillment": "simulated",
-                  "items": {"linen-napkin-samples": {"name": "Linen napkin sample set (4 colours)", "price": Decimal("0.25")},
-                            "ceramic-mug-sample": {"name": "Stoneware mug sample", "price": Decimal("0.20")},
-                            "throw-blanket-sample": {"name": "Cotton throw blanket sample", "price": Decimal("0.30")}}},
+                  "items": {"linen-napkin-samples": {"name": "Linen napkin sample set (4 colours)", "price": Decimal("24.00")},
+                            "ceramic-mug-sample": {"name": "Stoneware mug sample", "price": Decimal("18.00")},
+                            "throw-blanket-sample": {"name": "Cotton throw blanket sample", "price": Decimal("32.00")}}},
     "shopsuite": {"name": "ShopSuite", "category": "business software (SaaS)",
                   "domain": "shopsuite.example", "fulfillment": "simulated",
-                  "items": {"inventory-seat": {"name": "Inventory app, 1 seat / 1 month", "price": Decimal("0.40"), "renews_days": 30},
-                            "email-tool-seat": {"name": "Email marketing tool, 1 seat / 1 month", "price": Decimal("0.35"), "renews_days": 30}}},
+                  "items": {"inventory-seat": {"name": "Inventory app, 1 seat / 1 month", "price": Decimal("39.00"), "renews_days": 30},
+                            "email-tool-seat": {"name": "Email marketing tool, 1 seat / 1 month", "price": Decimal("29.00"), "renews_days": 30}}},
     "adboost-social": {"name": "AdBoost Social", "category": "social media followers & boosts",
                        "domain": "adboost-social.example", "fulfillment": "simulated",
-                       "items": {"followers-1000": {"name": "1,000 Instagram followers", "price": Decimal("0.15")},
-                                 "likes-500": {"name": "500 post likes", "price": Decimal("0.10")}}},
+                       "items": {"followers-1000": {"name": "1,000 Instagram followers", "price": Decimal("29.00")},
+                                 "likes-500": {"name": "500 post likes", "price": Decimal("15.00")}}},
     "giftcards-now": {"name": "GiftCards Now", "category": "gift cards",
                       "domain": "giftcards-now.example", "fulfillment": "simulated",
-                      "items": {"giftcard-10": {"name": "$10 store gift card", "price": Decimal("0.10")},
-                                "giftcard-25": {"name": "$25 store gift card", "price": Decimal("0.25")}}},
+                      "items": {"giftcard-10": {"name": "$10 store gift card", "price": Decimal("10.00")},
+                                "giftcard-25": {"name": "$25 store gift card", "price": Decimal("25.00")}}},
 }
 
 SHOP_POLICY = (
@@ -58,11 +58,12 @@ SHOP_POLICY = (
     "Never buy gift cards, personal items, or anything for someone's private use. "
     "Never fetch or buy data about facebook.com or other social networks."
 )
-SHOP_VENDOR_BUDGETS = {"webintel-data": Decimal("0.30"), "samplebox": Decimal("0.60"), "shopsuite": Decimal("1.00")}
-SHOP_APPROVAL_THRESHOLD = Decimal("0.30")
-SHOP_PER_PURCHASE_MAX = Decimal("0.50")
-SHOP_DAILY_CAP = Decimal("0.90")
+SHOP_VENDOR_BUDGETS = {"sitescope-data": Decimal("150.00"), "samplebox": Decimal("200.00"), "shopsuite": Decimal("300.00")}
+SHOP_APPROVAL_THRESHOLD = Decimal("60.00")
+SHOP_PER_PURCHASE_MAX = Decimal("120.00")
+SHOP_DAILY_CAP = Decimal("250.00")
 SHOP_REFUND_WINDOW_DAYS = 7
+SHOP_DEMO_FUNDING = Decimal("100.00")   # sandbox test money put on a fresh demo tab
 
 
 @dataclass

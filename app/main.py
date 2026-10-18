@@ -36,12 +36,47 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import llm
 from . import mcp as mcpp
 from .config import Settings, get_settings
-from .guard import SpendGuard, VerdictCache
+from .guard import SYSTEM as GUARD_SYSTEM, SpendGuard, VerdictCache
 from .ledger import Ledger, from_micro, to_micro
 from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import SIMULATABLE, PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
 from . import procurement as pr
+
+
+def count_tests_by_file(tests_dir: Path) -> dict[str, int] | None:
+    """How many tests pytest collects from each tests/test_*.py, read from the source (no import, no run): every test_
+    function, times the length of each literal @pytest.mark.parametrize list. Keys are paths relative to tests_dir's parent."""
+    import ast
+    if not tests_dir.is_dir():
+        return None
+    out = {}
+    for f in sorted(tests_dir.glob("test_*.py")):
+        try:
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            return None
+        total = 0
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+                n = 1
+                for d in node.decorator_list:
+                    if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "parametrize"
+                            and len(d.args) >= 2 and isinstance(d.args[1], (ast.List, ast.Tuple))):
+                        n *= len(d.args[1].elts)
+                total += n
+        out[f"{tests_dir.name}/{f.name}"] = total
+    return out
+
+
+def count_tests(tests_dir: Path) -> int | None:
+    """All tests in the suite, browser e2e modules included (they skip at collection without Playwright, but they exist).
+    tests/test_landing.py checks this against pytest --collect-only, with and without Playwright importable."""
+    by_file = count_tests_by_file(tests_dir)
+    return None if by_file is None else sum(by_file.values())
+
+
+TEST_COUNT = count_tests(Path(__file__).resolve().parent.parent / "tests")
 from . import schedule as sched
 
 log = logging.getLogger("agenttab")
@@ -57,8 +92,8 @@ class NewAgent(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     owner_email: str = ""
     policy: str = Field(min_length=5, max_length=2000)
-    daily_cap_usd: float = 2.0
-    per_call_cap_usd: float = 0.10          # hard per-purchase maximum
+    daily_cap_usd: float = 250.0
+    per_call_cap_usd: float = 120.0         # hard per-purchase maximum
     vendor_budgets: dict[str, float] | None = None   # {vendor_id: rolling 30-day budget}; None = any vendor
     approval_threshold_usd: float | None = None      # above this a human approves via PayPal
     refund_window_days: int = Field(default=7, ge=0, le=180)
@@ -72,6 +107,15 @@ class PolicyUpdate(BaseModel):
     approval_threshold_usd: float | None = None
     refund_window_days: int | None = Field(default=None, ge=0, le=180)
 
+class CompareIn(BaseModel):
+    case_id: str = Field(default="", max_length=64)
+    vendor: str = Field(default="", max_length=64)
+    item: str = Field(default="", max_length=64)
+    quantity: int = Field(default=1, ge=1, le=100)
+    purpose: str = Field(default="", max_length=300)
+    target: str = Field(default="", max_length=300)
+
+
 class PurchaseReq(BaseModel):
     vendor: str = Field(max_length=64)
     item: str = Field(max_length=64)
@@ -81,7 +125,7 @@ class PurchaseReq(BaseModel):
 
 class TopUp(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
-    amount_usd: float = 5.0
+    amount_usd: float = 100.0
 
 class FreezeReq(BaseModel):
     reason: str = Field(default="frozen by owner", min_length=1, max_length=300)
@@ -100,7 +144,7 @@ class _BuyArgs(BaseModel):
     item: str = Field(max_length=64, description="Item id from get_catalog, e.g. ceramic-mug-sample")
     quantity: int = Field(default=1, ge=1, le=100)
     purpose: str = Field(min_length=1, max_length=500, description="The specific business reason for this purchase")
-    target: str = Field(default="", max_length=2048, description="Only for WebIntel Data items: the public https:// URL to analyze")
+    target: str = Field(default="", max_length=2048, description="Only for SiteScope Data items: the public https:// URL to analyze")
 
 class _TopUpArgs(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -143,7 +187,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     if not admin_token:
         admin_token = secrets.token_urlsafe(32)
         tok_file = Path(".admin_token")
-        tok_file.write_text(admin_token)
+        tok_file.write_text(admin_token, encoding="utf-8")
         tok_file.chmod(0o600)
         log.warning("ADMIN_TOKEN not set: generated a random one in %s (chmod 600)", tok_file.resolve())
     if s.demo_mode and (len(admin_token) < 24 or admin_token in ("dev-admin", "admin", "changeme")):
@@ -161,8 +205,17 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if ip and not limiter.allow("llm-ip:" + ip, s.llm_calls_per_ip_day, DAY):
             return False
         return limiter.allow(key, per_day, DAY)
-    guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-guard", s.llm_calls_per_day), cache=verdicts)
-    guard_mode = "ai" if llm.enabled(s) else "keyword"   # keyword only when no LLM is configured at all
+    # Production = real PayPal, or a public demo (mock PayPal + demo mode only runs with the explicit local-test flag
+    # ALLOW_INSECURE_MOCK; without it create_app refuses to start). In production, a missing AI provider never means
+    # keyword decisions: every policy verdict goes to human approval.
+    production = s.paypal_mode != "mock" or (s.demo_mode and not s.allow_insecure_mock)
+    guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-guard", s.llm_calls_per_day), cache=verdicts,
+                       require_ai=production)
+    # keyword only when no AI provider is configured at all, and only outside production
+    guard_mode = "ai" if (llm.guard_enabled(s) or production) else "keyword"
+    if production and not llm.guard_enabled(s):
+        log.warning("no AI guard provider configured (%s): every purchase that reaches the policy check waits for "
+                    "human approval", s.guard_provider)
     app.state.ledger, app.state.paypal, app.state.guard, app.state.settings = ledger, paypal, guard, s
     app.state.limiter = limiter
     _agent_locks: dict[str, threading.Lock] = {}
@@ -312,7 +365,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return FileResponse(STATIC / "dashboard.html")
 
     STATIC_FILES = {"schedule.js": "application/javascript", "app.css": "text/css", "app.js": "application/javascript",
-                    "fonts/InterVariable.woff2": "font/woff2", "fonts/Inter-OFL.txt": "text/plain",
+                    "fonts/roundo/Roundo-Variable.woff2": "font/woff2", "fonts/roundo/License/OFL.txt": "text/plain",
+                    # real screenshots of AgentTab itself (local mock run), used on the landing page
+                    "img/guard-console.jpg": "image/jpeg", "img/schedule-close.jpg": "image/jpeg",
                     "vendor/ag-grid-community-33.3.2.min.js": "application/javascript",
                     "vendor/ag-grid-LICENSE.txt": "text/plain"}
 
@@ -321,13 +376,14 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if path not in STATIC_FILES:          # explicit allowlist: nothing else under static/ is served
             raise HTTPException(404)
         return FileResponse(STATIC / path, media_type=STATIC_FILES[path],
-                            headers={"Cache-Control": "public, max-age=604800, immutable" if path.startswith(("fonts/", "vendor/"))
+                            headers={"Cache-Control": "public, max-age=604800, immutable" if path.startswith(("fonts/", "vendor/", "img/"))
                                      else "no-cache"})
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.enabled(s), "demo_mode": s.demo_mode,
-                "models": [s.llm_model, s.llm_fallback_model] if llm.enabled(s) else [],
+        return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.guard_enabled(s), "demo_mode": s.demo_mode,
+                "ai_status": guard.status(budget_left=limiter.count("llm-guard", DAY) < s.llm_calls_per_day),
+                "guard_provider": s.guard_provider, "models": llm.guard_models(s),
                 **({"demo_policy": DEMO_POLICY} if s.demo_mode else {})}
 
     @app.get("/api/catalog")
@@ -639,7 +695,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 return JSONResponse(status_code=402, headers={"X-AgentTab-Price": str(amount)}, content={
                     "error": "payment_required", "price_usd": float(amount), "balance_usd": float(ledger.balance(aid)),
                     **({"auto_topup": why} if why else {}),
-                    "topup": {"method": "POST", "endpoint": "/api/me/topup-request", "body": {"amount_usd": 5.0},
+                    "topup": {"method": "POST", "endpoint": "/api/me/topup-request", "body": {"amount_usd": float(max(amount - ledger.balance(aid), Decimal("1")).quantize(Decimal("1"), rounding=ROUND_UP))},
                               "note": "Returns a PayPal approval link for your human owner."}})
             if not needs_approval and amount > balance and not auto:  # check before spending an LLM call
                 return payment_required()
@@ -906,7 +962,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     def call_tool(name: str, body: ToolCall, request: Request, a=Depends(agent_from_key)):
         if name not in TOOLS:
             raise HTTPException(404, "unknown tool; see /api/catalog")
-        return do_purchase(a, pr.Purchase("webintel-data", name, 1, body.purpose, body.url), request)
+        return do_purchase(a, pr.Purchase("sitescope-data", name, 1, body.purpose, body.url), request)
 
     @app.post("/api/purchases")
     def create_purchase(body: PurchaseReq, request: Request, a=Depends(agent_from_key)):
@@ -1465,7 +1521,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.post("/api/demo/session")
     def demo_session(request: Request):
         """Anyone can start a demo: a fresh agent with a fixed policy and tight caps,
-        funded with $1.00 of PayPal *sandbox* money (test card, real sandbox capture)."""
+        funded with $100.00 of PayPal *sandbox* money (test card, real sandbox capture)."""
         if not s.demo_mode:
             raise HTTPException(404, "demo mode is off")
         ip = client_ip(request)
@@ -1478,10 +1534,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                                  pr.SHOP_APPROVAL_THRESHOLD, pr.SHOP_REFUND_WINDOW_DAYS, is_demo=True)
         paypal_budget()
         try:
-            cap = paypal.sandbox_card_topup(Decimal("1.00"), ag["agent_id"], op_id=f"demo-{ag['agent_id']}")
+            cap = paypal.sandbox_card_topup(pr.SHOP_DEMO_FUNDING, ag["agent_id"], op_id=f"demo-{ag['agent_id']}")
         except PayPalError as e:
             raise HTTPException(502, f"PayPal sandbox top-up failed: {e}")
-        ledger.add_order(cap["order_id"], ag["agent_id"], Decimal("1.00"))
+        ledger.add_order(cap["order_id"], ag["agent_id"], pr.SHOP_DEMO_FUNDING)
         ledger.mark_order(cap["order_id"], "CAPTURED")
         ledger.add_entry(ag["agent_id"], "fund", cap["amount"], paypal_ref=cap["capture_id"],
                          reason=f"PayPal sandbox order {cap['order_id']} (demo, test card)")
@@ -1502,17 +1558,36 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         f = Path(__file__).resolve().parent.parent / "eval" / "results.json"
         if not f.exists():
             raise HTTPException(404, "no eval results yet")
-        j = json.loads(f.read_text())
-        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "notes") if k in j}
+        j = json.loads(f.read_text(encoding="utf-8"))
+        out = {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "stale_modes", "notes") if k in j}
+        held = heldout_summary()
+        if held:
+            out["heldout"] = held
+        out["test_count"] = TEST_COUNT
+        return out
+
+    def heldout_summary() -> dict | None:
+        """The separate reviewer's held-out set (eval/heldout-results.json, run once; provenance in eval/heldout-run.json).
+        Only the per-mode summary numbers are served; no rows, so no case text leaves the file."""
+        root = Path(__file__).resolve().parent.parent / "eval"
+        try:
+            res = json.loads((root / "heldout-results.json").read_text(encoding="utf-8"))
+            run = json.loads((root / "heldout-run.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        keys = ("attacks_stopped", "attacks_total", "legit_correct", "legit_total", "false_blocks", "models")
+        modes = {m: {k: v["summary"][k] for k in keys if k in v["summary"]} for m, v in res.items() if "summary" in v}
+        first = next(iter(res.values()), {})
+        return {"cases": len(first.get("rows", [])), "runs": run.get("runs"), "git_sha": run.get("git_sha"), "modes": modes}
 
     @app.get("/api/replay")
     def replay():
-        """Real decisions from the committed Gemini eval run (eval/results.json joined with eval/cases.json), for
+        """Real decisions from the committed AI-mode eval run (eval/results.json joined with eval/cases.json), for
         the landing page's feed. Read from files: no LLM or PayPal calls."""
         root = Path(__file__).resolve().parent.parent / "eval"
         try:
-            rows = json.loads((root / "results.json").read_text())["modes"]["ai"]["rows"]
-            cases = {c["id"]: c for c in json.loads((root / "cases.json").read_text())}
+            rows = json.loads((root / "results.json").read_text(encoding="utf-8"))["modes"]["ai"]["rows"]
+            cases = {c["id"]: c for c in json.loads((root / "cases.json").read_text(encoding="utf-8"))}
         except (OSError, KeyError, ValueError):
             raise HTTPException(404, "no eval results yet")
         out = []
@@ -1527,23 +1602,23 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                         "purpose": c["purpose"][:240], "target": c.get("target", "")[:200], "outcome": r["got"],
                         "layer": r["layer"], "model": r.get("model"), "latency_ms": r.get("latency_ms"),
                         "reason": (r.get("reason") or "")[:240]})
-        return {"source": "eval/results.json (Gemini mode)", "run_at": json.loads((root / "results.json").read_text())["modes"]["ai"].get("run_at"),
+        return {"source": "eval/results.json (AI mode)", "run_at": json.loads((root / "results.json").read_text(encoding="utf-8"))["modes"]["ai"].get("run_at"),
                 "decisions": out}
 
     # ---------------- live Gauntlet: sampled attacks through the real guard ----------------
-    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-gauntlet", s.gauntlet_llm_calls_per_day),
+    gauntlet_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-gauntlet", s.gauntlet_llm_calls_per_day), require_ai=production,
                                 cache=verdicts)
     GAUNTLET_CATS = ("direct_injection", "indirect_injection", "personal_use", "social_target", "lookalike_unsafe",
                      "forbidden_vendor", "caps", "vague")
 
     def gauntlet_cases() -> list[dict]:
         f = Path(__file__).resolve().parent.parent / "eval" / "cases.json"
-        return json.loads(f.read_text()) if f.exists() else []
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
 
     @app.post("/api/gauntlet")
     def gauntlet(request: Request):
         """Run a random sample of the labeled attacks (one per category, plus two legitimate buys) through the
-        same decide() real purchases use, live (Gemini when configured). Dry run: nothing is charged and PayPal
+        same decide() real purchases use, live (the AI provider when configured). Dry run: nothing is charged and PayPal
         is never called. Rate-limited, with its own daily LLM budget."""
         limit("gauntlet:" + client_ip(request), s.gauntlet_runs_per_ip_hour, HOUR, "Gauntlet limit for your IP reached; try again in an hour")
         limit("gauntlet:all", s.gauntlet_runs_per_day, DAY, "today's live Gauntlet runs are used up; the committed scorecard below has the full 67-case run")
@@ -1578,6 +1653,98 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "unguarded_would_buy": sum(r["no_guard"] == "allow" for r in attacks),
                 "llm_calls": sum(1 for r in rows if r["model"]), "paypal_calls": 0,
                 "note": "Dry run through the production decide(): no money moves and PayPal is not called."}
+
+    # ---------------- compare panel: one purchase, rules alone vs rules + AI (dry run) ----------------
+    # Always require_ai: with no provider (or no budget, or an error) the AI side is "unavailable" and the purchase is
+    # held for a human; it never falls back to the keyword check, so the two columns never silently show the same mode.
+    compare_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-compare", s.compare_llm_calls_per_day),
+                               require_ai=True, cache=verdicts)
+    COMPARE_TEXT_MAX = 300
+    COMPARE_REASON_MAX = 200
+    VERDICT_WORD = {"allow": "allowed", "block": "blocked", "approval": "held"}   # dry run: never "paid"
+    _sys = " ".join(GUARD_SYSTEM.split()).lower()
+    SYSTEM_CHUNKS = {_sys[i:i + 40] for i in range(0, max(1, len(_sys) - 39), 10)}   # any 50-char quote hits one
+
+    def quotes_system_prompt(text: str) -> bool:
+        t = " ".join((text or "").split()).lower()
+        return any(chunk in t for chunk in SYSTEM_CHUNKS)
+
+    def compare_presets() -> list[str]:
+        """One preset per category (first case of each), indirect injection first, then two legitimate buys."""
+        first: dict[str, str] = {}
+        ids = {c["id"] for c in gauntlet_cases()}
+        if "indirect_injection-05" in ids:   # the demo video's step-6 twin: rules allow it, the AI blocks it
+            first["indirect_injection"] = "indirect_injection-05"
+        for c in gauntlet_cases():
+            first.setdefault(c["category"], c["id"])
+        legit = [c["id"] for c in gauntlet_cases() if not c["attack"]][:2]
+        cats = ("indirect_injection",) + tuple(k for k in GAUNTLET_CATS if k != "indirect_injection")
+        return [first[k] for k in cats if k in first] + legit
+
+    @app.get("/api/compare/cases")
+    def compare_cases():
+        cases = {c["id"]: c for c in gauntlet_cases()}
+        return {"cases": [{"id": i, "category": cases[i]["category"], "vendor": cases[i]["vendor"], "item": cases[i]["item"],
+                           "quantity": cases[i].get("quantity", 1), "target": cases[i].get("target", ""),
+                           "purpose": cases[i]["purpose"], "expected": cases[i]["expected"]} for i in compare_presets()]}
+
+    def compare_side(out) -> dict:
+        unavailable = out.layer == "policy-unavailable"
+        return {"verdict": VERDICT_WORD.get(out.outcome, "held"), "outcome": out.outcome, "layer": out.layer,
+                "reason": ("AI unavailable, human approval" if unavailable
+                           else "reason withheld: it quoted the guard's instructions" if quotes_system_prompt(out.reason)
+                           else out.reason)[:COMPARE_REASON_MAX],
+                "ai_unavailable": unavailable, "model": out.model or None, "cached": bool(out.cached),
+                "amount_usd": float(out.amount or 0)}
+
+    @app.post("/api/compare")
+    def compare(body: CompareIn, request: Request):
+        """Dry run of ONE purchase through the production decide() twice: "Rules + keyword check" (no LLM, cannot
+        call one) and "Rules + AI" (at most one Claude call; none on a cache hit or when a rule stops it first).
+        Nothing is charged, PayPal is never called, nothing is written to the ledger and no URL is fetched."""
+        limit("compare:" + client_ip(request), s.compare_runs_per_ip_hour, HOUR,
+              "compare limit for your IP reached; try again in an hour")
+        limit("compare:all", s.compare_runs_per_day, DAY,
+              "today's compare runs are used up; the committed scorecard has the full 67-case run")
+        expected = None
+        if body.case_id:
+            c = next((c for c in gauntlet_cases() if c["id"] == body.case_id and c["id"] in compare_presets()), None)
+            if not c:
+                raise HTTPException(404, "unknown case")
+            p = pr.Purchase(c["vendor"], c["item"], c.get("quantity", 1), c["purpose"], c.get("target", ""))
+            st = c.get("state") or {}
+            state = pr.State(Decimal(st.get("spent_24h", "0")),
+                             {k: Decimal(v) for k, v in (st.get("vendor_spent_30d") or {}).items()})
+            expected = c["expected"]
+        else:
+            if any(ch < " " and ch not in "\t" for ch in body.purpose + body.target):
+                raise HTTPException(422, "control characters are not allowed")
+            if body.vendor not in pr.VENDORS or body.item not in pr.VENDORS[body.vendor]["items"]:
+                raise HTTPException(422, "pick a vendor and item from the catalog")
+            if body.target:                                # judge-entered target: must be a safe public URL
+                try:
+                    check_url(body.target, allow_private=allow_private_targets)
+                except UnsafeTarget as e:
+                    raise HTTPException(422, f"target: {e}")
+            p = pr.Purchase(body.vendor, body.item, body.quantity, body.purpose.strip(), body.target.strip())
+            state = pr.State()
+        cfg = pr.AgentConfig(pr.SHOP_POLICY, dict(pr.SHOP_VENDOR_BUDGETS), pr.SHOP_APPROVAL_THRESHOLD,
+                             pr.SHOP_PER_PURCHASE_MAX, pr.SHOP_DAILY_CAP)
+        CURRENT_IP.set(client_ip(request))
+        rules = pr.decide(cfg, p, state, "keyword", None)                   # literal URL checks only; no fetches
+        t0 = time.perf_counter()
+        ai = pr.decide(cfg, p, state, "ai", compare_guard)
+        ms = round((time.perf_counter() - t0) * 1000)
+        a = compare_side(ai)
+        a["llm_called"] = bool(ai.model) and not ai.cached
+        a["latency_ms"] = ms
+        return {"dry_run": True, "paypal_calls": 0, "ledger_writes": 0, "fetches": 0,
+                "purchase": {"vendor": p.vendor, "vendor_name": pr.VENDORS[p.vendor]["name"], "item": p.item,
+                             "item_name": pr.VENDORS[p.vendor]["items"][p.item]["name"], "quantity": p.quantity,
+                             "target": p.target, "purpose": p.purpose},
+                "rules": {"label": "Rules + keyword check", **compare_side(rules)},
+                "ai": {"label": "Rules + AI", **a}, "expected": VERDICT_WORD.get(expected) if expected else None,
+                "note": "Dry run: no money moves, PayPal isn't called, nothing is fetched or stored."}
 
     @app.post("/api/demo/refund")
     def demo_refund(request: Request, a=Depends(demo_agent)):

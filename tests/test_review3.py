@@ -7,17 +7,17 @@ from tests.test_agenttab import A, buy, shop_agent
 from tests.test_hardening import _client
 
 MUG = dict(vendor="samplebox", item="ceramic-mug-sample")
-SEAT = dict(vendor="shopsuite", item="inventory-seat", purpose="Inventory software to track stock across our two warehouses")
+SEAT = dict(vendor="shopsuite", item="inventory-seat", quantity=2, purpose="Inventory software to track stock across our two warehouses")
 
 
 # ---------- (1) reconcile: uncaptured auto top-up older than 10 minutes ----------
 def _crashed_auto_topup(tmp_path):
     """Purchase commits with an auto top-up credit, then the process 'dies' before the capture."""
     c = _client(tmp_path)
-    ag = shop_agent(c, daily_cap_usd=5.0, vendor_budgets={"samplebox": 5.0})
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
     aid = ag["agent_id"]
     c.post(f"/api/agents/{aid}/saved-card", headers=A)
-    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 1, "monthly_cap_usd": 3}, headers=A)
+    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 100, "monthly_cap_usd": 300}, headers=A)
     pp, led = c.app.state.paypal, c.app.state.ledger
     real = pp.capture_authorization
 
@@ -31,7 +31,7 @@ def _crashed_auto_topup(tmp_path):
     pp.capture_authorization = real
     fund = [e for e in led.entries(aid) if e["kind"] == "fund"]
     assert len(fund) == 1 and fund[0]["paypal_ref"] == "" and fund[0]["capture_ref"].startswith("AUTH-")
-    assert [p["status"] for p in led.purchases(aid)] == ["completed"] and led.balance(aid) == Decimal("0.80")
+    assert [p["status"] for p in led.purchases(aid)] == ["completed"] and led.balance(aid) == Decimal("82.00")
     return c, aid, fund[0]
 
 
@@ -49,7 +49,7 @@ def test_reconcile_captures_a_stale_uncaptured_auto_topup_and_freezes(tmp_path):
     assert any("never captured; captured now" in m for m in r["mismatches"])
     after = [e for e in led.entries(aid) if e["id"] == fe["id"]][0]
     assert after["paypal_ref"].startswith("CAP-") and pp._mock_auths[fe["capture_ref"]]["status"] == "CAPTURED"
-    assert led.balance(aid) == Decimal("0.80")                      # the credit is now backed by real money
+    assert led.balance(aid) == Decimal("82.00")                      # the credit is now backed by real money
     r2 = c.post(f"/api/agents/{aid}/reconcile", headers=A).json()  # idempotent: nothing left to settle
     assert not any("never captured" in m for m in r2["mismatches"])
 
@@ -63,8 +63,8 @@ def test_reconcile_reverses_credit_and_voids_hold_when_paypal_refuses_capture(tm
     assert r["frozen"] and any("credit reversed" in m and "AUTHORIZATION_EXPIRED" in m for m in r["mismatches"])
     assert pp._mock_auths[fe["capture_ref"]]["status"] == "VOIDED"
     rev = [e for e in led.entries(aid) if e["kind"] == "fund_reversal"]
-    assert len(rev) == 1 and rev[0]["capture_ref"] == f"entry:{fe['id']}" and rev[0]["amount_micro"] == 1_000_000
-    assert led.balance(aid) == Decimal("-0.20")
+    assert len(rev) == 1 and rev[0]["capture_ref"] == f"entry:{fe['id']}" and rev[0]["amount_micro"] == 100_000_000
+    assert led.balance(aid) == Decimal("-18.00")
     c.post(f"/api/agents/{aid}/reconcile", headers=A)              # second run must not reverse twice
     assert len([e for e in led.entries(aid) if e["kind"] == "fund_reversal"]) == 1
 
@@ -89,17 +89,17 @@ def test_reconcile_leaves_fresh_or_transiently_unverifiable_topups_alone(tmp_pat
 
 def test_declined_capture_is_not_settled_again_by_reconcile(tmp_path):
     c = _client(tmp_path)
-    ag = shop_agent(c, daily_cap_usd=5.0, vendor_budgets={"samplebox": 5.0})
+    ag = shop_agent(c, daily_cap_usd=500.0, vendor_budgets={"samplebox": 500.0})
     aid = ag["agent_id"]
     c.post(f"/api/agents/{aid}/saved-card", headers=A)
-    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 1, "monthly_cap_usd": 3}, headers=A)
+    c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 100, "monthly_cap_usd": 300}, headers=A)
     pp, led = c.app.state.paypal, c.app.state.ledger
     pp.mock_fail["capture_authorization"] = "TRANSACTION_REFUSED"
     assert buy(c, ag["api_key"], **MUG).json()["auto_topup"]["status"] == "capture_declined"
     fe = [e for e in led.entries(aid) if e["kind"] == "fund"][0]
     _age(c, fe["id"], 601)
     c.post(f"/api/agents/{aid}/reconcile", headers=A)
-    assert len([e for e in led.entries(aid) if e["kind"] == "fund_reversal"]) == 1 and led.balance(aid) == Decimal("-0.20")
+    assert len([e for e in led.entries(aid) if e["kind"] == "fund_reversal"]) == 1 and led.balance(aid) == Decimal("-18.00")
 
 
 # ---------- (2) schedule after a declined capture / voided hold ----------

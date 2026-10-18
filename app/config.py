@@ -37,6 +37,11 @@ class Settings:
     # Guard = short classification, so a fast Flash-Lite first; newest Flash as second try.
     llm_model: str = _env("LLM_MODEL", "gemini-3.5-flash-lite")
     llm_fallback_model: str = _env("LLM_FALLBACK_MODEL", "gemini-3.8-flash")
+    # Spend-guard AI provider: "anthropic" (default; official SDK, ANTHROPIC_API_KEY) or "gemini" (the
+    # OpenAI-compatible client above). Reports keep using the OpenAI-compatible client when one is configured.
+    guard_provider: str = _env("GUARD_PROVIDER", "anthropic")
+    anthropic_api_key: str = _env("ANTHROPIC_API_KEY")
+    anthropic_model: str = _env("ANTHROPIC_MODEL", "claude-haiku-5-5")
     # Owner/admin token. Must come from the environment; there is no default value.
     # If unset, create_app() generates a random one and writes it to ./.admin_token (chmod 600).
     admin_token: str = _env("ADMIN_TOKEN")
@@ -52,8 +57,8 @@ class Settings:
     # Separate daily LLM budgets: spend-guard checks can't be starved by report requests.
     llm_calls_per_day: int = _env_int("LLM_CALLS_PER_DAY", 400)            # guard; then purchases need approval
     llm_report_calls_per_day: int = _env_int("LLM_REPORT_CALLS_PER_DAY", 60)  # reports; then a template
-    # Per visitor IP, across guard checks and the Gauntlet: one visitor can't spend the shared Gemini quota.
-    llm_calls_per_ip_day: int = _env_int("LLM_CALLS_PER_IP_DAY", 30)
+    # Per visitor IP, across guard checks and the Gauntlet: one visitor can't spend the shared AI quota.
+    llm_calls_per_ip_day: int = _env_int("LLM_CALLS_PER_IP_DAY", 60)
     verdict_cache_ttl_s: float = field(default_factory=lambda: float(os.getenv("VERDICT_CACHE_TTL_S", "600")))
     paypal_calls_per_day: int = _env_int("PAYPAL_CALLS_PER_DAY", 120)  # orders/captures/refunds
     # A purchase waits at most this long for the same agent's previous purchase, then gets 429 (busy).
@@ -62,6 +67,11 @@ class Settings:
     gauntlet_runs_per_ip_hour: int = _env_int("GAUNTLET_RUNS_PER_IP_HOUR", 2)
     gauntlet_runs_per_day: int = _env_int("GAUNTLET_RUNS_PER_DAY", 12)
     gauntlet_llm_calls_per_day: int = _env_int("GAUNTLET_LLM_CALLS_PER_DAY", 60)
+    # Compare panel ("Rules + keyword check" vs "Rules + AI" on one purchase): dry run, its own LLM budget,
+    # not shared with the Gauntlet; its calls also count against llm_calls_per_ip_day.
+    compare_runs_per_ip_hour: int = _env_int("COMPARE_RUNS_PER_IP_HOUR", 5)
+    compare_runs_per_day: int = _env_int("COMPARE_RUNS_PER_DAY", 60)
+    compare_llm_calls_per_day: int = _env_int("COMPARE_LLM_CALLS_PER_DAY", 40)
     # Offline mock PayPal is for localhost only. Tests set this to run mock + demo mode together.
     allow_insecure_mock: bool = field(default_factory=lambda: os.getenv("ALLOW_INSECURE_MOCK", "0") == "1")
 

@@ -7,17 +7,17 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 
 | Time | Do this | What you should see |
 |---|---|---|
-| 0:00 | Open the page. | The **Live Gemini** badge in the top bar (green = the AI guard is configured and reachable). |
-| 0:10 | Click **Run the attack Gauntlet live**. | 8 attacks (one per category) + 2 legitimate buys go through the production `decide()` with live Gemini. Each row shows the verdict, the layer that decided, the model and the latency. Dry run: no charge, no PayPal call. |
-| 0:25 | Click **Open live demo** → **1. Start demo session**. | A fresh agent funded with **$1.00 through a real PayPal sandbox capture** (test card). Balance and vendor budgets appear. |
-| 0:35 | Click **2** → **6** in order. | 2 mug sample bought from the tab · 3 competitor research bought (a real HTTP fetch) · 4 SaaS seat over $0.30 → **held for approval** (202) · 5 gift card **blocked** (vendor not allowed) · 6 instruction injected into the purpose **blocked by Gemini**. |
+| 0:00 | Open the page. | The **Live AI guard** badge in the top bar (green = the AI guard is configured and answering; orange **AI busy, human approval** = purchases that reach the policy check wait for a human). |
+| 0:10 | Click **Run the attack Gauntlet live**. | 8 attacks (one per category) + 2 legitimate buys go through the production `decide()` with the live AI guard. Each row shows the verdict, the layer that decided, the model and the latency. Dry run: no charge, no PayPal call. |
+| 0:25 | Click **Open live demo** → **1. Start demo session**. | A fresh agent funded with **$100 through a real PayPal sandbox capture** (test card). Balance and vendor budgets appear. |
+| 0:35 | Click **2** → **6** in order. | 2 mug sample bought from the tab · 3 competitor research bought (a real HTTP fetch) · 4 two SaaS seats ($78, over $60) → **held for approval** (202) · 5 gift card **blocked** (vendor not allowed) · 6 instruction injected into the purpose **blocked by the AI guard**. |
 | 0:50 | In **Purchases**, click **Approve (sandbox card)** on the SaaS seat, then **Refund** on the mug. | The seat is paid by its own PayPal sandbox capture; the mug credit returns to the tab. The **Schedule** (Bryntum) shows budgets, the refund windows and the ⚡ PayPal events. |
 | 1:00 | Optional: **Demo clock: jump 6 days ahead**. | Refund windows near their end; the scheduler *proposes* refunds and waits for a human to confirm. |
 
 ## If you have five more minutes
 
 - **Scorecard:** the proof section shows the committed 67-case eval ([`eval/results.json`](../eval/results.json)):
-  no guard 0/47 attacks stopped, rules + keywords 37/47, rules + Gemini 47/47, with 20/20 legitimate buys handled correctly.
+  no guard 0/47 attacks stopped, rules + keywords 37/47, rules + Claude 47/47 (Gemini 47/47 on the previous catalog is archived for comparison), with 20/20 legitimate buys handled correctly.
 - **Code you may want to read:**
   - The decision pipeline: [`app/procurement.py`](../app/procurement.py) `decide()`, guard prompt in [`app/guard.py`](../app/guard.py).
   - Money: [`app/ledger.py`](../app/ledger.py) `commit_tab_purchase()` (re-checks limits in one `BEGIN IMMEDIATE` transaction).
@@ -39,9 +39,9 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 | Saved card (Vault v3) + auto top-up | **Real, sandbox** | PayPal's generic sandbox test Visa saved in Vault; merchant-initiated holds within an owner cap, captured only after the purchase commits. |
 | Refunds | **Real, sandbox** | Payments v2 refund of the specific capture (tab refunds, approval-funded purchases). Tab-funded purchase refunds are ledger credits back to the tab. |
 | Webhooks | **Real, sandbox** | `POST /paypal/webhook`, every event checked with PayPal's `verify-webhook-signature`; unverified events are rejected. |
-| AI spend guard | **Real** | Live Gemini (`gemini-3.5-flash-lite`, then a second model). If Gemini is unavailable the purchase is held for a human. |
-| Gauntlet | **Real guard, no money** | Live Gemini on sampled eval cases; nothing is charged and PayPal is not called. |
-| WebIntel Data purchases (tech stack, Markdown, links…) | **Real** | Real HTTP fetches of public sites through the SSRF-guarded fetcher. |
+| AI spend guard | **Real** | Claude (`claude-haiku-5-5`) through the official Anthropic SDK. If it is unavailable, or not configured in production, the purchase is held for a human. |
+| Gauntlet | **Real guard, no money** | The live AI guard on sampled eval cases; nothing is charged and PayPal is not called. |
+| SiteScope Data purchases (tech stack, Markdown, links…) | **Real** | Real HTTP fetches of public sites through the SSRF-guarded fetcher. |
 | SampleBox Wholesale, ShopSuite, GiftCards Now | **Simulated vendors** | Fulfilment returns a `SIM-…` vendor order. The money side (tab, approvals, refunds) is real sandbox PayPal. |
 | Money | **Sandbox only** | No real funds anywhere. |
 | Demo clock | **Simulated time** | Shifts only your demo agent's timestamps back so deadlines approach. |
