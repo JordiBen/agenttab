@@ -1,5 +1,4 @@
-"""README and the video script describe vendor mode and where the money goes (the README says the flag is on on the live
-site; the video script still describes the earlier recording), and every claim names a test that backs it (rule: docs say only what code and
+"""README and the video script describe vendor mode and where the money goes (both say the flag is on on the live site), and every claim names a test that backs it (rule: docs say only what code and
 tests prove; the shop vendors' delivery is simulated, so no vendor action is claimed)."""
 import re
 from pathlib import Path
@@ -36,9 +35,10 @@ def test_readme_where_the_money_goes():
 def test_video_script_where_the_money_goes():
     doc = (ROOT / "docs" / "video-script.md").read_text(encoding="utf-8")
     sec = _section(doc, "**Where the money goes")
-    assert "AgentTab's own sandbox merchant account" in sec
-    assert "VENDOR_PAYOUTS=1" in sec and "off on the live site" in sec
-    assert re.search(r"[Oo]nly when vendor payouts are switched on", sec)
+    # The video is filmed with vendor payouts on, as on the live site (reviewer, 2026-10-19); tab mode keeps one sentence.
+    assert "Agents created in the owner console use a prepaid tab with authorize-then-capture holds." in sec
+    assert "VENDOR_PAYOUTS=1" in sec and "as on the live site" in sec and "off on the live site" not in sec
+    assert "`intent: CAPTURE`" in sec and "`payee`" in sec
     assert "has no `payee` field" not in sec                                    # no longer true of app/ on this branch
     assert not re.search(SIMULATED_CLAIMS.replace("|the vendor gets paid", ""), sec, re.I)
     _backed(sec)
