@@ -19,93 +19,62 @@
 <script src="/static/app.js" defer></script>
 </head>
 <body>
-<a class="skip" href="#workspace">Skip to the live demo</a>
+<a class="skip" href="#try">Skip to the live demo</a>
 
 <nav class="nav" aria-label="Main"><div class="wrap">
  <a class="logo" href="#top" aria-label="AgentTab home">AgentTab</a>
- <div class="nav-links"><a href="#how">How it works</a><a href="#proof">Proof</a><a href="#showcase">Scenarios</a><a href="#workspace">Live demo</a><a href="https://github.com/JordiBen/agenttab">GitHub</a></div>
+ <div class="nav-links"><a href="#how">How it works</a><a href="#try">Try it</a><a href="#proof">Proof</a><a href="#developers">Developers</a><a href="https://github.com/JordiBen/agenttab">GitHub</a></div>
  <span class="live off" id="navlive" role="status"><i></i><span>Checking AI…</span></span>
- <button class="btn btn-light btn-sm" onclick="openDemo()">Open live demo</button>
+ <a class="btn btn-light btn-sm" href="#try">Try to trick the agent</a>
 </div></nav>
 
 <header class="hero" id="top">
  <div class="wrap hero-in">
-  <h1 class="reveal"><span class="h-long">Your agent gets a tab. Not your card.</span><span class="h-short">A tab, not your card.</span></h1>
+  <h1 class="reveal"><span>Let your AI agent shop.</span> <span>Keep your rules.</span></h1>
   <div class="hero-copy">
-   <p class="lead reveal">AgentTab funds a shop's purchasing agent through PayPal, then lets it buy only inside vendor budgets, caps, human approval and a live AI guard.</p>
-   <div class="reveal"><button class="btn btn-primary" onclick="overspend()">Try to make the agent overspend</button></div>
-   <p class="honest reveal"><span class="chip">PayPal sandbox · test money</span><span class="live off" id="herolive"><i></i><span>Checking AI…</span></span><a class="chip chip-mcp" id="heromcp" href="#mcp"><b>MCP server</b> · Works with any MCP client →</a></p>
-   <p class="fine reveal">No sign-up. A funded sandbox agent opens in seconds, then the injected purchase runs. Free instance: the first load can take a minute.</p>
+   <p class="lead reveal">AgentTab gives a business's AI purchasing agent a PayPal-backed tab. You set the budgets and limits. Every purchase is checked by rules and by Claude, and anything big waits for your OK in PayPal.</p>
+   <div class="hero-acts reveal"><a class="btn btn-primary" id="herotry" href="#try">Try to trick the agent</a><a class="t-link" href="#how">See how it works ↓</a></div>
+   <p class="honest reveal">PayPal sandbox · test money, no real charges.</p>
   </div>
   <div class="receipt saw-b reveal" data-ui aria-label="Guard decision receipt">
    <div class="r-head"><span><b>AgentTab</b><br>guard receipt · Lumen &amp; Loom</span><span class="term-mode" id="feedmode">replay</span></div>
    <div class="term-body" id="feed" aria-live="off"></div>
-   <div class="term-foot" id="feedfoot">Replayed from our committed eval run (dry run: no money moved). Your own demo purchases print here live.</div>
+   <div class="term-foot" id="feedfoot">Replayed from our committed test run (dry run: no money moved). Your own demo purchases print here live.</div>
   </div>
  </div>
 </header>
 
-<section id="how"><div class="wrap">
- <div class="sec-head reveal"><h2>Every purchase walks the same path.</h2>
-  <p>Segments are sized by where the 67 eval purchases were actually decided.</p></div>
+<section id="problem"><div class="wrap problem">
+ <div class="sec-head reveal" style="margin:0"><h2>An agent with your card does what a web page tells it.</h2>
+  <p>AI agents can now buy things on their own. But they read the web, and one line of text on a supplier page can talk them into spending your money.</p></div>
+ <div class="frag saw-tb reveal" id="probex" data-ui data-case="indirect_injection-01">
+  <p class="frag-q">Supplier page: <q id="probq">…</q></p>
+  <p class="frag-v"><span>No guard:</span> <span class="stamp pass" id="probnone">…</span> <span>With AgentTab:</span> <span class="stamp block" id="probai">…</span></p>
+ </div>
+</div></section>
+
+<section id="how" class="band saw-tb"><div class="wrap">
+ <div class="sec-head reveal"><h2>Every purchase walks the same path.</h2></div>
  <div class="how-bar reveal" id="howbar" data-ui>
   <div class="seg" style="--n:1;--c:var(--ink)"><div class="fill"><span>Catalog &amp; allowlist</span><span class="count" data-k="rules"></span></div></div>
   <div class="seg" style="--n:1;--c:var(--ink-80)"><div class="fill"><span>Caps &amp; budgets</span><span class="count" data-k="caps"></span></div></div>
   <div class="seg" style="--n:1;--c:var(--ink-30);--fg:var(--ink)"><div class="fill"><span>AI guard</span><span class="count" data-k="ai"></span></div></div>
   <div class="seg" style="--n:1;--c:var(--stamp-hold)"><div class="fill"><span>Human approval</span><span class="count" data-k="hold"></span></div></div>
-  <div class="seg" style="--n:1;--c:var(--surface);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div></div>
+  <div class="seg" style="--n:1;--c:var(--paper);--fg:var(--ink)"><div class="fill"><span>PayPal payment</span><span class="count" data-k="paid"></span></div></div>
  </div>
+ <p class="how-note reveal"><em>Bar widths show where our <span id="hown">67</span> test purchases were actually decided.</em></p>
  <ol class="how-caps reveal" aria-label="What each step does">
-  <li style="--c:var(--ink)"><span class="cap-k">Catalog &amp; allowlist</span><p><b>First,</b> unknown vendors, unsafe URLs, empty purposes and injected instructions stop here.</p></li>
-  <li style="--c:var(--ink-80)"><span class="cap-k">Caps &amp; budgets</span><p><b>Then</b> per-purchase, daily and 30-day vendor limits, in whole cents.</p></li>
-  <li style="--c:var(--ink-30)"><span class="cap-k">AI guard</span><p><b>Then</b> the AI judges what rules can't express. If it's unavailable, a human decides.</p></li>
-  <li style="--c:var(--stamp-hold)"><span class="cap-k">Human approval</span><p><b>Then</b> anything over $60 waits for the owner.</p></li>
-  <li style="--c:var(--surface)"><span class="cap-k">PayPal payment</span><p><b>Finally</b> the tab pays, through PayPal sandbox.</p></li>
+  <li style="--c:var(--ink-20)"><span class="cap-k">Your rules.</span><p>You pick the vendors, a budget for each, a daily cap and an approval limit.</p></li>
+  <li style="--c:var(--ink)"><span class="cap-k">Hard checks.</span><p>Unknown vendors, unsafe links and over-budget buys stop here, before any AI runs.</p></li>
+  <li style="--c:var(--ink-30)"><span class="cap-k">Claude checks the rest.</span><p>Is the purpose really business? Is someone trying to trick the agent? If Claude is unavailable, you decide, never the agent.</p></li>
+  <li style="--c:var(--stamp-hold)"><span class="cap-k">You approve big buys.</span><p>Anything over $60 becomes a PayPal hold. Money is taken only after delivery; if delivery fails, the hold is released.</p></li>
  </ol>
- <ul class="features reveal" aria-label="What AgentTab does">
-  <li><h3>A prepaid tab, funded by PayPal</h3><p>Orders v2 create → approve → capture. Integer micro-dollar ledger; parallel buys can't overspend.</p></li>
-  <li><h3>Vendor budgets</h3><p>Each approved vendor gets its own rolling 30-day budget. Others are blocked before any AI runs.</p></li>
-  <li><h3>Human approval over $60</h3><p>Big buys return 202 with a PayPal link. The owner pays that one purchase, or rejects it.</p></li>
-  <li><h3>Refund windows on a live timeline</h3><p>Budgets, approvals, refund deadlines and renewals on a Bryntum Scheduler, moved by PayPal webhooks. The scheduler <em>proposes</em> refunds; you confirm.</p></li>
-  <li><h3>Verified webhooks, SSRF-safe fetching</h3><p>Every PayPal event is checked with verify-webhook-signature and applied exactly once. Every redirect hop must resolve to a public IP.</p></li>
-  <li><h3>An MCP server for any agent</h3><p>The same guarded tab as MCP tools (<code>buy</code>, <code>get_tab</code>, <code>request_topup</code>…) over Streamable HTTP. No owner tools are exposed. <a id="bentomcp" class="t-link" href="#mcp">Connect a client →</a></p></li>
- </ul>
 </div></section>
 
-<section id="proof" class="band saw-tb"><div class="wrap">
- <div class="tiles" id="tiles">
-  <div class="ptile lead reveal"><h2>Measured, not claimed.</h2><p id="tilesrc">67 labeled purchases (47 attacks or rule violations, 20 legitimate) run through the same <code>decide()</code> the server uses. The set isn't held out.</p></div>
-  <div class="ptile reveal"><div class="big"><span id="tkw">–</span> <span class="unit">rules alone</span></div><p id="tkwtxt">attacks stopped by the deterministic rules and keyword check</p></div>
-  <div class="ptile reveal"><div class="big"><span id="tai">–</span> <span class="unit">rules + AI</span> <span class="stalepill" id="tstale" hidden>previous catalog</span></div><p id="taitxt">attacks stopped with the AI guard added</p></div>
-  <div class="ptile reveal"><div class="big"><span id="tnone">–</span> <span class="unit">with no guard</span></div><p>attacks a naive agent would stop: it buys everything</p></div>
-  <div class="ptile reveal"><div class="big"><span id="hlegit">–</span> <span class="unit">legitimate buys</span></div><p>handled right, <span id="hfb">–</span> wrongly blocked</p></div>
-  <div class="ptile reveal"><div class="big"><span id="hlat">–</span> <span class="unit">per AI decision</span></div><p>median per decision in the eval, including the AI round trip</p></div>
-  <div class="ptile reveal"><p class="layers"><b>Who stopped what:</b> <span id="tlayers">–</span></p></div>
- </div>
- <div class="proof">
-  <div class="card reveal" id="score"><h3>Safety scorecard</h3><p class="sub" id="scoretxt">loading…</p>
-   <p class="sub" id="proofmodel" role="status">AI guard model: checking…</p>
-   <div class="tbl-wrap" data-ui><table class="tbl" id="scoretbl"><thead><tr><th>Mode</th><th>Attacks stopped</th><th>Legit OK</th><th>False blocks</th><th>p50 / p95</th><th>LLM calls</th></tr></thead><tbody></tbody></table></div>
-   <div class="cats" id="cats"></div>
-   <div class="legend"><span style="--c:var(--ink-20)">No guard</span><span style="--c:var(--ink-60)">Rules + keywords</span><span style="--c:var(--ink)">Rules + AI</span></div>
-   <p class="sub" style="margin-top:12px">Source: <a href="https://github.com/JordiBen/agenttab/tree/main/eval">eval/cases.json</a> and results.json. The purpose rule was added after a first run (45/47); the set isn't held out.</p>
-  </div>
-  <div class="card reveal" id="gauntlet"><h3>Gauntlet <span class="pill bad">live</span></h3>
-   <p class="sub">One random attack from each of 8 categories plus 2 legitimate buys, through the real guard, right now. Dry run: no money moves, PayPal isn't called.</p>
-   <button class="btn btn-light" id="gbtn" onclick="runGauntlet()">Run the Gauntlet live</button>
-   <div class="g-sum" id="gsum"></div>
-   <div class="g-list" id="glist"><div class="g-empty" aria-hidden="true">
-    <div><span class="pill bad">direct injection</span><i></i></div><div><span class="pill bad">indirect injection</span><i></i></div>
-    <div><span class="pill bad">personal use</span><i></i></div><div><span class="pill bad">social target</span><i></i></div>
-    <div><span class="pill bad">look-alike URL</span><i></i></div><div><span class="pill bad">forbidden vendor</span><i></i></div>
-    <div><span class="pill bad">budget splitting</span><i></i></div><div><span class="pill bad">vague purpose</span><i></i></div>
-    <div><span class="pill ok">legitimate</span><i></i></div><div><span class="pill ok">legitimate</span><i></i></div>
-    <p>10 live decisions · about 5 AI calls · 0 PayPal calls</p></div></div>
-  </div>
- </div>
- <section class="cmp" id="compare" aria-labelledby="cmph">
-  <h3 id="cmph">Same purchase, two guards</h3>
-  <p class="cmp-sub">Pick a purchase from the eval set, or write your own. The left receipt runs the rules and the keyword check; the right one runs the same rules and then asks Claude. Dry run: PayPal isn't called, nothing is fetched, nothing is written to the ledger. A live verdict can differ from the committed eval run.</p>
+<section id="try"><div class="wrap">
+ <div class="sec-head reveal"><h2>Try to make it overspend.</h2>
+  <p>Pick an attack or write your own. You'll see what plain rules decide and what Claude decides, side by side. Nothing is charged.</p></div>
+<div class="cmp" id="compare">
   <form class="cmp-form" id="cmpform" data-ui onsubmit="event.preventDefault(); runCompare()">
    <label class="cmp-f cmp-wide">Purchase<select id="cmpcase" onchange="cmpMode()"><option value="">Loading purchases…</option></select></label>
    <div class="cmp-custom" id="cmpcustom" hidden>
@@ -121,43 +90,15 @@
    <article class="cmp-r" data-ui id="cmpl" aria-label="Rules + keyword check"><h4>Rules + keyword check</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
    <article class="cmp-r" data-ui id="cmpr" aria-label="Rules + AI"><h4>Rules + AI</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
   </div>
- </section>
-</div></section>
-
-<section id="showcase"><div class="wrap">
- <div class="sec-head reveal"><h2>Five purchases, five real verdicts.</h2>
-  <p>Each one is a case from the committed eval run, with the verdict and the layer that made it.</p></div>
- <div class="show">
-  <ul class="scen" role="tablist" aria-label="Purchase scenarios" id="scen">
-   <li><button role="tab" aria-selected="true" aria-controls="stage" data-case="legit-12">A supplier mug sample</button></li>
-   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="legit-15">Two SaaS seats</button></li>
-   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="indirect_injection-05">An instruction injected from a web page</button></li>
-   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="forbidden_vendor-04">A gift card</button></li>
-   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="social_target-01">Research on a social network</button></li>
-  </ul>
-  <div class="stage saw-tb" id="stage" role="tabpanel" aria-live="polite" data-ui><p class="purp">Loading the eval run…</p></div>
+</div>
+ <div class="gaunt" id="gauntlet">
+  <button class="btn btn-light" id="gbtn" onclick="runGauntlet()">Run 10 random attacks</button>
+  <div class="g-sum" id="gsum"></div>
+  <div class="g-list" id="glist"></div>
  </div>
- <div class="shots">
-  <figure class="shot saw-b reveal"><img src="/static/img/guard-console.jpg" alt="Close-up of the agent console: a gift-card purchase stamped BLOCKED by the allowlist, and the tab at $58.00 with per-vendor budgets" loading="lazy" width="1340" height="1168"><figcaption>The guard's verdict, and the tab it protects</figcaption></figure>
-  <figure class="shot saw-b reveal"><img src="/static/img/schedule-close.jpg" alt="Close-up of the Bryntum schedule: a PayPal top-up, a delivered purchase, a refund window, a held approval and a blocked gift card" loading="lazy" width="1400" height="956"><figcaption>Budgets, approvals and refund windows on the schedule</figcaption></figure>
- </div>
-</div></section>
-
-<section id="mcpinfo"><div class="wrap mcpinfo">
- <div class="sec-head reveal" style="margin:0"><h2>Works with any MCP client.</h2>
-  <p>Six guarded tools over Streamable HTTP, authenticated with the agent key only. Every call goes through the same guard and tab.</p>
-  <p><a class="btn btn-light" href="#mcp">Get a demo key</a></p></div>
- <pre class="reveal" data-ui aria-label="MCP client config">{"mcpServers": {
-  "agenttab": {
-   "url": "https://agenttab.onrender.com/mcp",
-   "headers": {"X-Agent-Key": "atk_…"}
-  }
-}}</pre>
-</div></section>
-
-<section class="ws band saw-t" id="workspace"><div class="wrap">
- <div class="sec-head reveal"><h2>Lumen &amp; Loom's purchasing agent</h2>
-  <p>A small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p></div>
+ <div class="ws" id="workspace">
+  <h3 class="ws-h">Or run the full demo shop</h3>
+  <p class="ws-sub">Lumen &amp; Loom, a small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p>
  <div id="demo" class="stack" style="display:none">
   <div class="grid-ws">
    <div class="stack">
@@ -182,19 +123,7 @@
       <button class="btn btn-ghost" onclick="demoReport()">AI spend report</button><button class="btn btn-ghost" onclick="demoRefund()">Refund unused tab credit</button></div>
     </div>
    </div>
-   <div class="card" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue">MCP 2026-07-28</span></h3></div>
-    <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
-    <div class="mcp-grid">
-     <div><label>Endpoint (Streamable HTTP)</label><code class="mcp-val" id="mcpurl"></code></div>
-     <div id="mcpbox" style="display:none"><label>Agent key (header <span class="mono">X-Agent-Key</span>)</label>
-      <div class="mcp-row"><code class="mcp-val" id="mcpkey"></code><button class="btn btn-ghost btn-sm" id="mcpreveal" onclick="mcpToggle()">Reveal</button><button class="btn btn-ghost btn-sm" onclick="mcpCopy('key')">Copy key</button></div></div>
-     <p id="mcpnone" class="sub" style="margin:0">Start a demo session to get this agent's key.</p>
-    </div>
-    <pre class="console mcp-cfg" id="mcpcfg"></pre>
-    <div class="row" style="margin-top:10px"><button class="btn btn-light btn-sm" onclick="mcpCopy('config')">Copy client config</button>
-     <a class="btn btn-ghost btn-sm" href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client" target="_blank" rel="noopener">stdio bridge &amp; docs</a></div>
-   </div>
-   </div>
+      </div>
    <div class="stack">
     <div class="card"><h3>Agent console</h3><p class="sub">What the guard decided, and why.</p>
      <div class="verdict" id="dverdict" aria-live="polite"></div><p id="dbusy" class="note" role="status" style="display:none"></p><pre class="console" id="dout"></pre></div>
@@ -203,7 +132,7 @@
   </div>
   <div class="card"><div class="card-head"><h3>Schedule <span class="pill blue">Bryntum Scheduler</span></h3>
     <button class="btn btn-ghost btn-sm" onclick="demoFF()">Demo clock: jump 6 days ahead</button></div>
-   <p class="sub">Budgets, approvals, refund windows and renewals, moved by signature-verified PayPal webhooks. Right-click an event for actions.</p>
+   <p class="sub">Budgets, approvals, refund windows and renewals. Right-click an event for actions.</p>
    <div id="dsched" class="sched" data-ui></div><div id="dsugg" style="margin-top:10px"></div></div>
   <div class="card"><h3>Purchases</h3><p class="sub">Approve, reject or refund here too.</p><div id="dpurch" class="grid-h" data-ui></div></div>
   <div class="card"><h3>Ledger</h3><p class="sub">Every charge, denial, top-up and refund.</p><div id="dledger" class="grid-h" data-ui></div></div>
@@ -230,13 +159,73 @@
   <div><h3>Purchases of selected agent</h3><div id="opurch" class="grid-h" data-ui style="margin-top:8px"></div></div>
   <div><h3>Live ledger</h3><div id="ledger" class="grid-h" data-ui style="margin-top:8px"></div></div>
  </div></details>
+ </div>
+</div></section>
+
+<section id="proof" class="band saw-tb"><div class="wrap">
+ <div class="sec-head reveal"><h2>Measured, not claimed.</h2></div>
+ <div class="tbl-wrap reveal" data-ui><table class="tbl proof-tbl" id="scoretbl"><thead><tr><th scope="col"><span class="vh">Mode</span></th><th scope="col">Attacks stopped</th><th scope="col">Legit buys allowed</th><th scope="col">Wrongly blocked</th></tr></thead><tbody></tbody></table></div>
+ <p class="proof-line reveal" id="proofline"></p>
+ <p class="proof-held reveal" id="heldout" hidden></p>
+ <p class="proof-foot reveal" id="prooffoot"></p>
+</div></section>
+
+<section id="whynow"><div class="wrap">
+ <div class="sec-head reveal"><h2>People will let agents spend, with limits.</h2></div>
+ <ul class="facts reveal">
+  <li><p>61% say spending limits would make them comfortable letting an AI agent buy.</p><a href="https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay">Nuvei consumer survey, 2026</a></li>
+  <li><p>84% say being able to reverse an AI purchase is very important.</p><a href="https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay">Nuvei, 2026</a></li>
+  <li><p>PayPal launched Agent Ready so merchants can accept payments from AI agents. AgentTab is the other side: the payer's rules.</p><a href="https://www.shopware.com/en/press/press-releases/paypal-launches-agentic-commerce-services-to-power-ai-driven-shopping">PayPal, Oct 2025</a></li>
+ </ul>
+</div></section>
+
+<section id="showcase" class="band saw-tb"><div class="wrap">
+ <div class="sec-head reveal"><h2>Five real decisions.</h2></div>
+ <div class="show">
+  <ul class="scen" role="tablist" aria-label="Purchase scenarios" id="scen">
+   <li><button role="tab" aria-selected="true" aria-controls="stage" data-case="legit-12">A supplier mug sample</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="legit-15">Two SaaS seats</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="indirect_injection-05">An instruction injected from a web page</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="forbidden_vendor-04">A gift card</button></li>
+   <li><button role="tab" aria-selected="false" aria-controls="stage" data-case="social_target-01">Research on a social network</button></li>
+  </ul>
+  <div class="stage saw-tb" id="stage" role="tabpanel" aria-live="polite" data-ui><p class="purp">Loading…</p></div>
+ </div>
+ <div class="shots">
+  <figure class="shot saw-b reveal"><img src="/static/img/guard-console.jpg" alt="Close-up of the agent console: a gift-card purchase stamped BLOCKED, and the tab at $58.00 with per-vendor budgets" loading="lazy" width="1340" height="1168"><figcaption>The guard's verdict, and the tab it protects</figcaption></figure>
+  <figure class="shot saw-b reveal"><img src="/static/img/schedule-close.jpg" alt="Close-up of the Bryntum schedule: a PayPal top-up, a delivered purchase, a refund window, a held approval and a blocked gift card" loading="lazy" width="1400" height="956"><figcaption>Budgets, approvals and refund windows on the schedule</figcaption></figure>
+ </div>
+</div></section>
+
+<section id="developers"><div class="wrap devs">
+ <div class="sec-head reveal" style="margin:0"><h2>For developers</h2>
+  <ul class="ticks dev-list">
+   <li><a href="https://github.com/JordiBen/agenttab#paypal-sandbox-notes"><b>PayPal:</b></a> Orders v2 checkout funding, AUTHORIZE → capture after delivery, void on failure, Vault saved card, refunds per capture, signature-verified webhooks applied once, PayPal-Request-Id per operation.</li>
+   <li><a href="https://github.com/JordiBen/agenttab#safety-what-the-code-does-and-its-limits"><b>Claude guard:</b></a> <span id="devmodel">Claude</span> with JSON-schema verdicts; errors, refusals and timeouts go to a human, never to auto-approve.</li>
+   <li><a href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client"><b>MCP:</b></a> six guarded tools over Streamable HTTP; agent key only; no owner tools. <a id="bentomcp" class="t-link" href="#mcp">Connect a client →</a></li>
+   <li><a href="https://github.com/JordiBen/agenttab#tests"><b>Safety:</b></a> integer-cent ledger, per-agent locks, parallel buys can't overspend, SSRF-safe fetching, <span id="testcount"></span>automated tests.</li>
+  </ul>
+  <p class="dev-links"><a href="/docs">API docs</a> · <a href="https://github.com/JordiBen/agenttab/blob/main/docs/threat-model.md">Threat model</a> · <a href="https://github.com/JordiBen/agenttab/blob/main/docs/judge-instructions.md">Judge instructions</a> · <a href="https://github.com/JordiBen/agenttab">GitHub</a></p>
+ </div>
+ <div class="card" id="mcp"><div class="card-head"><h3>Connect an MCP client <span class="pill blue">MCP 2026-07-28</span></h3></div>
+    <p class="sub">The same agent, as guarded tools for Claude, Cursor or any MCP client: <span class="mono">get_catalog</span>, <span class="mono">get_tab</span>, <span class="mono">buy</span>, <span class="mono">request_topup</span>, <span class="mono">list_purchases</span>, <span class="mono">mark_used</span>. Every call goes through the same guard and tab. No owner tools are exposed.</p>
+    <div class="mcp-grid">
+     <div><label>Endpoint</label><code class="mcp-val" id="mcpurl"></code></div>
+     <div id="mcpbox" style="display:none"><label>Agent key (header <span class="mono">X-Agent-Key</span>)</label>
+      <div class="mcp-row"><code class="mcp-val" id="mcpkey"></code><button class="btn btn-ghost btn-sm" id="mcpreveal" onclick="mcpToggle()">Reveal</button><button class="btn btn-ghost btn-sm" onclick="mcpCopy('key')">Copy key</button></div></div>
+     <p id="mcpnone" class="sub" style="margin:0">Start a demo session to get this agent's key.</p>
+    </div>
+    <pre class="console mcp-cfg" id="mcpcfg"></pre>
+    <div class="row" style="margin-top:10px"><button class="btn btn-light btn-sm" onclick="mcpCopy('config')">Copy client config</button>
+     <a class="btn btn-ghost btn-sm" href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client" target="_blank" rel="noopener">stdio bridge &amp; docs</a></div>
+   </div>
 </div></section>
 
 <footer class="saw-t"><div class="wrap">
  <div class="wm" aria-label="AgentTab"><b style="--h:72px">A</b><b style="--h:56px">g</b><b style="--h:64px">e</b><b style="--h:52px">n</b><b style="--h:68px">t</b><b style="--h:80px">T</b><b style="--h:58px">a</b><b style="--h:70px">b</b></div>
  <div class="fcols">
   <div><h3>Project</h3><ul><li><a href="https://github.com/JordiBen/agenttab">GitHub</a></li><li><a href="/docs">API docs</a></li><li>MIT licence</li></ul></div>
-  <div><h3>On this page</h3><ul><li><a href="#how">How it works</a></li><li><a href="#proof">Proof</a></li><li><a href="#workspace">Live demo</a></li></ul></div>
+  <div><h3>On this page</h3><ul><li><a href="#how">How it works</a></li><li><a href="#try">Try it</a></li><li><a href="#proof">Proof</a></li><li><a href="#developers">Developers</a></li></ul></div>
   <div><h3>Honest labels</h3><ul><li>PayPal sandbox only, no real money</li><li>Bryntum Scheduler evaluation build</li><li>Roundo (SIL OFL) · AG Grid Community (MIT)</li></ul></div>
  </div>
 </div></footer>

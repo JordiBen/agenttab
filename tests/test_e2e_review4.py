@@ -60,17 +60,11 @@ def test_demo_says_ai_guard_busy_and_waits_for_a_human(server, browser):
 
 
 @pytest.mark.parametrize("w,h", [(1440, 900), (390, 844)])
-def test_mcp_badge_and_bento_card_lead_to_the_panel(server, browser, w, h):
+def test_developer_mcp_link_leads_to_the_panel(server, browser, w, h):
+    # landing-copy v2: the hero MCP badge is gone; the For developers section's MCP line links to the connect panel there.
     pg = browser.new_page(viewport={"width": w, "height": h}, is_mobile=w < 500)
     pg.goto(server + "/"); pg.wait_for_selector("#demo", state="visible")
-    badge = pg.locator("#heromcp")
-    assert badge.is_visible() and "Works with any MCP client" in badge.inner_text()
     assert pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
-    badge.click(); pg.wait_for_timeout(1200)
-    top = pg.evaluate("document.getElementById('mcp').getBoundingClientRect().top")
-    assert -5 <= top < h, top                                      # the panel is in view
-    pg.evaluate("window.scrollTo(0,0)")
     pg.locator("#bentomcp").scroll_into_view_if_needed(); pg.click("#bentomcp"); pg.wait_for_timeout(1200)
     assert 0 - 5 <= pg.evaluate("document.getElementById('mcp').getBoundingClientRect().top") < h
-    # in the demo, the MCP panel is the next card after the buy buttons
-    assert pg.evaluate("document.getElementById('dguided').nextElementSibling.id") == "mcp"
+    assert pg.evaluate("document.getElementById('mcp').closest('section').id") == "developers"

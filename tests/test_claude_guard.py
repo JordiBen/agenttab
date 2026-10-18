@@ -263,13 +263,15 @@ def test_healthz_is_busy_when_the_daily_ai_budget_is_used_up(tmp_path, monkeypat
     assert c.get("/healthz").json()["ai_status"] == "busy"
 
 
-def test_badge_says_live_ai_guard_or_ai_busy_and_model_appears_only_in_proof():
+def test_badge_says_ai_guard_on_or_busy_and_model_appears_only_for_developers():
+    # landing-copy v2: the pill reads "AI guard: on" / "AI guard busy: purchases wait for you"; the model name moved from
+    # the Proof section (which is now one table) into the For developers section.
     js, html = (ROOT / "static/app.js").read_text(), (ROOT / "static/dashboard.html").read_text()
-    assert "'Live AI guard'" in js and "'AI busy, human approval'" in js and "h.ai_status" in js
-    badge = js[js.index("function setLive"):js.index("const pm = $('proofmodel')")]
-    assert "models" not in badge and "model" not in badge.replace("proofmodel", "")      # no model name in the badge
-    proof = html[html.index('<section id="proof"'):]
-    assert 'id="proofmodel"' in proof and 'id="proofmodel"' not in html[:html.index('<section id="proof"')]
+    assert "'AI guard: on'" in js and "'AI guard busy: purchases wait for you'" in js and "h.ai_status" in js
+    badge = js[js.index("function setLive"):js.index("const pm = $('devmodel')")]
+    assert "models" not in badge and "model" not in badge.replace("devmodel", "")      # no model name in the badge
+    dev = html[html.index('<section id="developers"'):]
+    assert 'id="devmodel"' in dev and 'id="devmodel"' not in html[:html.index('<section id="developers"')]
     assert "Gemini" not in html and "claude-haiku" not in html
     css = (ROOT / "static/app.css").read_text()
     # busy has its own colour (DESIGN.md hold token since the landing redesign; was the dark theme's #fb923c)

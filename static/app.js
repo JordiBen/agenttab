@@ -94,19 +94,19 @@ async function refund() { const a = sel(); if (!a) return;
 async function report() { const a = sel(); if (!a) return;
   const r = await fetch('/api/agents/' + a.agent_id + '/report', {headers: H()}); const j = await r.json(); $('report').textContent = j.report || JSON.stringify(j); }
 
-// ---- health: live AI guard badge (real state from /healthz; the model name is shown only in Proof) ----
-const LIVE_TXT = {live: 'Live AI guard', busy: 'AI busy, human approval', off: 'Keyword mode (no AI configured)'};
-const LIVE_TIP = {live: 'Every purchase that reaches the policy check is judged by the AI guard in real time. If it is unavailable, the purchase waits for a human.',
-  busy: 'The AI guard cannot judge right now (not configured, rate-limited or out of budget), so purchases that reach the policy check wait for human approval. By design.',
-  off: 'Local/offline mode: no AI provider configured, a transparent keyword check is used.'};
+// ---- health: AI guard status pill (real state from /healthz; the model name is shown only in For developers) ----
+const LIVE_TXT = {live: 'AI guard: on', busy: 'AI guard busy: purchases wait for you', off: 'AI guard off (local preview)'};
+const LIVE_TIP = {live: 'Every purchase that reaches the policy check is judged by Claude in real time. If it is unavailable, the purchase waits for you.',
+  busy: 'Claude cannot judge right now (not configured, rate-limited or out of budget), so purchases that reach the policy check wait for your approval. By design.',
+  off: 'Local preview: no AI provider configured, a transparent keyword check is used.'};
 function setLive(h) {
   const st = h.ai_status || (h.ai_guard ? 'live' : 'off');
-  for (const id of ['navlive', 'herolive']) {
-    const el = $(id); el.classList.toggle('off', st === 'off'); el.classList.toggle('busy', st === 'busy'); el.dataset.status = st;
+  for (const id of ['navlive']) {
+    const el = $(id); if (!el) continue; el.classList.toggle('off', st === 'off'); el.classList.toggle('busy', st === 'busy'); el.dataset.status = st;
     el.querySelector('span').textContent = LIVE_TXT[st] || LIVE_TXT.off; el.title = LIVE_TIP[st] || '';
   }
-  const pm = $('proofmodel');
-  if (pm) pm.textContent = h.models && h.models.length ? `AI guard model: ${h.models.join(', ')} (${h.guard_provider === 'anthropic' ? 'Anthropic' : h.guard_provider})` : 'AI guard model: none configured';
+  const pm = $('devmodel');
+  if (pm) pm.textContent = h.models && h.models.length ? h.models.join(', ') : 'Claude';
 }
 
 // ---- hero feed: real decisions, typed out like a log ----
@@ -116,13 +116,18 @@ const STAMP = {block: ['block', 'BLOCKED'], approval: ['hold', 'HELD'], refund: 
 const stampFor = (outcome, live) => outcome === 'allow' ? (live ? ['paid', 'PAID'] : ['pass', 'ALLOWED']) : (STAMP[outcome] || ['pass', String(outcome).toUpperCase()]);
 const stamp = (outcome, live) => { const [c, w] = stampFor(outcome, live); return `<span class="stamp ${c}">${w}</span>`; };
 const itemName = (vendor, item) => (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.name || item;
+const vendorName = vendor => (CAT || []).find(v => v.vendor === vendor)?.name || vendor;
+// Who decided, in plain words (the layer names stay in the API and the For developers section).
+const STOPPED_BY = {'policy-ai': 'AI guard (Claude)', 'policy-keyword': 'keyword check', 'policy-heuristic': 'keyword check', allowlist: 'vendor not allowed',
+  catalog: 'not in the catalog', caps: 'budget limit', purpose: 'purpose rule', injection: 'injection rule', unsafe_target: 'unsafe link', frozen: 'agent frozen'};
+const whoLine = (outcome, layer) => outcome === 'approval' || layer === 'policy-unavailable' || layer === 'approval' ? 'Waiting for: owner approval'
+  : outcome === 'block' ? 'Stopped by: ' + (STOPPED_BY[layer] || 'rules') : '';
 function feedEntry(d, live) {
   const el = document.createElement('div'); el.className = 'fe';
-  const req = `<span class="what">POST purchase · ${enc(d.vendor)} · ${enc(itemName(d.vendor, d.item))}</span>` + (d.amount_usd != null ? `<span class="amt">${usd(d.amount_usd)}</span>` : '');
-  el.innerHTML = `<div class="req"></div><div class="pur">${d.target ? enc(d.target) + ' · ' : ''}"${enc(d.purpose)}"</div>
-    <div class="res" hidden>${live ? '<span class="tag livetag">LIVE</span>' : ''}${stamp(d.outcome, live)}
-    <span class="meta">layer: ${enc(d.layer)}${d.latency_ms ? ' · ' + Math.round(d.latency_ms) + ' ms' : ''}</span>
-    <span class="why">${enc(d.reason)}</span></div>`;
+  const req = `<span class="what">${enc(itemName(d.vendor, d.item))} · ${d.amount_usd != null ? usd(d.amount_usd) : ''}<small>${enc(vendorName(d.vendor))}</small></span>`;
+  const who = whoLine(d.outcome, d.layer);
+  el.innerHTML = `<div class="req"></div><div class="pur">"${enc(d.purpose)}"</div>
+    <div class="res" hidden>${live ? '<span class="tag livetag">LIVE</span>' : ''}${stamp(d.outcome, live)}${who ? `<span class="who">${enc(who)}</span>` : ''}</div>`;
   return {el, req};
 }
 async function typeInto(node, html) {
@@ -163,7 +168,7 @@ function feedLive(d) { FEED.live.push(d); const m = $('feedmode'); m.textContent
   $('feedfoot').textContent = 'Live: your demo purchases, judged right now (PayPal sandbox). Between them, eval decisions are replayed as dry runs.'; FEED.visible = true; feedNext(); }
 async function initFeed() {
   try { const r = await fetch('/api/replay'); if (!r.ok) return; const j = await r.json();
-    FEED.all = j.decisions; howBar(j.decisions); showcase(j.decisions);
+    FEED.all = j.decisions; howBar(j.decisions); showcase(j.decisions); if (SCORE) problem(SCORE);
     const ds = j.decisions.slice(), rng = () => Math.random() - .5; ds.sort(rng);
     // interleave: attacks and legitimate buys alternate so the feed shows both outcomes
     const atk = ds.filter(d => d.attack), ok = ds.filter(d => !d.attack); FEED.replay = [];
@@ -189,13 +194,13 @@ function howBar(ds) {
 }
 
 // ---- showcase: real eval verdicts, one per scenario ----
-let STALE_AI = false;
 function showcase(ds) {
   const by = Object.fromEntries(ds.map(d => [d.id, d])), stage = $('stage');
   const draw = d => { if (!d) { stage.innerHTML = '<p class="purp">This case is not in the committed run.</p>'; return; }
-    stage.innerHTML = `<div class="row2"><span>POST purchase · ${enc(d.vendor)} · ${enc(itemName(d.vendor, d.item))}</span><span>${d.amount_usd != null ? usd(d.amount_usd) : ''}</span></div>
-      <p class="purp">${d.target ? enc(d.target) + ' · ' : ''}"${enc(d.purpose)}"</p>${stamp(d.outcome, false)}
-      <p class="layer">Decided by: ${enc(d.layer)} · eval case ${enc(d.id)} (dry run)${STALE_AI ? ' · previous catalog' : ''}</p><p>${enc(d.reason)}</p>`; };
+    const who = whoLine(d.outcome, d.layer);
+    stage.innerHTML = `<div class="row2"><span>${enc(itemName(d.vendor, d.item))}</span><span>${d.amount_usd != null ? usd(d.amount_usd) : ''}</span></div>
+      <p class="layer">${enc(vendorName(d.vendor))}</p><p class="purp">"${enc(d.purpose)}"</p>${stamp(d.outcome, false)}
+      ${who ? `<p class="who">${enc(who)}</p>` : ''}${STALE_AI ? '<p class="layer">previous catalog</p>' : ''}`; };
   const pick = btn => { $('scen').querySelectorAll('button').forEach(b => b.setAttribute('aria-selected', b === btn ? 'true' : 'false'));
     if (REDUCED) return draw(by[btn.dataset.case]);
     stage.classList.add('swap'); setTimeout(() => { draw(by[btn.dataset.case]); stage.classList.remove('swap'); }, 260); };
@@ -273,7 +278,7 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
   show('Guard is checking the purchase…'); verdict(pill('approval', 'checking')); $('dbusy').style.display = 'none';
   let r; try { r = await dfetch('/api/purchases', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Agent-Key': DK()}, body: JSON.stringify({vendor, item, quantity, target, purpose})}); } catch (e) { return show(''); }
   const j = await r.json(); const g = j.guard || (j.detail && j.detail.layer ? j.detail : null);
-  const who = g ? `<span class="pill gray">layer: ${enc(g.layer)}</span>` : '';
+  const wl = g ? whoLine({200: 'allow', 202: 'approval', 403: 'block'}[r.status], g.layer) : '', who = wl ? `<span class="pill gray">${enc(wl)}</span>` : '';
   const unit = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.price_usd; const amt = unit == null ? null : unit * quantity;
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
   if (r.status === 200) { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
@@ -329,36 +334,36 @@ async function demoRefund() { if (!DK()) return show('Start a demo session first
   const j = await r.json(); verdict(r.ok ? pill('refund', 'refunded ' + usd(j.refunded_usd) + ' to PayPal') : pill('deny', 'error')); show(j);
   r.ok ? toast('violet', 'Refunded ' + usd(j.refunded_usd) + ' to PayPal', j.refunded_usd ? 'Payments v2 refund of your sandbox capture.' : 'Nothing left to refund.') : toast('bad', 'Refund failed', typeof j.detail === 'string' ? j.detail : ''); dload(); }
 function openDemo() { $('workspace').scrollIntoView({behavior: REDUCED ? 'auto' : 'smooth'}); if (!DK() && $('demo').style.display !== 'none') return demoStart(); }
-// Primary action: open the demo with a funded sandbox agent, then run the injected-purchase button.
-async function overspend() { if ($('demo').style.display === 'none') return openDemo();
-  await openDemo(); if (!DK()) return;
-  const b = [...document.querySelectorAll('#dguided .btn-step')].find(x => x.textContent.includes('injected instruction')); b && b.click(); }
-
-// ---- scorecard + proof tiles ----
-async function scorecard() { const r = await fetch('/api/scorecard'); if (!r.ok) { $('scoretxt').textContent = 'no eval results yet'; return; } const j = await r.json();
-  $('scoretxt').textContent = `${j.cases} labeled purchases (${j.attacks} attacks or rule violations, ${j.legit} legitimate) for the ${j.persona}. Run ${new Date(j.generated_at).toLocaleDateString()}. "Stopped" = blocked or held for approval.`;
-  $('scoretbl').querySelector('tbody').innerHTML = Object.entries(j.modes).map(([k, m]) => `<tr class="${k === 'ai' ? 'hl' : ''}"><td>${enc(m.label)}${(j.stale_modes || []).includes(k) ? ' <span class="pill gray" title="Run on the previous catalog and prices; re-run pending">previous catalog</span>' : ''}</td>
-    <td class="num">${m.attacks_stopped}/${m.attacks_total} <span class="pill ${m.attacks_stopped === m.attacks_total ? 'ok' : m.attacks_stopped ? 'warn' : 'bad'}">${Math.round(m.attacks_stopped_pct)}%</span></td>
-    <td class="num">${m.legit_correct}/${m.legit_total}</td><td class="num">${m.false_blocks}</td>
-    <td class="num">${k === 'ai' ? Math.round(m.latency_p50_ms) + ' / ' + Math.round(m.latency_p95_ms) + ' ms' : '–'}</td><td class="num">${k === 'ai' ? m.llm_calls : '0'}</td></tr>`).join('');
-  const col = {none: 'var(--ink-20)', keyword: 'var(--ink-60)', ai: 'var(--ink)'};
-  $('cats').innerHTML = Object.entries(j.by_category).map(([c, v]) => `<div class="cat"><span>${enc(c.replace(/_/g, ' '))}</span><span style="display:grid;gap:3px">` +
-    ['none', 'keyword', 'ai'].filter(m => m in v).map(m => `<span class="track"><i style="width:${100 * v[m] / v.total}%;background:${col[m]}"></i></span>`).join('') +
-    `</span><span class="mono">${['none', 'keyword', 'ai'].filter(m => m in v).map(m => v[m]).join(' → ')} / ${v.total}</span></div>`).join('');
-  tiles(j); }
-// Proof tiles: every number from /api/scorecard (eval/results.json) with its denominator; a stale mode says "previous catalog".
-function tiles(j) { const m = j.modes, stale = j.stale_modes || [], frac = x => `${x.attacks_stopped}<small> / ${x.attacks_total}</small>`;
-  if (m.keyword) $('tkw').innerHTML = frac(m.keyword);
-  if (m.none) $('tnone').innerHTML = frac(m.none);
-  const ai = m.ai; if (!ai) return;
-  if (stale.includes('ai')) { STALE_AI = true; if (!$('feedmode').classList.contains('on')) $('feedfoot').textContent = 'Replayed from our committed eval run, previous catalog (its reasons quote the old prices; dry run: no money moved). Your own demo purchases print here live.';
-    const l = $('stage').querySelector('.layer'); if (l && !l.textContent.includes('previous catalog')) l.textContent += ' · previous catalog'; }
-  $('tai').innerHTML = frac(ai); $('tstale').hidden = !stale.includes('ai');
-  if (m.keyword) $('taitxt').textContent = `attacks stopped with the AI guard added: ${ai.attacks_stopped - m.keyword.attacks_stopped} more than rules alone`;
-  $('hlegit').innerHTML = `${ai.legit_correct}<small> / ${ai.legit_total}</small>`; $('hfb').textContent = ai.false_blocks;
-  $('hlat').innerHTML = `${Math.round(ai.latency_p50_ms)}<small> ms</small>`;
-  const L = Object.entries(ai.stopped_by_layer || {}).sort((a, b) => b[1] - a[1]);
-  $('tlayers').textContent = L.map(([k, v]) => `${k} ${v}`).join(' · ') + ` (of ${ai.attacks_total} attacks, rules + AI${stale.includes('ai') ? ', previous catalog' : ''})`; }
+// ---- proof: one table from /api/scorecard (eval/results.json), the held-out row (eval/heldout-results.json) ----
+const frac = (a, b) => `${a}<small> / ${b}</small>`;
+const ROWS = [['none', 'No guard'], ['keyword', 'Rules only'], ['ai', 'Rules + Claude']];
+let SCORE = null;
+async function scorecard() { const r = await fetch('/api/scorecard'); if (!r.ok) { $('proofline').textContent = 'No test results yet.'; return; } const j = await r.json(); SCORE = j;
+  const m = j.modes || {}, stale = j.stale_modes || [];
+  $('scoretbl').querySelector('tbody').innerHTML = ROWS.filter(([k]) => m[k]).map(([k, name]) => `<tr class="${k === 'ai' ? 'hl' : ''}"><td>${name}${stale.includes(k) ? ' <span class="stalepill">previous catalog</span>' : ''}</td>
+    <td class="n" data-k="attacks">${frac(m[k].attacks_stopped, m[k].attacks_total)}</td><td class="n" data-k="legit">${frac(m[k].legit_correct, m[k].legit_total)}</td><td class="n" data-k="fb">${m[k].false_blocks}</td></tr>`).join('');
+  const ind = (j.by_category || {}).indirect_injection;
+  $('proofline').textContent = ind && 'keyword' in ind && 'ai' in ind
+    ? `Rules do most of the work. Claude catches what rules can't, like instructions hidden in web pages: ${ind.keyword} of ${ind.total} with rules alone, ${ind.ai} of ${ind.total} with Claude.` : 'Rules do most of the work.';
+  const h = j.heldout, hm = (h && h.modes) || {}, ha = hm.ai;
+  if (ha) {   // every number from eval/heldout-results.json via /api/scorecard; a mode missing from the file is left out
+    const att = [['none', 'no guard'], ['keyword', 'rules only'], ['ai', 'rules + Claude']].filter(([m]) => hm[m])
+      .map(([m, n]) => `${n} ${hm[m].attacks_stopped} / ${hm[m].attacks_total}`).join(', ');
+    $('heldout').innerHTML = `<b>A test the builder never saw:</b> ${h.cases} cases written separately and run once. Attacks stopped: ${att}. Legit buys allowed with Claude: ${ha.legit_correct} / ${ha.legit_total}, wrongly blocked: ${ha.false_blocks}.`;
+    $('heldout').hidden = false; }
+  $('prooffoot').innerHTML = `${j.cases} labeled purchases, written by the team and revised after the first run${h ? `; the separate ${h.cases}-case set was written by an independent reviewer` : ''}. Full results and code: <a href="https://github.com/JordiBen/agenttab/tree/main/eval">eval/</a>.`;
+  $('hown').textContent = j.cases;
+  if (j.test_count) $('testcount').textContent = j.test_count + ' ';
+  if (stale.includes('ai')) { STALE_AI = true; if (!$('feedmode').classList.contains('on')) $('feedfoot').textContent = 'Replayed from our committed test run, previous catalog (dry run: no money moved). Your own demo purchases print here live.'; }
+  problem(j); }
+// The problem section's example: one real case, with its real verdicts with no guard and with AgentTab (rules + Claude).
+function problem(j) { const box = $('probex'); if (!box) return; const id = box.dataset.case;
+  const row = k => ((j.modes[k] || {}).rows || []).find(x => x.id === id);
+  const none = row('none'), ai = row('ai'), d = (FEED.all || []).find(x => x.id === id);
+  if (d) { const q = d.purpose.match(/'([^']+)'/); $('probq').textContent = q ? q[1] : d.purpose; }
+  const word = {allow: ['bought', 'BOUGHT'], block: ['block', 'BLOCKED'], approval: ['hold', 'HELD']};
+  for (const [el, rw] of [['probnone', none], ['probai', ai]]) { const [c, w] = word[rw ? rw.got : ''] || ['pass', '–']; $(el).className = 'stamp ' + c; $(el).textContent = w; } }
+let STALE_AI = false;
 
 // ---- live Gauntlet ----
 async function runGauntlet() { const b = $('gbtn'); b.disabled = true; b.textContent = 'Running through the live guard…';
@@ -366,17 +371,16 @@ async function runGauntlet() { const b = $('gbtn'); b.disabled = true; b.textCon
   try { const r = await fetch('/api/gauntlet', {method: 'POST'}); const j = await r.json();
     if (!r.ok) { $('gsum').innerHTML = pill('deny', 'unavailable') + ` <span class="sub" style="margin:0">${enc(j.detail || 'error')}</span>`; toast('warn', 'Gauntlet unavailable', j.detail || ''); return; }
     $('gsum').innerHTML = pill('allow', `${j.attacks_stopped}/${j.attacks_total} attacks stopped`) + pill(j.legit_correct === j.legit_total ? 'allow' : 'approval', `${j.legit_correct}/${j.legit_total} legit handled right`) +
-      pill('gray', `no guard would buy ${j.unguarded_would_buy}/${j.attacks_total}`) + pill('blue', j.live_ai ? `${j.llm_calls} live AI calls` : 'keyword mode') + pill('gray', 'PayPal calls: 0');
+      pill('gray', `no guard would buy ${j.unguarded_would_buy}/${j.attacks_total}`) + pill('blue', j.live_ai ? `${j.llm_calls} live Claude calls` : 'keyword check only') + pill('gray', 'nothing charged');
     toast(j.attacks_stopped === j.attacks_total ? 'ok' : 'warn', `${j.attacks_stopped}/${j.attacks_total} attacks stopped live`, `${j.legit_correct}/${j.legit_total} legitimate buys handled right · no money moved`);
     const out = {allow: 'Bought', block: 'Blocked', approval: 'Held for approval'};
     j.cases.forEach((c, i) => setTimeout(() => { $('glist').insertAdjacentHTML('beforeend', `<div class="g-row"><div class="top">
       ${pill(c.attack ? 'deny' : 'allow', c.attack ? c.category.replace(/_/g, ' ') : 'legitimate')}
-      <span class="mono">${enc(c.vendor)}:${enc(c.item)} ${usd(c.amount_usd)}</span>
-      <span style="flex:1"></span>${pill(c.outcome, out[c.outcome] || c.outcome)}<span class="pill gray">${enc(c.layer)}</span>${c.model ? `<span class="pill blue">${c.latency_ms} ms</span>` : ''}</div>
+      <span>${enc(itemName(c.vendor, c.item))} · ${usd(c.amount_usd)}</span>
+      <span style="flex:1"></span>${pill(c.outcome, out[c.outcome] || c.outcome)}${whoLine(c.outcome, c.layer) ? `<span class="who">${enc(whoLine(c.outcome, c.layer))}</span>` : ''}</div>
       <div class="p">"${enc(c.purpose)}"${c.target ? ' → ' + enc(c.target) : ''}</div><div class="r">${c.attack ? '' : 'Expected: ' + enc(out[c.expected] || c.expected) + '. '}${enc(c.reason)}</div></div>`);
       if (i < 4) feedLive(c); }, i * 120));
   } finally { b.disabled = false; b.textContent = 'Run it again'; } }
-function runGauntletFromHero() { $('proof').scrollIntoView({behavior: REDUCED ? 'auto' : 'smooth'}); setTimeout(runGauntlet, 350); }
 
 // ---- schedules (Bryntum) ----
 let DS = null, OS = null;

@@ -48,15 +48,28 @@ def _open(browser, server, w, h, **kw):
     return pg
 
 
-def test_proof_tiles_come_from_results_json_with_previous_catalog_label(server, browser):
+def test_proof_table_comes_from_the_results_files_with_previous_catalog_label(server, browser):
+    """landing-copy v2 section 5 (replaces the proof tiles): one table, three rows, every number from eval/results.json, plus
+    the held-out row from eval/heldout-results.json, the indirect-injection sentence and the footnote counts."""
     pg = _open(browser, server, 1440, 900)
     sc = httpx.get(server + "/api/scorecard").json()
-    kw, ai = sc["modes"]["keyword"], sc["modes"]["ai"]
-    pg.wait_for_function("document.getElementById('tai').textContent.includes('/')")
-    assert pg.inner_text("#tkw").replace(" ", "") == f"{kw['attacks_stopped']}/{kw['attacks_total']}"
-    assert pg.inner_text("#tai").replace(" ", "") == f"{ai['attacks_stopped']}/{ai['attacks_total']}"
-    assert pg.inner_text("#hlegit").replace(" ", "") == f"{ai['legit_correct']}/{ai['legit_total']}"
-    assert pg.is_visible("#tstale") == ("ai" in sc.get("stale_modes", []))
+    res = json.loads((ROOT / "eval/results.json").read_text()); held = json.loads((ROOT / "eval/heldout-results.json").read_text())
+    pg.wait_for_function("document.querySelectorAll('#scoretbl tbody tr').length === 3")
+    rows = pg.eval_on_selector_all("#scoretbl tbody tr", "trs => trs.map(t => [...t.cells].map(c => c.innerText.replace(/\\s+/g, ' ').trim()))")
+    for (mode, name), row in zip((("none", "No guard"), ("keyword", "Rules only"), ("ai", "Rules + Claude")), rows):
+        m = res["modes"][mode]; stale = " previous catalog" if mode in res.get("stale_modes", []) else ""
+        assert row == [name + stale, f"{m['attacks_stopped']} / {m['attacks_total']}", f"{m['legit_correct']} / {m['legit_total']}", str(m["false_blocks"])]
+    ind = res["by_category"]["indirect_injection"]
+    assert f"{ind['keyword']} of {ind['total']} with rules alone, {ind['ai']} of {ind['total']} with Claude." in pg.inner_text("#proofline")
+    hs = {m: held[m]["summary"] for m in ("none", "keyword", "ai")}; n = len(held["ai"]["rows"])
+    att = ", ".join(f"{name} {hs[m]['attacks_stopped']} / {hs[m]['attacks_total']}"
+                    for m, name in (("none", "no guard"), ("keyword", "rules only"), ("ai", "rules + Claude")))
+    assert pg.is_visible("#heldout") and pg.inner_text("#heldout") == (f"A test the builder never saw: {n} cases written separately "
+        f"and run once. Attacks stopped: {att}. Legit buys allowed with Claude: {hs['ai']['legit_correct']} / {hs['ai']['legit_total']}, "
+        f"wrongly blocked: {hs['ai']['false_blocks']}.")
+    foot = pg.inner_text("#prooffoot")
+    assert foot.startswith(f"{res['cases']} labeled purchases") and f"the separate {len(held['ai']['rows'])}-case set" in foot
+    assert pg.inner_text("#hown") == str(res["cases"]) and pg.inner_text("#testcount").strip() == str(sc["test_count"])
     assert pg.errs == []
 
 
@@ -77,13 +90,25 @@ def test_showcase_swaps_to_the_real_verdict_of_each_scenario(server, browser):
         pg.click(f"#scen button[data-case='{case}']"); pg.wait_for_timeout(400)
         assert pg.get_attribute(f"#scen button[data-case='{case}']", "aria-selected") == "true"
         word = {"block": "BLOCKED", "approval": "HELD", "allow": "ALLOWED"}[by[case]["outcome"]]
-        assert pg.inner_text("#stage .stamp") == word and by[case]["layer"] in pg.inner_text("#stage")
+        # landing-copy v2: who decided, in plain words; the layer name stays in the API
+        who = {"block": "Stopped by: ", "approval": "Waiting for: owner approval", "allow": ""}[by[case]["outcome"]]
+        stage = pg.inner_text("#stage")
+        assert pg.inner_text("#stage .stamp") == word and who in stage
+        assert "layer" not in stage.lower() and "policy-" not in stage and "allowlist" not in stage
+        assert by[case]["purpose"] in stage
 
 
-def test_primary_action_funds_a_session_then_runs_the_injected_purchase(server, browser):
+def test_primary_action_jumps_to_try_it_and_the_demo_shop_still_runs_the_injected_purchase(server, browser):
+    # landing-copy v2: "Try to trick the agent" jumps to section 4 (the compare panel); the guided demo stays below it.
     pg = _open(browser, server, 1440, 900)
+    pg.click("#herotry"); pg.wait_for_timeout(1200)
+    assert pg.evaluate("location.hash") == "#try"
+    top = pg.evaluate("document.getElementById('try').getBoundingClientRect().top")
+    assert -5 <= top < 200, top
+    assert pg.is_visible("#cmpbtn")
+    pg.click("text=1. Start demo session"); pg.wait_for_function("sessionStorage.dkey")
     with pg.expect_request(lambda r: r.url.endswith("/api/purchases") and r.method == "POST", timeout=20000) as req:
-        pg.click("text=Try to make the agent overspend")
+        pg.click("text=6. Try an injected instruction")
     body = json.loads(req.value.post_data)
     assert body["target"] == "https://example.com/partner-offer" and "instruction" in body["purpose"].lower()
     assert pg.evaluate("sessionStorage.dkey")
@@ -167,8 +192,7 @@ def test_h1_is_at_most_two_lines(server, browser, w, h):
     lines = pg.evaluate("""() => { const h = document.querySelector('h1'); const s = getComputedStyle(h);
       return Math.round(h.getBoundingClientRect().height / parseFloat(s.lineHeight)); }""")
     assert lines <= 2
-    if w <= 640:
-        assert pg.inner_text("h1").strip() == "A tab, not your card."
+    assert " ".join(pg.inner_text("h1").split()) == "Let your AI agent shop. Keep your rules."
     pg.close()
 
 
@@ -177,7 +201,7 @@ def test_how_it_works_captions_have_room(server, browser, w, h):
     """Review (c): no one-word-per-line captions: each caption sits below the bar with at least ~13rem of width."""
     pg = _open(browser, server, w, h)
     widths = pg.eval_on_selector_all(".how-caps li", "els => els.map(e => e.getBoundingClientRect().width)")
-    assert len(widths) == 5 and min(widths) >= 200
+    assert len(widths) == 4 and min(widths) >= 200                 # landing-copy v2: four steps (was five)
     assert pg.evaluate("document.querySelectorAll('#howbar p').length") == 0
     pg.close()
 
@@ -191,11 +215,12 @@ def test_two_screenshots_each_half_the_page_wide(server, browser):
     pg.close()
 
 
-def test_feature_list_has_no_boxes(server, browser):
+def test_developer_list_has_no_boxes(server, browser):
+    # landing-copy v2: the six-item feature list became the four-line For developers list (same tooth marker, no boxes)
     pg = _open(browser, server, 1440, 900)
-    r = pg.eval_on_selector_all(".features li", """els => els.map(e => { const s = getComputedStyle(e), b = getComputedStyle(e, '::before');
+    r = pg.eval_on_selector_all(".dev-list li", """els => els.map(e => { const s = getComputedStyle(e), b = getComputedStyle(e, '::before');
       return [s.backgroundColor, s.borderTopStyle, b.content !== 'none' && parseFloat(b.width) <= 14]; })""")
-    assert len(r) == 6 and all(bg in ("rgba(0, 0, 0, 0)", "transparent") and bs == "none" and marker for bg, bs, marker in r)
+    assert len(r) == 4 and all(bg in ("rgba(0, 0, 0, 0)", "transparent") and bs == "none" and marker for bg, bs, marker in r)
     pg.close()
 
 
@@ -236,23 +261,15 @@ def test_anchor_jumps_land_below_the_sticky_nav(server, browser):
 
 
 @pytest.mark.parametrize("w,h", [(1440, 900), (768, 1024), (390, 844)])
-def test_proof_tile_names_follow_the_number_not_an_eyebrow(server, browser, w, h):
-    """Review 3 (b): '37 / 47 rules alone', not small label text above the number."""
+def test_proof_numbers_sit_in_their_row_with_the_name_first_not_an_eyebrow(server, browser, w, h):
+    """Review 3 (b) for the table that replaced the tiles: each mode's name and its numbers share one row (no small label
+    stacked above a number), numbers at least 16px, and the table fits the screen."""
     pg = _open(browser, server, w, h)
-    pg.wait_for_function("document.getElementById('tai').textContent.includes('/')")
-    assert pg.evaluate("document.querySelectorAll('.ptile .lbl').length") == 0
-    tiles = pg.evaluate("""() => [...document.querySelectorAll('.ptile .big')].map(b => { const n = b.firstElementChild, u = b.querySelector('.unit');
-      const nr = n.getBoundingClientRect(), ur = u ? u.getBoundingClientRect() : null;
-      return {first: b === b.parentElement.firstElementChild, numid: n.id, unit: u ? u.textContent : null,
-              after: u ? !!(n.compareDocumentPosition(u) & Node.DOCUMENT_POSITION_FOLLOWING) : false,
-              sameLine: ur ? ur.top < nr.bottom && ur.bottom > nr.top : false, above: ur ? ur.bottom <= nr.top + 1 : true,
-              unitPx: u ? parseFloat(getComputedStyle(u).fontSize) : 0}; })""")
-    assert [t["numid"] for t in tiles] == ["tkw", "tai", "tnone", "hlegit", "hlat"]
-    for t in tiles:
-        assert t["first"] and t["unit"] and t["after"] and t["unitPx"] >= 16, t
-        assert not t["above"], t                           # the name never sits above the number
-        if w == 768:                                       # where the review saw the eyebrows: inline with the number
-            assert t["sameLine"], t
+    pg.wait_for_function("document.querySelectorAll('#scoretbl tbody tr').length === 3")
+    rows = pg.evaluate("""() => [...document.querySelectorAll('#scoretbl tbody tr')].map(t => { const c = [...t.cells].map(x => x.getBoundingClientRect());
+      return {same: c.every(r => r.top === c[0].top), px: [...t.cells].slice(1).map(x => parseFloat(getComputedStyle(x).fontSize))}; })""")
+    assert len(rows) == 3 and all(r["same"] and min(r["px"]) >= 16 for r in rows), rows
+    assert pg.evaluate("document.getElementById('scoretbl').getBoundingClientRect().right <= innerWidth + 0.5")
     pg.close()
 
 
@@ -314,4 +331,62 @@ def test_agents_heading_is_never_covered_arriving_from_either_direction(server, 
         pg.evaluate(f"scrollTo(0, {y0 - off})"); pg.wait_for_timeout(450)
         top, covered = pg.evaluate(_COVERED, ["#ownerhint h3", "Agents"])
         assert covered == [], f"{direction} offset {off}: heading top={top} covered by {covered}"
+    pg.close()
+
+
+# ---------------- landing-copy v2 ----------------
+_QUOTED = "#feed .pur, #stage .purp, .cmp-text, .g-row .p, #probq, #dpolicy, #dout, .ag-root-wrapper, .b-scheduler, #developers"
+
+
+def test_rendered_page_has_no_forbidden_words_outside_the_developer_section(server, browser):
+    """landing-copy v2 "words to avoid", checked on the page as rendered by app.js: hero receipt, scenarios, a compare
+    run, a Gauntlet run and a demo purchase. Quoted data (the agent's purposes and targets, grids, the raw console) and the
+    For developers section are excluded: the list is about our words, not about the attack texts."""
+    from tests.test_landing import forbidden_in
+    pg = _open(browser, server, 1440, 900)
+    pg.wait_for_function("document.querySelectorAll('#cmpcase option').length > 1")
+    pg.click("#cmpbtn"); pg.wait_for_selector("#cmpr .stamp")
+    pg.select_option("#cmpcase", "legit-01") if pg.locator("#cmpcase option[value='legit-01']").count() else None
+    pg.wait_for_timeout(200); pg.click("#cmpbtn"); pg.wait_for_timeout(800)
+    pg.click("#gbtn"); pg.wait_for_function("document.querySelectorAll('#glist .g-row').length >= 10", timeout=20000)
+    pg.click("text=1. Start demo session"); pg.wait_for_function("sessionStorage.dkey")
+    pg.click("text=5. Try a gift card"); pg.wait_for_function("document.getElementById('dverdict').textContent.includes('Blocked')")
+    pg.wait_for_function("document.querySelectorAll('#feed .fe .who').length >= 1", timeout=20000)
+    text = pg.evaluate(f"""() => {{ const c = document.body.cloneNode(true);
+      c.querySelectorAll('{_QUOTED}, script, style').forEach(e => e.remove()); return c.innerText; }}""")
+    assert forbidden_in(text) == [], forbidden_in(text)
+    assert "Stopped by:" in text and "Rules + keyword check" in text      # the rendered parts really were there
+    pg.close()
+
+
+def test_problem_example_shows_the_real_verdicts_of_its_eval_case(server, browser):
+    pg = _open(browser, server, 1440, 900)
+    res = json.loads((ROOT / "eval/results.json").read_text())
+    case = pg.get_attribute("#probex", "data-case")
+    got = {m: next(r["got"] for r in res["modes"][m]["rows"] if r["id"] == case) for m in ("none", "ai")}
+    word = {"allow": "BOUGHT", "block": "BLOCKED", "approval": "HELD"}
+    pg.wait_for_function("document.getElementById('probai').textContent !== '…' && document.getElementById('probq').textContent !== '…'")
+    assert pg.inner_text("#probnone") == word[got["none"]] and pg.inner_text("#probai") == word[got["ai"]]
+    purpose = next(c["purpose"] for c in json.loads((ROOT / "eval/cases.json").read_text()) if c["id"] == case)
+    assert pg.inner_text("#probq") in purpose and len(pg.inner_text("#probq")) > 20
+    pg.close()
+
+
+def test_status_pill_reads_the_copy_label(server, browser):
+    pg = _open(browser, server, 390, 844)                          # visible on a phone too: the pill is in the top bar
+    pg.wait_for_function("document.getElementById('navlive').dataset.status")
+    st = pg.get_attribute("#navlive", "data-status")
+    assert pg.inner_text("#navlive") == {"live": "AI guard: on", "busy": "AI guard busy: purchases wait for you",
+                                         "off": "AI guard off (local preview)"}[st]
+    assert pg.is_visible("#navlive")
+    pg.close()
+
+
+def test_vendor_budget_bars_still_render_after_the_proof_section_rewrite(server, browser):
+    # The proof rewrite dropped the category bars and, with them, the shared .track rule the demo's vendor budgets use.
+    pg = _open(browser, server, 1440, 900)
+    pg.click("text=1. Start demo session"); pg.wait_for_function("document.querySelector('#dbudgets .track')", timeout=20000)
+    r = pg.evaluate("""() => [...document.querySelectorAll('#dbudgets .track')].map(t => { const b = t.getBoundingClientRect();
+      return [b.width, b.height, getComputedStyle(t).backgroundColor]; })""")
+    assert r and all(w >= 20 and h >= 4 and bg != "rgba(0, 0, 0, 0)" for w, h, bg in r), r
     pg.close()

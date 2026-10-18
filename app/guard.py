@@ -208,4 +208,4 @@ class SpendGuard:
             return Decision(False, "purpose too vague to justify spend", "heuristic")
         if re.search(r"\b(only|allowed:)", p) and PERSONAL.search(purpose):
             return Decision(False, "purpose suggests personal / non-business use", "heuristic")
-        return Decision(True, "no policy clause violated (heuristic mode)", "heuristic")
+        return Decision(True, "no policy clause violated (keyword check)", "heuristic")

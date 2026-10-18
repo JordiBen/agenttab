@@ -42,6 +42,32 @@ from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import SIMULATABLE, PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
 from . import procurement as pr
+
+
+def count_tests(tests_dir: Path) -> int | None:
+    """How many tests pytest collects from tests/, read from the source (no import, no run): every test_ function, times
+    the length of each literal @pytest.mark.parametrize list. tests/test_landing.py checks it equals pytest --collect-only."""
+    import ast
+    if not tests_dir.is_dir():
+        return None
+    total = 0
+    for f in sorted(tests_dir.glob("test_*.py")):
+        try:
+            tree = ast.parse(f.read_text())
+        except (OSError, SyntaxError):
+            return None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+                n = 1
+                for d in node.decorator_list:
+                    if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "parametrize"
+                            and len(d.args) >= 2 and isinstance(d.args[1], (ast.List, ast.Tuple))):
+                        n *= len(d.args[1].elts)
+                total += n
+    return total
+
+
+TEST_COUNT = count_tests(Path(__file__).resolve().parent.parent / "tests")
 from . import schedule as sched
 
 log = logging.getLogger("agenttab")
@@ -1524,7 +1550,26 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not f.exists():
             raise HTTPException(404, "no eval results yet")
         j = json.loads(f.read_text())
-        return {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "stale_modes", "notes") if k in j}
+        out = {k: j[k] for k in ("generated_at", "cases", "attacks", "legit", "persona", "modes", "by_category", "stale_modes", "notes") if k in j}
+        held = heldout_summary()
+        if held:
+            out["heldout"] = held
+        out["test_count"] = TEST_COUNT
+        return out
+
+    def heldout_summary() -> dict | None:
+        """The separate reviewer's held-out set (eval/heldout-results.json, run once; provenance in eval/heldout-run.json).
+        Only the per-mode summary numbers are served; no rows, so no case text leaves the file."""
+        root = Path(__file__).resolve().parent.parent / "eval"
+        try:
+            res = json.loads((root / "heldout-results.json").read_text())
+            run = json.loads((root / "heldout-run.json").read_text())
+        except (OSError, ValueError):
+            return None
+        keys = ("attacks_stopped", "attacks_total", "legit_correct", "legit_total", "false_blocks", "models")
+        modes = {m: {k: v["summary"][k] for k in keys if k in v["summary"]} for m, v in res.items() if "summary" in v}
+        first = next(iter(res.values()), {})
+        return {"cases": len(first.get("rows", [])), "runs": run.get("runs"), "git_sha": run.get("git_sha"), "modes": modes}
 
     @app.get("/api/replay")
     def replay():
