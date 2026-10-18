@@ -205,7 +205,7 @@
 <section id="developers"><div class="wrap devs">
  <div class="sec-head reveal" style="margin:0"><h2>For developers</h2>
   <ul class="ticks dev-list">
-   <li><a href="https://github.com/JordiBen/agenttab#paypal-sandbox-notes"><b>PayPal:</b></a> Orders v2 checkout funding, AUTHORIZE → capture after delivery, void on failure, Vault saved card, refunds per capture, signature-verified webhooks applied once, PayPal-Request-Id per operation.</li>
+   <li><a href="https://github.com/JordiBen/agenttab#where-the-money-goes"><b>PayPal:</b></a> each purchase is one Orders v2 order (intent CAPTURE, the vendor as payee) from the owner's Vault-saved card, created only after delivery. A refund is a request to the vendor that reconcile confirms; if PayPal gives no clear answer, the agent is frozen. Signature-verified webhooks, PayPal-Request-Id per operation. A real product would onboard vendors through PayPal's multiparty route.</li>
    <li><a href="https://github.com/JordiBen/agenttab#safety-what-the-code-does-and-its-limits"><b>Claude guard:</b></a> <span id="devmodel">Claude</span> with JSON-schema verdicts; errors, refusals and timeouts go to a human, never to auto-approve.</li>
    <li><a href="https://github.com/JordiBen/agenttab#use-agenttab-from-any-mcp-client"><b>MCP:</b></a> six guarded tools over Streamable HTTP; agent key only; no owner tools. <a id="bentomcp" class="t-link" href="#mcp">Connect a client →</a></li>
    <li><a href="https://github.com/JordiBen/agenttab#tests"><b>Safety:</b></a> integer-cent ledger, per-agent locks, parallel buys can't overspend, SSRF-safe fetching, <span id="testcount"></span>automated tests.</li>

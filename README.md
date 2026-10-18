@@ -24,6 +24,9 @@ $18 sample by hand defeats the point.
 6. **A schedule the agent keeps.** Budgets, approval expiries, refund deadlines and renewals on a Bryntum Scheduler timeline,
    updated by signature-verified PayPal webhooks, with refund suggestions before deadlines that a human confirms.
 
+On the live site the demo agent is vendor-funded instead of using a tab: each purchase is paid by PayPal straight to
+the vendor from the owner's saved card. See [Where the money goes](#where-the-money-goes).
+
 ## Safety scorecard (measured, not claimed)
 
 67 labeled purchases in [`eval/cases.json`](eval/cases.json): 20 legitimate shop purchases and
@@ -192,21 +195,50 @@ Complete verdicts from the primary model are cached for 10 minutes, keyed by a S
   the credit and freezes the agent. The response says what happened (`auto_topup`).
 
 ### Where the money goes
-- **Today on the live site (vendor payouts off):** every PayPal capture lands in
-  AgentTab's own sandbox merchant account. Tab top-ups and approval holds set no payee, and the shop vendors' delivery is simulated
-  (`"fulfillment": "simulated"` in `app/procurement.py`).
-- **Only when vendor payouts are switched on (`VENDOR_PAYOUTS=1`; it is off on the live site):** an agent can be
-  vendor-funded. AgentTab holds no money for it: the owner saves PayPal's sandbox test card and sets a 30-day budget.
-  Each allowed purchase is reserved against the budget, AgentTab's fulfilment step runs (still simulated for the shop
-  vendors), and then one PayPal sandbox order (`intent=CAPTURE`, `payee` = that vendor's sandbox merchant account) is
-  paid from the saved card (`test_one_capture_order_straight_to_the_vendor`,
-  `test_paypal_only_after_fulfil_and_amount_is_the_reservation`). A vendor with no merchant id configured is blocked
-  (`test_vendor_without_id_blocked_before_guard_and_fulfil`). A refused payment freezes the agent
-  (`test_definite_refusal_after_delivery`), and so does a reply that doesn't match the order
-  (`test_response_mismatch_is_flagged_and_freezes`). Refunds are requested with the vendor and never credit a tab
-  (`test_refund_of_vendor_paid_purchase_never_credits_tab_or_calls_paypal`). Top-ups and tab refunds answer `410` for
-  these agents (`test_owner_topups_410_for_vendor_agents`). With the flag off, a vendor-funded agent is refused rather
+- **On the live site** vendor payouts are switched on (`VENDOR_PAYOUTS=1`): its `/healthz` reports `vendors_payable`, a
+  field that only exists with the flag on (`test_vendor_fields_only_with_flag`, `test_healthz_vendors_payable_count_only`).
+  A demo session there is vendor-funded and AgentTab holds no money for it: the session saves PayPal's sandbox test card
+  in the Vault (setup token, then payment token: [`vault_sandbox_card`](app/paypal.py#L404)) and gives the agent a
+  $100 30-day budget ([`demo_session`](app/main.py#L2240), `test_demo_session_is_vendor_funded_with_the_flag_on`).
+- **One payment per purchase, straight to the vendor, after the delivery step.** An allowed purchase is reserved against
+  the budget, AgentTab's delivery step runs (simulated for the shop vendors: `"fulfillment": "simulated"` in
+  [`app/procurement.py`](app/procurement.py)), and only then one PayPal Orders v2 order is created with
+  `intent: CAPTURE`, the vendor's sandbox merchant account as `payee` and the owner's saved card as the payment source
+  ([`vendor_order_body`](app/paypal.py#L476), [`vendor_buy`](app/main.py#L883);
+  `test_one_capture_order_straight_to_the_vendor`, `test_paypal_only_after_fulfil_and_amount_is_the_reservation`).
+  If the delivery step fails, PayPal is never called (`test_fulfil_fails_no_paypal_call`). PayPal's reply must match the
+  amount, the payee and the purchase id before the purchase counts as paid
+  ([`check_payment`](app/vendorpay.py#L63), `test_response_mismatch_is_flagged_and_freezes`). A vendor with no
+  merchant id configured is blocked (`test_vendor_without_id_blocked_before_guard_and_fulfil`).
+- **Approval above $60 happens in AgentTab, not in PayPal.** The purchase waits with no PayPal call; the owner's approval
+  runs the same delivery step and then the one capture order (`test_above_threshold_reserves_no_paypal`,
+  `test_approve_then_fulfil_then_one_capture_order`).
+- **A refund is a refund request to the vendor.** AgentTab can't refund a capture that landed in the vendor's account
+  (PayPal answered 403 in the sandbox run: [docs/vendor-payouts-plan.md](docs/vendor-payouts-plan.md)), so the Refund
+  button records a request with that vendor, with no PayPal call and no tab credit
+  ([`request_vendor_refund`](app/main.py#L1148), `test_refund_request_moves_to_refund_requested_without_paypal`).
+  The amount keeps counting until reconcile reads the capture from PayPal and finds it refunded, fully or in part
+  ([`reconcile_vendor`](app/main.py#L1534), `test_refunded_capture_becomes_refunded_and_stops_counting`,
+  `test_partial_refund_keeps_counting_then_full`, `test_vendor_refunded_without_a_request`).
+- **No clear answer from PayPal means the agent is frozen.** A refused payment becomes `payment_failed` and freezes the
+  agent (`test_definite_refusal_after_delivery`). With no definite answer after one retry with the same PayPal-Request-Id,
+  the purchase becomes `payment_unknown`, keeps counting against the budget and the agent is frozen
+  ([`settle_vendor_payment`](app/main.py#L939), `test_still_unknown_after_one_retry`). Reconcile replays the same
+  Request-Id to find out what happened (`test_reconcile_replays_unknown_with_same_request_id`), and unfreezing is refused
+  while reconcile can still decide (`test_unfreeze_refused_while_reconcile_can_still_decide`).
+- **Every PayPal call is logged with PayPal's debug id**, the purchase id and the PayPal-Request-Id; never the token, a
+  card number or a merchant id ([`_req`](app/paypal.py#L113),
+  `tests/test_paypal_debug_log.py::test_vendor_payment_logs_debug_id_purchase_and_request_id`).
+- **Tab-funded agents** (created in the owner console, and every agent with vendor payouts switched off) keep the tab:
+  every PayPal capture lands in AgentTab's own sandbox merchant account; the only request body that sets a `payee` is
+  [`vendor_order_body`](app/paypal.py#L476) (`test_tab_agent_flow_unchanged_with_flag_on`,
+  `test_demo_session_stays_tab_funded_with_the_flag_off`). Top-ups and tab refunds answer `410` for vendor-funded agents
+  (`test_owner_topups_410_for_vendor_agents`). With vendor payouts switched off, a vendor-funded agent is refused rather
   than charged to a tab (`test_flag_off_vendor_agent_stays_blocked`). These tests run against the PayPal mock.
+- **A real product would use PayPal's multiparty route:** seller onboarding for each vendor, which also lets the platform
+  refund on the seller's behalf. That is a partner feature, and this sandbox demo doesn't use it
+  ([docs/vendor-payouts-impl-plan.md](docs/vendor-payouts-impl-plan.md);
+  [PayPal: seller onboarding](https://developer.paypal.com/docs/multiparty/seller-onboarding/build-onboarding/)).
 
 ### Try the demo agent
 1. Open the dashboard, create an agent, and copy its key.
@@ -222,7 +254,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
    - Writes a brief.
 
 ## Public demo mode (`DEMO_MODE=1`)
-- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $60 approval threshold, $120 per purchase, $250 per day). It's funded with $100 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends two SaaS seats ($78) to approval and approves it with the sandbox card, watches a gift card and a prompt injection get blocked, and refunds individual purchases.
+- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $60 approval threshold, $120 per purchase, $250 per day). With vendor payouts switched on (the live site) it gets PayPal's sandbox test card saved in the Vault and a $100 30-day budget, and each purchase is paid to the vendor ([Where the money goes](#where-the-money-goes)); with them off, its tab is funded with $100 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends two SaaS seats ($78) to approval and approves it, watches a gift card and a prompt injection get blocked, and refunds individual purchases.
 - Visitors only ever hold their own agent key. Only agents created by `/api/demo/session` (flagged as demo agents) may play
   "owner" of their own purchases (approve, reject, refund, demo clock, demo report). Regular agents can't, even on a demo
   server. All other owner endpoints need `ADMIN_TOKEN` (24+ random characters, required in demo mode, no default).
