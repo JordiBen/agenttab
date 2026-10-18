@@ -3,6 +3,11 @@
 Status: **research and plan only, no code on this branch.** Option A is approved in principle by the reviewer (2026-10-17). Every claim links to a PayPal developer page.
 Anything not yet exercised in our own sandbox is marked **UNSURE**.
 
+**Update, Oct 18 2026 (US re-spike, see the section of that name):** with US sandbox vendor accounts, Option A's payment works:
+a vault card paid to each vendor was authorized and captured by our app (HTTP 201, debug ids below), and PayPal took its fee
+from the vendor's side. **Our app could not refund those captures** (`403 NOT_AUTHORIZED / PERMISSION_DENIED` for all three).
+The PayPal-wallet vault variant can't be set up headless: it needs a one-time buyer approval in a browser.
+
 ## Goal
 An approved purchase is paid by PayPal **straight to the vendor**, and each vendor is a sandbox **business** account.
 AgentTab never holds a balance. A "tab" turns into a **budget envelope**: a set of limits (budget, per-purchase max, daily cap,
@@ -21,7 +26,7 @@ approval threshold) enforced by the same `procurement.decide()` pipeline, and no
 | Does AgentTab hold money? | **No** | **Yes** (payouts are funded from our balance), which breaks the goal | No |
 | Works in sandbox without partner onboarding? | Likely yes (see the UNSURE notes) | Yes, sandbox testing allowed before approval; live needs approval | Sandbox works with a standard developer account, but each seller must go through the onboarding flow |
 | Code change | Small: add `payee` to the existing vault-charge body | New API (`/v1/payments/payouts`), and the top-up stays | Large: Partner Referrals, seller onboarding, auth-assertion headers |
-| Refunds | `/v2/payments/captures/{id}/refund`; whether the API caller may refund a capture paid to another payee is **UNSURE** | Only an unclaimed item can be cancelled; there is no refund of a claimed payout | Supported for the partner, with permissions |
+| Refunds | `/v2/payments/captures/{id}/refund`: **refused for the API caller** on a capture paid to another payee (`403 PERMISSION_DENIED`, US re-spike); the vendor or an approved partner must refund | Only an unclaimed item can be cancelled; there is no refund of a claimed payout | Supported for the partner, with permissions |
 
 ### A. Orders v2 with `payee` and a Vault card (recommended)
 - "By default, money is paid to the application owner… To specify a different payee… include the `email_address` or `merchant_id`"
@@ -35,7 +40,9 @@ approval threshold) enforced by the same `procurement.decide()` pipeline, and no
 - **Spike result (Oct 17 2026, sandbox, see "Sandbox spike" below): a vault card charged to a different payee was REJECTED**
   with `422 PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING` ("Payee account is not setup to be able to process card payments"),
   PayPal debug id `f259063a191ee`. So it isn't the vault ownership that blocks it, it's the *payee's* card-processing capability.
-- **UNSURE (not reached):** `intent: AUTHORIZE` + payee capture, and refunds/fees on such a capture. See the spike section.
+- **US re-spike (Oct 18 2026):** with US sandbox vendor accounts the same call **succeeds** for all three vendors:
+  `intent: AUTHORIZE` + payee, then our app's capture, both `201`. Our app's refund of those captures is refused (`403`).
+  See "US re-spike" below.
 
 ### B. Payouts
 - Requires a business account, "Access to PayPal Payouts" (you must request it), and "Sufficient funds in your PayPal business
@@ -159,21 +166,140 @@ AgentTab's own sandbox account) works today: that is the existing auto top-up, c
 ### What would unblock Option A (each needs a decision; none run)
 1. **Enable cards on the vendor sandbox accounts** (Developer Dashboard → the vendor's sandbox business account / its app →
    Advanced Credit and Debit Card Payments, or the sandbox onboarding steps), then re-run the same 3-call spike unchanged
-   (`notes/scripts/vendor_spike.py`, private). Cheapest test; it answers Q2 and Q3 if call 1 then succeeds. Needs Yarden in
+   (`notes/scripts/vendor_spike.py`, private). Cheapest test; it answers Q2 and Q3 if call 1 then succeeds. Needs the project owner in
    the dashboard. **UNSURE** whether the dashboard allows it for these accounts.
 2. **Payee + PayPal wallet instead of a card** (`payment_source.paypal`, buyer approves each order): avoids the payee
    card-capability check (**UNSURE**), but every purchase needs the owner to click through PayPal, so it isn't autonomous.
    A new spike, not covered by the current approval.
 3. **Option C (multiparty, seller onboarding)**: the production answer; sandbox works with a standard developer account
    (https://developer.paypal.com/docs/multiparty/), but it means a new integration. Not for the hackathon.
-Recommendation: try 1 first (dashboard only, no code). If it can't be enabled, keep the shipped design (ledger caps, money to
+(Superseded by the US re-spike below: new US vendor accounts were used instead of changing the Cyprus ones.)
+Recommendation at the time: try 1 first (dashboard only, no code). If it can't be enabled, keep the shipped design (ledger caps, money to
 AgentTab's sandbox account) and leave A/C as the documented production path.
 
-## Access needed from Yarden
+## US re-spike: results (run Oct 18 2026, 07:10 Asia/Jerusalem (UTC+3); local script, sandbox host only)
+Scope: approved by the reviewer; run from the box against `https://api-m.sandbox.paypal.com` only (hard-coded), never against
+the hosted app, with our app's sandbox REST credentials. Vendors are three **new US** sandbox business accounts (Verified,
+country US; the dashboard doesn't say whether card processing is enabled). Their merchant ids live only in the untracked
+chmod-600 env file (`US_*` variables, next to the old Cyprus ones) and appear here as placeholders. Script:
+`notes/scripts/vendor_spike_us.py` (private, an extended copy of the first spike). Full redacted log kept privately.
+No app code changed.
+
+### 1. Option A: Orders v2 + `payee.merchant_id` + Vault card, the same 3 calls, per US vendor
+
+| # | Request | HTTP | PayPal debug id | Result |
+|---|---|---|---|---|
+| prereq | `POST /v3/vault/setup-tokens` (standard sandbox test Visa) | 201 | `ca4c4b1d78ead` | setup token, `APPROVED` |
+| prereq | `POST /v3/vault/payment-tokens` from the setup token | 201 | `ca4c4b1d99db1` | vault token (VISA 1111) |
+| **1** | `POST /v2/checkout/orders` intent=AUTHORIZE, vault card, payee = `<US_SAMPLEBOX_MERCHANT_ID>` | **201** | `f9424082029fe` | order `COMPLETED`, authorization `CREATED` |
+| **2** | `POST /v2/payments/authorizations/{id}/capture` (our app) | **201** | `f886941b5bd89` | capture `COMPLETED`, $10.00 |
+| read | `GET /v2/payments/captures/{id}` | 200 | `ca4c4b1f5e9d9` | payee = SampleBox; fee $0.75, net $9.25; `disbursement_mode: INSTANT` |
+| **3** | `POST /v2/payments/captures/{id}/refund` (our app) | **403** | `f912700c665d3` | `NOT_AUTHORIZED` / `PERMISSION_DENIED` |
+| **1** | same order, payee = `<US_SHOPSUITE_MERCHANT_ID>` | **201** | `ca4c4b1fb2da2` | order `COMPLETED`, authorization `CREATED` |
+| **2** | capture (our app) | **201** | `f880477cbe985` | capture `COMPLETED` |
+| read | `GET` capture | 200 | `f211706d4af5b` | payee = ShopSuite |
+| **3** | refund (our app) | **403** | `ca4c4b2199af4` | `NOT_AUTHORIZED` / `PERMISSION_DENIED` |
+| **1** | same order, payee = `<US_SITESCOPE_MERCHANT_ID>` | **201** | `f293760fbbe46` | order `COMPLETED`, authorization `CREATED` |
+| **2** | capture (our app) | **201** | `f328695fa0ed5` | capture `COMPLETED` |
+| read | `GET` capture | 200 | `f45214718fa74` | payee = SiteScope Data |
+| **3** | refund (our app) | **403** | `f452147396f4e` | `NOT_AUTHORIZED` / `PERMISSION_DENIED` |
+| cleanup | `DELETE /v3/vault/payment-tokens/<vault token>` | 204 | `f218553a2c335` | test token removed |
+
+Order body: identical to the first spike's call 1 above (USD 10.00, `stored_credential` MERCHANT/UNSCHEDULED/SUBSEQUENT),
+with the US merchant id as `payee.merchant_id`. Refund body: `{"amount": {"currency_code": "USD", "value": "10.00"}}`.
+Refund response (`403`, debug id `f912700c665d3`; the other two are the same):
+```json
+{"name": "NOT_AUTHORIZED", "message": "Authorization failed due to insufficient permissions.",
+ "details": [{"issue": "PERMISSION_DENIED", "field": "capture_id", "location": "path",
+   "description": "You do not have permission to access or perform operations on this resource."}],
+ "links": [{"href": "https://developer.paypal.com/docs/api/payments/v2/#error-PERMISSION_DENIED", "rel": "information_link"}]}
+```
+
+**Answers (US accounts):**
+1. **Can a Vault card be charged to another sandbox business account as payee?** **Yes** for all three US accounts (debug ids
+   `f9424082029fe`, `ca4c4b1fb2da2`, `f293760fbbe46`). The same request against the Cyprus accounts was refused with
+   `PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING` (`f259063a191ee`). **UNSURE** why: the visible difference is the country (US vs CY);
+   that US sandbox business accounts come with card processing enabled is our inference, not something PayPal's pages state.
+   Pay-another-account is a documented DIRECT MERCHANT feature
+   (https://developer.paypal.com/docs/checkout/standard/customize/pay-another-account/).
+2. **Does `intent=AUTHORIZE` work with a payee, and can our app capture it?** **Yes.** The authorization is placed on the
+   vendor's account and our app (the API caller that created the order) captured it, `201` three times (`f886941b5bd89`,
+   `f880477cbe985`, `f328695fa0ed5`). So the hold-first envelope works: hold at approval, capture on delivery. Authorization
+   expiry reported by PayPal: 29 days after creation (`expiration_time` in the order response, debug id `f9424082029fe`).
+3. **Who pays the fee?** **The vendor (payee).** `seller_receivable_breakdown` on the SampleBox capture: gross $10.00,
+   `paypal_fee` $0.75, net $9.25 (debug id `ca4c4b1f5e9d9`). `seller_protection` is `NOT_ELIGIBLE` and the card type reads
+   `UNKNOWN` (same response).
+4. **Who can refund?** **Not our app.** All three refunds were refused with `403 PERMISSION_DENIED` (`f912700c665d3`,
+   `ca4c4b2199af4`, `f452147396f4e`), even though the capture response carries a `refund` link. PayPal documents refunding a
+   seller's capture on their behalf as a partner feature: "Be an approved partner. Onboard sellers before you begin", with the
+   `PayPal-Auth-Assertion` and `PayPal-Partner-Attribution-Id` headers
+   (https://developer.paypal.com/docs/multiparty/issue-refund/). Without that, only the vendor can refund from its own
+   account. **UNSURE:** whether a non-partner "third-party permission" grant from each vendor would also work for REST refunds
+   (not tried; the only REST path documented is the partner one above).
+
+**Left over in sandbox:** three $10.00 sandbox captures sit in the three US vendor accounts, not refunded (sandbox money only;
+capture ids in the private log). A vendor can refund them from its own sandbox account at https://www.sandbox.paypal.com
+(Activity → the payment → Refund). **UNSURE:** exact menu labels in the current sandbox UI (not opened).
+
+### 2. PayPal-wallet Vault variant (`payment_source.paypal.vault_id` + `payee`)
+- **No wallet vault token exists.** The app only ever vaults the sandbox test *card* (`app/paypal.py`, `authorize_vault`); no
+  PayPal-wallet token has been created on this sandbox app.
+- **It can't be created headless.** PayPal's flow: `POST /v3/vault/setup-tokens` with `payment_source.paypal` "Returns a
+  `PAYER_ACTION_REQUIRED` status… Redirects to the `approve` URL"; "The payer must authenticate and approve the creation of a
+  billing agreement"; the setup token "expires after 3 days" by default
+  (https://developer.paypal.com/docs/checkout/save-payment-methods/purchase-later/payment-tokens-api/paypal/). Our run:
+
+| Request | HTTP | PayPal debug id | Result |
+|---|---|---|---|
+| `POST /v3/vault/setup-tokens` with `payment_source.paypal` (usage_type MERCHANT, customer_type CONSUMER, return/cancel URLs on example.com) | 201 | `ca4c4b2467bf7` | status `PAYER_ACTION_REQUIRED`, `approve` link to `https://www.sandbox.paypal.com/agreements/approve` |
+| `POST /v3/vault/payment-tokens` from that setup token, without approval (headless attempt) | **422** | `f220813879512` | `UNPROCESSABLE_ENTITY` / `PAYER_ACTION_REQUIRED`: "Please make sure setup up token is approved." |
+
+- **Stopped here, as agreed.** The orders with `payment_source.paypal.vault_id` + payee were not attempted.
+- **The one browser step needed** (sandbox only, before the setup token expires: 3 days after creation, about Oct 21 2026
+  07:10 Asia/Jerusalem by the docs' default; **UNSURE** exact expiry, PayPal didn't return one):
+  1. Open the private approve link (kept in `notes/spike/wallet-approve-PRIVATE.txt`, chmod 600, not in this repo) in a browser.
+  2. Log in with a sandbox **Personal** (buyer) account: Developer Dashboard → Testing Tools → Sandbox Accounts → the
+     `…@personal.example.com` account → View/Edit account for its password. Not a vendor account, not a real PayPal login.
+  3. Click the agree/continue button to save PayPal for "AgentTab sandbox". The browser then lands on
+     `https://example.com/agenttab-spike/return…`, which is a placeholder page. That's expected; nothing needs to load there.
+  4. Tell the agent; it runs `vendor_spike_us.py wallet-finish <setup token id>`: payment token, then for each US vendor
+     order(AUTHORIZE, `payment_source.paypal.vault_id`, payee) → capture → refund, and records status and debug id per call.
+- **Expected but UNSURE:** even if the wallet orders go through, the refund will most likely be refused the same way
+  (`PERMISSION_DENIED`), because the refusal is about who owns the capture (the payee), not the payment source. And live use
+  of saved PayPal wallets needs PayPal's approval: "You must be approved and have your account configured for billing
+  agreements to set up a reference transaction" (same PayPal page).
+
+### 3. Option 3: multiparty / partner onboarding (the production route)
+Option A now *pays* vendors, but it fails one of our rules (refunds, which the envelope promises for undelivered items) unless
+the vendor refunds by hand. The documented way to do both on the vendor's behalf is multiparty:
+- **Onboard each vendor** with the Partner Referrals API (`POST /v2/customer/partner-referrals`), asking for the `PAYMENT` and
+  `REFUND` features; the vendor completes a PayPal sign-up link; requires being "an approved partner"
+  (https://developer.paypal.com/docs/multiparty/seller-onboarding/build-onboarding/).
+- **Refund on the vendor's behalf** with `PayPal-Auth-Assertion` (JWT naming our client id and the vendor's payer id) plus
+  `PayPal-Partner-Attribution-Id` on `/v2/payments/captures/{id}/refund`
+  (https://developer.paypal.com/docs/multiparty/issue-refund/).
+- Overview and partner contact form: https://developer.paypal.com/docs/multiparty/. **UNSURE:** whether sandbox partner
+  onboarding works end to end before partner approval (not tried).
+- For the hackathon: not built. It is a new integration (onboarding flow, per-vendor consent, assertion headers).
+
+### What this means now
+- **Pay-to-vendor works in sandbox (US accounts):** hold at approval, our app captures on delivery, the vendor receives the
+  money and pays the fee. **Refunds do not work from our app.**
+- **Decision needed before any app code (none written):**
+  (a) ship pay-to-vendor for sandbox purchases with refunds marked "vendor refunds" (the owner can't refund from AgentTab
+  after capture; before capture, the hold can still be voided, **UNSURE**: void of a payee authorization by our app was not
+  tested), or
+  (b) keep the shipped design (money to AgentTab's sandbox account, refunds work) and document Option A's result plus
+  Option 3 as the production route.
+- Either way the README keeps saying that a real product would use multiparty with vendor onboarding.
+
+## Access needed from the project owner
 - Three sandbox **business** accounts (Developer Dashboard → Testing tools → Sandbox accounts), one per vendor
   (SiteScope Data, SampleBox, ShopSuite), and their **merchant ids** (Account ID). Put them in Render and `.secrets` as env vars, not in git.
 - Confirm the sandbox REST app still has **Vault** enabled (it does today, because the vault tests run against sandbox).
 - (Done: the 3 sandbox vendor accounts exist; merchant ids live in an untracked chmod-600 env file. The 3-call spike ran on Oct 17 2026; results above.)
-- Next: check whether Advanced Credit and Debit Card Payments can be enabled on the 3 vendor sandbox accounts (unblock option 1).
+- (Done Oct 18 2026: 3 new US sandbox vendor accounts, ids in the same env file as `US_*`; re-spike results above.)
+- Next, optional: the one browser approval for the PayPal-wallet variant (steps in the US re-spike section), and a decision
+  between (a) and (b) under "What this means now".
 - Optional, only if we choose B: request Payouts access on the sandbox/live account.
 - Optional, only if we choose C: the multiparty contact form (https://developer.paypal.com/docs/multiparty/).
