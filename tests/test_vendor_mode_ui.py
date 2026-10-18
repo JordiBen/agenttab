@@ -59,14 +59,17 @@ NODE = shutil.which("node")
 def test_vendor_mode_copy_in_node(tmp_path):
     js = tmp_path / "vm.js"
     js.write_text("const els = {};\n"
-                  "const $ = id => els[id] || (els[id] = {id, textContent: 'tab copy', hidden: false, style: {display: ''}});\n"
+                  "const ph = {textContent: 'Start a session to see the tab.'};\n"
+                  "const $ = id => els[id] || (els[id] = {id, textContent: 'tab copy', hidden: false, style: {display: ''},\n"
+                  "  querySelector: sel => sel === 'p.sub' ? ph : null});\n"
                   + _fn("vendorModeUI") +
-                  "\nvendorModeUI();\nprocess.stdout.write(JSON.stringify(els));\n", encoding="utf-8")
+                  "\nvendorModeUI();\nels.placeholder = ph;\nprocess.stdout.write(JSON.stringify(els));\n", encoding="utf-8")
     out = json.loads(subprocess.run([NODE, str(js)], capture_output=True, text=True, encoding="utf-8", check=True).stdout)
     assert out["dintro"]["textContent"] == INTRO
     assert out["dstartprice"]["textContent"] == "$100 budget"
     assert out["dbudgeth"]["textContent"] == "Budget and vendors"
     assert out["drefundbtn"]["style"]["display"] == "none"
+    assert out["placeholder"]["textContent"] == "Start a session to see the budget."   # before a session: no "tab"
 
 
 def test_vendor_mode_copy_static():
