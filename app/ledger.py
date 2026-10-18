@@ -62,7 +62,9 @@ VENDOR_COUNTED = ("reserved", "pending_approval", "completing", "payment_pending
                   "completed", "refund_requested", "partially_refunded")
 # Fields a status move may also set. Never status, amounts, payee or agent.
 MOVABLE_FIELDS = frozenset({"paypal_order", "paypal_capture", "reason", "fulfillment", "flag", "refund_deadline",
-                            "approval_expires", "paypal_confirmed", "refunded_ts", "decision_source"})
+                            "approval_expires", "paypal_confirmed", "refunded_ts", "decision_source", "started_ts",
+                            "pay_attempt_ts", "pay_vault_id", "refund_requested_ts", "refund_requested_by", "refund_note"})
+INTERNAL_PURCHASE_FIELDS = frozenset({"payee_merchant_id", "pay_vault_id"})   # never in API responses
 
 
 SCHEMA = """
@@ -115,6 +117,12 @@ PURCHASE_MIGRATIONS = [
     ("paypal_authorization", "TEXT"),  # approval purchases: the PayPal hold, captured after delivery
     ("amount_cents", "INTEGER"),    # vendor-funded purchases: whole cents (old rows keep amount_micro only)
     ("payee_merchant_id", "TEXT"),  # vendor-funded: the PayPal merchant id paid (from env; never in API responses)
+    ("started_ts", "REAL"),         # vendor-funded: moved to `completing` (fulfil started)
+    ("pay_attempt_ts", "REAL"),     # vendor-funded: first PayPal call (Request-Id window starts here)
+    ("pay_vault_id", "TEXT"),       # vendor-funded: the saved card used, so a replay sends the same order (internal)
+    ("refund_requested_ts", "REAL"),
+    ("refund_requested_by", "TEXT"),
+    ("refund_note", "TEXT"),
 ]
 
 
@@ -424,6 +432,14 @@ class Ledger:
             self.db.commit()
         return n
 
+    def vendor_rows(self, aid: str, statuses: tuple[str, ...]):
+        """Internal: full vendor-funded purchase rows (merchant id included) in the given statuses, oldest first."""
+        return self.db.execute(f"SELECT * FROM purchases WHERE agent_id=? AND funding='vendor' AND status IN"
+                               f" ({','.join('?' * len(statuses))}) ORDER BY ts", (aid, *statuses)).fetchall()
+
+    def has_vendor_rows(self, aid: str) -> bool:
+        return self.db.execute("SELECT 1 FROM purchases WHERE agent_id=? AND funding='vendor' LIMIT 1", (aid,)).fetchone() is not None
+
     def vendor_counted_cents(self, aid: str, since: float, vendor: str | None = None) -> int:
         q = (f"SELECT COALESCE(SUM(amount_cents),0) FROM purchases WHERE agent_id=? AND funding='vendor'"
              f" AND status IN ({','.join('?' * len(VENDOR_COUNTED))}) AND ts>=?")
@@ -533,7 +549,7 @@ class Ledger:
     def purchases(self, aid: str, limit: int = 200):
         """API listing. The vendor's merchant id never leaves the server."""
         rows = self.db.execute("SELECT * FROM purchases WHERE agent_id=? ORDER BY ts DESC LIMIT ?", (aid, limit))
-        return [{k: v for k, v in dict(r).items() if k != "payee_merchant_id"} |
+        return [{k: v for k, v in dict(r).items() if k not in INTERNAL_PURCHASE_FIELDS} |
                 {"amount_usd": float(from_micro(r["amount_micro"]))} for r in rows.fetchall()]
 
     def captures(self, aid: str):

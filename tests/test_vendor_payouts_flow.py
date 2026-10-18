@@ -628,10 +628,11 @@ def test_refund_of_vendor_paid_purchase_never_credits_tab_or_calls_paypal(env):
     c, pp, L = env
     a = agent(c, L)
     pid = buy(c, a).json()["purchase_id"]
+    n = len(pp.mock_requests)
     r = c.post(f"/api/purchases/{pid}/refund", headers=A)
-    assert r.status_code == 409
-    assert money_entries(L, a["agent_id"]) == [] and pp.mock_refund_log == []
-    assert L.purchase(pid)["status"] == "completed"
+    assert r.status_code == 200 and r.json()["status"] == "refund_requested"      # step 3: a request to the vendor
+    assert money_entries(L, a["agent_id"]) == [] and pp.mock_refund_log == [] and len(pp.mock_requests) == n
+    assert L.purchase(pid)["status"] == "refund_requested"
 
 
 def test_refunded_webhook_for_vendor_capture_never_credits_tab(env):

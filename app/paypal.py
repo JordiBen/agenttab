@@ -108,8 +108,9 @@ class PayPalClient:
         if code:
             raise PayPalError(f"{op}: 422 {code}", code, 422)
 
-    def _mock_record_capture(self, cid: str, amount: Decimal) -> None:
-        self._mock_captures.setdefault(cid, {"amount": Decimal(amount), "refunded": Decimal(0), "status": "COMPLETED"})
+    def _mock_record_capture(self, cid: str, amount: Decimal, payee: str | None = None) -> None:
+        self._mock_captures.setdefault(cid, {"amount": Decimal(amount), "refunded": Decimal(0), "status": "COMPLETED",
+                                             **({"payee": payee} if payee else {})})
 
     @property
     def mock(self) -> bool:
@@ -317,14 +318,32 @@ class PayPalClient:
         return j.get("status", "VOIDED")
 
     def get_capture(self, capture_id: str) -> dict:
-        """PayPal's view of one capture, for reconciliation: {status, amount}."""
+        """PayPal's view of one capture, for reconciliation: {status, amount, payee (merchant id or None)}."""
         if self.mock:
+            code = self.mock_fail.pop("get_capture", "")
+            if code:                              # offline tests: PayPal unavailable for this lookup
+                raise PayPalError(f"get_capture: 503 {code}", code, 503)
             c = self._mock_captures.get(capture_id)
             if not c:
                 raise PayPalError("unknown capture", "INVALID_RESOURCE_ID", 404)
-            return {"status": c["status"], "amount": c["amount"]}
+            return {"status": c["status"], "amount": c["amount"], "payee": c.get("payee")}
         j = self._req("GET", f"/v2/payments/captures/{capture_id}")
-        return {"status": j["status"], "amount": Decimal(j["amount"]["value"])}
+        return {"status": j["status"], "amount": Decimal(j["amount"]["value"]),
+                "payee": (j.get("payee") or {}).get("merchant_id")}
+
+    def get_order(self, order_id: str) -> dict:
+        """PayPal's order JSON (GET /v2/checkout/orders/{id}), unchanged; vendor payouts check it like a create answer."""
+        if self.mock:
+            for o in self.mock_vendor_orders.values():
+                if o["id"] == order_id:
+                    return copy.deepcopy(o)
+            raise PayPalError("unknown order", "INVALID_RESOURCE_ID", 404)
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", order_id or ""):
+            raise PayPalError("bad order id", "INVALID_RESOURCE_ID", 404)
+        try:
+            return self._req("GET", f"/v2/checkout/orders/{order_id}")
+        except httpx.HTTPError as e:
+            raise PayPalError(f"GET order: {type(e).__name__}", "NETWORK", 0)
 
     # ---------- Vault v3: saved sandbox card for owner-approved top-ups ----------
     # Vault only accepts PayPal's generic sandbox test numbers; this is the standard test Visa. Fake money only.
@@ -438,7 +457,7 @@ class PayPalClient:
                 u["payments"] = {"captures": [{"id": cid, "status": "COMPLETED", "amount": dict(u["amount"]),
                                                "final_capture": True, "custom_id": pid}]}
                 self.mock_vendor_orders[rid] = {"id": oid, "status": "COMPLETED", "purchase_units": [u]}
-                self._mock_record_capture(cid, Decimal(u["amount"]["value"]))
+                self._mock_record_capture(cid, Decimal(u["amount"]["value"]), payee_merchant_id)
             if step == "timeout_after":          # PayPal made the order, the answer was lost
                 raise PayPalError("POST /v2/checkout/orders: timeout", "TIMEOUT", 0)
             out = copy.deepcopy(self.mock_vendor_orders[rid])

@@ -393,7 +393,7 @@ def test_fresh_completing_row_untouched(env):
 # ================= never auto-approve, flag off, auth =================
 def test_reconcile_never_approves(env):
     c, pp, L = env
-    a = agent(c, L)
+    a = agent(c, L, envelope=200.0)
     pid = buy(c, a, BLANKETS).json()["purchase_id"]
     stale = buy(c, a, BLANKETS).json()["purchase_id"]
     L.update_purchase(stale, approval_expires=time.time() - 1)
@@ -427,3 +427,32 @@ def test_reconcile_for_tab_agents_unchanged(env):
                                     "daily_cap_usd": 10.0, "per_call_cap_usd": 5.0}, headers=A).json()
     rr = c.post(f"/api/agents/{r['agent_id']}/reconcile", headers=A)
     assert rr.status_code == 200 and rr.json()["ok"] and rr.json()["vendor_purchases"] == []
+
+
+# ---- added after the step-3 mutation check (two guards no test caught) ----
+def test_refund_request_move_is_atomic_against_a_stale_read(env, monkeypatch):
+    """Two refund requests racing: the second read 'completed' before the first committed. Only one may win."""
+    c, pp, L = env
+    a, pid = bought(c, L)
+    stale = dict(L.purchase(pid))
+    assert refund(c, pid, json={"reason": "first"}).status_code == 200
+    real = L.purchase
+    monkeypatch.setattr(L, "purchase", lambda p: dict(stale) if p == pid else real(p))
+    r = refund(c, pid, json={"reason": "second"})
+    assert r.status_code == 409, r.text
+    assert real(pid)["status"] == "refund_requested" and real(pid)["refund_note"] == "first"
+
+
+def test_replay_uses_the_card_of_the_first_attempt(env):
+    """The owner replaced the card after a payment_unknown: the replay must send the original order body
+    (same card), never a different order under the same Request-Id."""
+    c, pp, L = env
+    a, pid = unknown(c, pp, L)
+    first = pays(pp)[0]["body"]
+    pp._mock_vault["vt_replaced_card"] = {"brand": "VISA", "last4": "4242"}
+    L.set_vault(a["agent_id"], "vt_replaced_card", "VISA 4242")
+    n = len(pays(pp))
+    r = reconcile(c, a)
+    assert r.status_code == 200, r.text
+    assert [q["body"] for q in pays(pp)[n:]] == [first]
+    assert "vt_replaced_card" not in json.dumps(pays(pp)[n:])

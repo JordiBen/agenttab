@@ -133,6 +133,10 @@ class TopUp(BaseModel):
 class FreezeReq(BaseModel):
     reason: str = Field(default="frozen by owner", min_length=1, max_length=300)
 
+class RefundNote(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(default="", max_length=300)
+
 class FundingReq(BaseModel):
     """Vendor payouts (VENDOR_PAYOUTS=1): switch one agent between the tab and paying vendors directly."""
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -854,7 +858,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                                                   "reserved", payee, lim, out.layer, out.reason)
         if not pid:
             raise HTTPException(409, f"not charged: {why}")
-        if not ledger.move_purchase(pid, ("reserved",), "completing"):
+        if not ledger.move_purchase(pid, ("reserved",), "completing", started_ts=time.time()):
             raise HTTPException(409, "purchase changed while starting; nothing was charged")
         return fulfil_and_pay(aid, pid, p, out.as_dict())
 
@@ -879,9 +883,12 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         vendor = pr.VENDORS[pu["vendor"]]["name"]
         desc = f"AgentTab: {vendor} {pu['item']} x{pu['quantity']}"
         resp, issue = None, ""
+        vault = pu["pay_vault_id"] or a["vault_id"]
+        if pu["pay_attempt_ts"] is None:     # PayPal keeps the Request-Id for 6 hours from here (reconcile replays)
+            ledger.move_purchase(pid, ("completing",), "completing", pay_attempt_ts=time.time(), pay_vault_id=vault)
         for attempt in (1, 2):
             try:
-                resp = paypal.pay_vendor(a["vault_id"], pu["amount_cents"], pu["payee_merchant_id"], pid, desc)
+                resp = paypal.pay_vendor(vault, pu["amount_cents"], pu["payee_merchant_id"], pid, desc)
                 break
             except PayPalError as e:
                 issue = _issue(e)
@@ -1070,12 +1077,52 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                                refund_deadline=refund_deadline(a, p.vendor), fulfillment=json.dumps(result)[:4000])
         return True
 
-    def refund_one(pu, note: str = "", simulate: str = "") -> dict:
+    def refund_note_text(vendor_name: str, status: str = "refund_requested") -> str:
+        if status == "refunded":
+            return f"Refunded by {vendor_name} through PayPal (confirmed by reconcile)."
+        if status == "partially_refunded":
+            return (f"Partly refunded by {vendor_name} through PayPal; the full amount keeps counting until "
+                    "the refund is complete.")
+        return f"Refund requested: with {vendor_name}. The vendor refunds through PayPal; AgentTab never holds this money."
+
+    def request_vendor_refund(pu, note: str, simulate: str, who: str) -> dict:
+        """Vendor-paid purchase: AgentTab can't refund the vendor's capture (PayPal 403), so the owner's refund
+        becomes a request to the vendor. No PayPal call, no tab credit; it keeps counting until reconcile sees
+        PayPal's capture REFUNDED."""
+        pid = pu["id"]
+        if not s.vendor_payouts:
+            raise HTTPException(503, {"error": "vendor_payouts_disabled", "note": "Vendor payouts are off on this server."})
+        if simulate:
+            raise HTTPException(422, "refund requests to a vendor don't call PayPal; nothing to decline")
+        if pu["status"] != "completed":
+            raise HTTPException(409, f"purchase is {pu['status']}, not refundable")
+        if pr.VENDORS.get(pu["vendor"], {}).get("fulfillment") == "live":
+            raise HTTPException(409, "delivered live data is non-refundable (failed calls are never charged)")
+        if pu["refund_deadline"] is None or time.time() > pu["refund_deadline"]:
+            raise HTTPException(409, "refund window has closed")
+        if not ledger.move_purchase(pid, ("completed",), "refund_requested", refund_requested_ts=time.time(),
+                                    refund_requested_by=who, refund_note=(note or "")[:300]):
+            raise HTTPException(409, f"purchase is {ledger.purchase(pid)['status']}")
+        name = pr.VENDORS[pu["vendor"]]["name"]
+        return {"purchase_id": pid, "status": "refund_requested", "with": name,
+                "amount_usd": pu["amount_cents"] / 100, "note": refund_note_text(name)}
+
+    def purchase_rows(rows: list[dict]) -> list[dict]:
+        """API listing: vendor-paid purchases say who was paid and, for refunds, that the refund is with the vendor."""
+        for r in rows:
+            if r.get("funding") == "vendor":
+                name = pr.VENDORS.get(r["vendor"], {}).get("name", r["vendor"])
+                r["paid_to"] = name
+                st = {"refund_requested": "requested", "partially_refunded": "partial", "refunded": "refunded"}.get(r["status"])
+                if st:
+                    r["refund"] = {"status": st, "with": name, "note": refund_note_text(name, r["status"])}
+        return rows
+
+    def refund_one(pu, note: str = "", simulate: str = "", who: str = "owner") -> dict:
         pid = pu["id"]
         pu = ledger.purchase(pid)
         if pu["funding"] == "vendor":       # the vendor holds this money; never a tab credit or a PayPal refund by us
-            raise HTTPException(409, "this purchase was paid straight to the vendor; AgentTab can't refund it "
-                                     "(refund requests to the vendor are not available yet)")
+            return request_vendor_refund(pu, note, simulate, who)
         if pu["status"] != "completed":
             raise HTTPException(409, f"purchase is {pu['status']}, not refundable")
         if pr.VENDORS.get(pu["vendor"], {}).get("fulfillment") == "live":
@@ -1136,18 +1183,21 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/api/me/purchases")
     def my_purchases(a=Depends(agent_from_key)):
-        return ledger.purchases(a["id"])
+        return purchase_rows(ledger.purchases(a["id"]))
 
     @app.get("/api/purchases", dependencies=[Depends(admin)])
     def list_purchases(agent_id: str):
-        return ledger.purchases(agent_id)
+        return purchase_rows(ledger.purchases(agent_id))
 
     @app.post("/api/purchases/{pid}/refund")
-    def refund_purchase(pid: str, request: Request, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+    def refund_purchase(pid: str, request: Request, body: RefundNote | None = None, x_admin_token: str = Header(""),
+                        x_agent_key: str = Header("")):
         """Refund one purchase inside its refund window. Tab-funded: credit returns to the tab.
         Approval-funded: the purchase's own PayPal capture is refunded."""
         pu = purchase_for(pid, x_admin_token, x_agent_key)
-        return refund_one(pu, simulate=simulated_decline(request))
+        owner = bool(x_admin_token and hmac.compare_digest(x_admin_token.encode(), admin_token.encode()))
+        return refund_one(pu, note=body.reason if body else "", simulate=simulated_decline(request),
+                          who="owner" if owner else "demo-session owner")
 
     @app.post("/api/purchases/{pid}/approve-sandbox-card")
     def approve_sandbox_card(pid: str, request: Request, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
@@ -1222,7 +1272,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 raise HTTPException(409, "the vendor's PayPal account changed since this purchase was requested; "
                                          "reject it and buy again")
             paypal_budget()
-            if not ledger.move_purchase(pid, ("pending_approval",), "completing"):
+            if not ledger.move_purchase(pid, ("pending_approval",), "completing", started_ts=time.time()):
                 raise HTTPException(409, f"purchase is {ledger.purchase(pid)['status']}")
             return fulfil_and_pay(aid, pid, pr.Purchase(pu["vendor"], pu["item"], pu["quantity"], pu["purpose"], pu["target"]))
 
@@ -1270,6 +1320,10 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.post("/api/agents/{aid}/unfreeze", dependencies=[Depends(admin)])
     def unfreeze_agent(aid: str):
         agent_or_404(aid)
+        open_ = vendor_reconcile_blockers(aid) if s.vendor_payouts else []
+        if open_:
+            raise HTTPException(409, {"error": "reconcile_first", "purchases": open_,
+                                      "note": "Run reconcile first: PayPal can still tell whether these were paid."})
         ledger.unfreeze(aid)
         return agent_view(ledger.agent(aid))
 
@@ -1280,8 +1334,14 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         the owner unfreezes it. Lookups that fail transiently are reported as unverified, not as mismatches."""
         agent_or_404(aid)
         problems, rows, unverified = [], [], 0
+        vrows, vskipped = [], False
         with agent_lock_or_busy(aid):   # never races a purchase that is between its commit and its capture
             unverified += settle_stale_auto_topups(aid, problems, rows)
+            if ledger.has_vendor_rows(aid):
+                if s.vendor_payouts:
+                    unverified += reconcile_vendor(aid, problems, vrows)
+                else:                     # flag off: never replay or move vendor payments
+                    vskipped = True
         bal = ledger.balance(aid)
         if bal < 0:
             problems.append(f"tab balance is negative (${bal:.2f})")
@@ -1321,9 +1381,177 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         a = ledger.agent(aid)
         return {"agent_id": aid, "checked": len(rows), "unverified": unverified, "mismatches": problems,
                 "ok": not problems, "frozen": bool(a["frozen_reason"]), "frozen_now": froze,
-                "frozen_reason": a["frozen_reason"], "captures": rows, "balance_usd": float(bal)}
+                "frozen_reason": a["frozen_reason"], "captures": rows, "balance_usd": float(bal),
+                "vendor_purchases": vrows, "vendor_purchases_skipped": vskipped}
 
     STALE_TOPUP_S = 600
+    STALE_VENDOR_S = 600          # a reserved/completing vendor row older than this was cut off mid-flow
+    # PayPal keeps a create-order PayPal-Request-Id for 6 hours (Orders v2 create-order reference); a replay after
+    # that silently creates a NEW order. Replays stop an hour earlier.
+    REPLAY_WINDOW_S = 5 * 3600
+
+    def vendor_reconcile_blockers(aid: str) -> list[str]:
+        """Vendor purchases reconcile can still decide: the owner's unfreeze waits for reconcile."""
+        now, out = time.time(), []
+        for pu in ledger.vendor_rows(aid, ("payment_unknown", "reserved", "completing")):
+            if pu["status"] == "payment_unknown":
+                if pu["pay_attempt_ts"] is None or now - pu["pay_attempt_ts"] <= REPLAY_WINDOW_S:
+                    out.append(pu["id"])
+            elif now - ((pu["started_ts"] if pu["status"] == "completing" else None) or pu["ts"]) >= STALE_VENDOR_S:
+                out.append(pu["id"])
+        return out
+
+    def reconcile_vendor(aid: str, problems: list, out: list) -> int:
+        """Vendor-paid purchases (capture-only). Never approves a pending purchase and never unfreezes.
+        - payment_unknown, or completing after delivery and cut off: replay create-order with the same Request-Id
+          (PayPal returns the first result), only inside the Request-Id window
+        - payment_pending: read the order
+        - completed / refund_requested / partially_refunded (30 days): read the capture (amount, payee, refunds)
+        - reserved / completing before delivery and cut off: nothing was paid; released (flagged if the vendor
+          may have delivered). Returns the number of lookups PayPal couldn't answer."""
+        now, unverified = time.time(), 0
+        a = ledger.agent(aid)
+        ledger.expire_vendor_approvals(aid)
+        for pu in ledger.vendor_rows(aid, ("reserved", "completing", "payment_unknown", "payment_pending", "completed",
+                                           "refund_requested", "partially_refunded")):
+            pid, st, name = pu["id"], pu["status"], pr.VENDORS.get(pu["vendor"], {}).get("name", pu["vendor"])
+            row = {"purchase_id": pid, "vendor": name, "status_before": st, "status_after": st,
+                   "paypal_status": None, "note": ""}
+            if st == "reserved":
+                if now - pu["ts"] < STALE_VENDOR_S:
+                    continue
+                ledger.move_purchase(pid, ("reserved",), "failed", reason="cut off before delivery started; nothing was paid")
+                row.update(status_after="failed", note="cut off before delivery; nothing was paid; released")
+            elif st == "completing":
+                if now - (pu["started_ts"] or pu["ts"]) < STALE_VENDOR_S:
+                    continue
+                if not pu["fulfillment"]:
+                    ledger.move_purchase(pid, ("completing",), "failed", flag="vendor_may_have_delivered",
+                                         reason="cut off during delivery; nothing was paid")
+                    row.update(status_after="failed", note=f"cut off during delivery; nothing was paid; ask {name}")
+                    problems.append(f"purchase {pid} was cut off during delivery and nothing was paid; "
+                                    f"ask {name} whether it was delivered")
+                else:
+                    unverified += replay_vendor_payment(a, pu, row, problems)
+            elif st == "payment_unknown":
+                unverified += replay_vendor_payment(a, pu, row, problems)
+            elif st == "payment_pending":
+                unverified += read_vendor_order(pu, row, problems)
+            else:
+                if not pu["paypal_capture"] or pu["ts"] < now - 30 * 86400:
+                    continue
+                unverified += read_vendor_capture(pu, row, problems)
+            out.append(row)
+        return unverified
+
+    def _apply_vendor_answer(pu, frm: str, j: dict, row: dict, problems: list) -> None:
+        pid = pu["id"]
+        status, info = vendorpay.check_payment(j, pu["amount_cents"], pu["payee_merchant_id"], pid)
+        if status == "flagged":
+            ledger.move_purchase(pid, (frm,), "flagged", paypal_order=info["order_id"], paypal_capture=info["capture_id"],
+                                 flag=info["reason"][:200], reason=f"PayPal's answer didn't match the purchase: {info['reason']}")
+            row.update(status_after="flagged", paypal_status="MISMATCH", note=info["reason"])
+            problems.append(f"purchase {pid}: PayPal's answer didn't match: {info['reason']}")
+            return
+        extra = {"refund_deadline": refund_deadline(ledger.agent(pu["agent_id"]), pu["vendor"])} if status == "completed" else {}
+        if status != frm:
+            ledger.move_purchase(pid, (frm,), status, paypal_order=info["order_id"], paypal_capture=info["capture_id"], **extra)
+        row.update(status_after=status, paypal_status="COMPLETED" if status == "completed" else "PENDING")
+
+    def replay_vendor_payment(a, pu, row: dict, problems: list) -> int:
+        pid, frm = pu["id"], pu["status"]
+        name = pr.VENDORS.get(pu["vendor"], {}).get("name", pu["vendor"])
+        t = pu["pay_attempt_ts"]
+
+        def still_unknown(note: str):
+            if frm != "payment_unknown":
+                ledger.move_purchase(pid, (frm,), "payment_unknown", reason=note)
+            row.update(status_after="payment_unknown", note=note)
+        if t is not None and time.time() - t > REPLAY_WINDOW_S:
+            still_unknown("too old to replay safely")
+            row["paypal_status"] = "NOT_REPLAYED"
+            problems.append(f"purchase {pid}: no definite answer from PayPal and too old to replay safely (PayPal keeps "
+                            f"a Request-Id for 6 hours); check the payment in PayPal and with {name}")
+            return 0
+        vault = pu["pay_vault_id"] or a["vault_id"]
+        if not vault:
+            still_unknown("no saved card on record to replay with")
+            problems.append(f"purchase {pid}: can't replay the payment, no saved card on record")
+            return 0
+        if t is None:
+            ledger.move_purchase(pid, (frm,), frm, pay_attempt_ts=time.time(), pay_vault_id=vault)
+        paypal_budget()
+        try:
+            j = paypal.pay_vendor(vault, pu["amount_cents"], pu["payee_merchant_id"], pid,
+                                  f"AgentTab: {name} {pu['item']} x{pu['quantity']}")
+        except PayPalError as e:
+            if vendorpay.definite_refusal(e):
+                issue = _issue(e)
+                ledger.move_purchase(pid, (frm,), "payment_failed",
+                                     reason=f"PayPal refused the replayed payment ({issue}); nothing was charged")
+                row.update(status_after="payment_failed", paypal_status="REFUSED", note=issue)
+                problems.append(f"purchase {pid}: PayPal refused the payment ({issue}); {name} delivered unpaid")
+                return 0
+            still_unknown("PayPal unavailable; retry reconcile")
+            row["paypal_status"] = "UNVERIFIED"
+            if frm != "payment_unknown":
+                problems.append(f"purchase {pid}: payment state unknown after a cut-off; PayPal unavailable, retry reconcile")
+            return 1
+        except Exception as e:
+            still_unknown(f"unreadable answer ({type(e).__name__}); retry reconcile")
+            row["paypal_status"] = "UNVERIFIED"
+            return 1
+        _apply_vendor_answer(pu, frm, j, row, problems)
+        return 0
+
+    def read_vendor_order(pu, row: dict, problems: list) -> int:
+        pid = pu["id"]
+        paypal_budget()
+        try:
+            j = paypal.get_order(pu["paypal_order"])
+        except PayPalError as e:
+            if e.status == 404:
+                row["paypal_status"] = "NOT_FOUND"
+                problems.append(f"purchase {pid}: PayPal has no such order")
+                return 0
+            row["paypal_status"] = "UNVERIFIED"
+            return 1
+        _apply_vendor_answer(pu, "payment_pending", j, row, problems)
+        return 0
+
+    def read_vendor_capture(pu, row: dict, problems: list) -> int:
+        pid, st = pu["id"], pu["status"]
+        paypal_budget()
+        try:
+            pc = paypal.get_capture(pu["paypal_capture"])
+        except PayPalError as e:
+            if e.status == 404:
+                row["paypal_status"] = "NOT_FOUND"
+                problems.append(f"purchase {pid}: paid to the vendor but PayPal has no such capture")
+                return 0
+            row["paypal_status"] = "UNVERIFIED"
+            return 1
+        cst = str(pc.get("status"))[:30]
+        row["paypal_status"] = cst
+        bad = []
+        if Decimal(pc["amount"]) * 100 != pu["amount_cents"]:
+            bad.append(f"PayPal capture amount ${Decimal(pc['amount']):.2f}, ledger ${pu['amount_cents'] / 100:.2f}")
+        if pc.get("payee") and pc["payee"] != pu["payee_merchant_id"]:
+            bad.append("capture payee is not the configured vendor")
+        if cst in ("DECLINED", "FAILED", "REVERSED"):
+            bad.append(f"capture is {cst} at PayPal")
+            ledger.move_purchase(pid, (st,), st, flag=cst.lower())
+        if bad:
+            problems.extend(f"purchase {pid}: {b}" for b in bad)
+            row["note"] = "; ".join(bad)
+            return 0
+        if cst == "REFUNDED":
+            ledger.move_purchase(pid, ("completed", "refund_requested", "partially_refunded"), "refunded", refunded_ts=time.time())
+            row.update(status_after="refunded", note="refund confirmed by PayPal")
+        elif cst == "PARTIALLY_REFUNDED" and st != "partially_refunded":
+            ledger.move_purchase(pid, ("completed", "refund_requested"), "partially_refunded")
+            row.update(status_after="partially_refunded", note="partial refund; the full amount keeps counting")
+        return 0
 
     def settle_stale_auto_topups(aid: str, problems: list, rows: list) -> int:
         """An auto top-up credit with no PayPal capture after 10 minutes means the purchase committed but the
@@ -1773,7 +2001,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
 
     @app.get("/api/demo/purchases")
     def demo_purchases(a=Depends(demo_agent)):
-        return ledger.purchases(a["id"])
+        return purchase_rows(ledger.purchases(a["id"]))
 
     @app.get("/api/scorecard")
     def scorecard():
