@@ -71,6 +71,8 @@ function vendorModeUI() {
   $('dstartprice').textContent = '$100 budget';
   $('dbudgeth').textContent = 'Budget and vendors';
   $('drefundbtn').style.display = 'none';
+  const ph = $('dbudgets').querySelector('p.sub');
+  if (ph && ph.textContent.startsWith('Start a session')) ph.textContent = 'Start a session to see the budget.';
 }
 // ---- end vendor payouts ----
 
