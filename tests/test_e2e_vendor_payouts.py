@@ -59,3 +59,19 @@ def test_vendor_demo_budget_buy_and_refund_request(page):
     page.click("#dpurch >> text=Request refund")
     page.wait_for_function("document.getElementById('dpurch').textContent.includes('refund with SampleBox')")
     assert not page.errs, page.errs
+
+
+def test_vendor_mode_copy_in_the_browser(page):
+    """Runs after the buy above: vendor-mode intro, step 1, heading, no tab refund link, PAID stamp alone, budget row."""
+    assert page.inner_text("#dintro") == ("Start a session: the agent gets a $100 30-day budget, and each purchase is paid "
+                                          "by PayPal straight to the vendor from the owner's saved sandbox card")
+    assert page.inner_text("#dstartprice") == "$100 budget"
+    assert page.inner_text("#dbudgeth") == "Budget and vendors"
+    assert not page.is_visible("#drefundbtn")
+    page.evaluate("demoBuy('samplebox', 'ceramic-mug-sample', '', 'Quality-check a stoneware mug from a supplier before we stock it')")
+    page.wait_for_function("document.querySelector('#dverdict .stamp.paid') !== null")
+    assert "Bought" not in page.inner_text("#dverdict")
+    row = page.evaluate("fetch('/api/me/schedule', {headers: {'X-Agent-Key': sessionStorage.dkey}}).then(r => r.json())"
+                        ".then(j => j.resources.find(r => r.kind === 'agent').detail)")
+    assert row == "budget $58 left"                         # $100 - $24 napkins - $18 mug
+    assert not page.errs, page.errs
