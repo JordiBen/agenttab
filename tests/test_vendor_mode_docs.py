@@ -1,5 +1,5 @@
-"""README and the video script describe vendor mode only as something that applies once vendor payouts are switched on
-on the live site (the flag is off there), and every claim names a test that backs it (rule: docs say only what code and
+"""README and the video script describe vendor mode and where the money goes (the README says the flag is on on the live
+site; the video script still describes the earlier recording), and every claim names a test that backs it (rule: docs say only what code and
 tests prove; the shop vendors' delivery is simulated, so no vendor action is claimed)."""
 import re
 from pathlib import Path
@@ -24,9 +24,11 @@ def _backed(sec: str):
 
 def test_readme_where_the_money_goes():
     sec = _section((ROOT / "README.md").read_text(encoding="utf-8"), "### Where the money goes")
-    assert "AgentTab's own sandbox merchant account" in sec                    # tab mode, what the live site does
-    assert "VENDOR_PAYOUTS=1" in sec and "off on the live site" in sec
-    assert re.search(r"[Oo]nly when vendor payouts are switched on", sec)
+    # The flag is on on the live site since 2026-10-18 (reviewer-approved): the README now says so, and tab mode stays
+    # described for tab-funded agents. The live-flow claims themselves are checked in tests/test_paypal_flow_docs.py.
+    assert "AgentTab's own sandbox merchant account" in sec                    # tab mode, still true for tab agents
+    assert "VENDOR_PAYOUTS=1" in sec and "On the live site" in sec and "off on the live site" not in sec
+    assert re.search(r"[Ww]ith vendor payouts switched off", sec)
     assert "simulated" in sec and not re.search(SIMULATED_CLAIMS, sec, re.I)
     _backed(sec)
 
