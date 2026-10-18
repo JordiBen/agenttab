@@ -1,0 +1,17 @@
+{
+ "about": "Provenance of eval/heldout-results.json. run_heldout.py (written by the reviewer) does not embed git state in its output, so it is recorded here instead of editing the results file.",
+ "git_sha": "1ed93eb93b69cc1211a4ff98cbc91565cf604cca",
+ "git_dirty": false,
+ "git_dirty_checked": "eval.run_eval.git_state() and 'git status --porcelain' (empty), immediately before and after the run",
+ "started_at": "2026-10-18T04:12:55Z",
+ "finished_at": "2026-10-18T04:13:38Z",
+ "runs": 1,
+ "command": "python run_heldout.py heldout.json --modes none,keyword,ai --out heldout-results.json",
+ "guard_provider": "anthropic",
+ "model": "claude-haiku-5-5",
+ "sha256": {
+  "eval/heldout.json": "262c4bae4cef4b015f40be1ac423ef326a6053405f642967e27a273fa6bf1e38",
+  "run_heldout.py": "c4444dd92dbd05c35c163f0e5da16bfde6cd1168583e60f82f3aa9792f385c0d",
+  "eval/heldout-results.json": "cc27c4cf3d136f91af81ca3dd0980a7f64a387b931f15f09bc1f1b77260c81c4"
+ }
+}
