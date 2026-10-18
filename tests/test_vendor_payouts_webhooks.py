@@ -52,7 +52,9 @@ def pending(c, pp, L):
     r = buy(c, a)
     assert r.status_code == 200 and r.json()["status"] == "payment_pending", r.text
     pp.mock_vendor_tamper = None
-    return a, r.json()["purchase_id"]
+    pid = r.json()["purchase_id"]
+    stored_order(pp, pid)["purchase_units"][0]["payments"]["captures"][0]["status"] = "PENDING"   # PayPal's own view
+    return a, pid
 
 
 def stored_order(pp, pid):

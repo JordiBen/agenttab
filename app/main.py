@@ -1223,6 +1223,32 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return refund_one(pu, note=body.reason if body else "", simulate=simulated_decline(request),
                           who="owner" if owner else "demo-session owner")
 
+    def check_vendor_capture(pu, cid: str) -> tuple[dict | None, str, int]:
+        """GET one capture and check it pays THIS vendor purchase: vendor (payee must be present), amount in cents,
+        USD, custom_id = pid, COMPLETED, and not already recorded on another purchase.
+        Returns (capture, "", 0), or (None, why, http status) without changing anything."""
+        pid = pu["id"]
+        paypal_budget()
+        try:
+            pc = paypal.get_capture(cid)
+        except PayPalError as e:
+            return (None, "PayPal has no such capture", 409) if e.status == 404 else (None, "PayPal didn't answer", 503)
+        bad = ""
+        try:
+            if not pc.get("payee") or pc["payee"] != pu["payee_merchant_id"]:
+                bad = "that capture wasn't paid to this purchase's vendor"
+            elif pc.get("currency") != "USD" or Decimal(pc["amount"]) * 100 != pu["amount_cents"]:
+                bad = "that capture's amount differs from this purchase"
+            elif pc.get("custom_id") != pid:
+                bad = "that capture belongs to a different purchase"
+            elif pc.get("status") != "COMPLETED":
+                bad = f"that capture is {str(pc.get('status'))[:30]}, not COMPLETED"
+            elif (ledger.purchase_by_capture(cid) or {"id": pid})["id"] != pid:
+                bad = "that capture is already recorded on another purchase"
+        except (ArithmeticError, TypeError, ValueError, KeyError):
+            bad = "PayPal's capture answer was unreadable"
+        return (None, bad, 409) if bad else (pc, "", 0)
+
     @app.post("/api/purchases/{pid}/resolve-unknown")
     def resolve_unknown(pid: str, body: ResolveUnknown, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
         """Owner settles a vendor purchase whose payment stayed unknown past the Request-Id replay window:
@@ -1253,29 +1279,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 return {"purchase_id": pid, "status": "payment_failed",
                         "note": f"Marked not paid. It no longer counts against the budget; settle delivery with {name}."}
             cid = body.capture_id
-            paypal_budget()
-            try:
-                pc = paypal.get_capture(cid)
-            except PayPalError as e:
-                if e.status == 404:
-                    raise HTTPException(409, "PayPal has no such capture; nothing changed")
-                raise HTTPException(503, "PayPal didn't answer; nothing changed, try again")
-            bad = ""
-            try:
-                if not pc.get("payee") or pc["payee"] != pu["payee_merchant_id"]:
-                    bad = "that capture wasn't paid to this purchase's vendor"
-                elif pc.get("currency") != "USD" or Decimal(pc["amount"]) * 100 != pu["amount_cents"]:
-                    bad = "that capture's amount differs from this purchase"
-                elif pc.get("custom_id") != pid:
-                    bad = "that capture belongs to a different purchase"
-                elif pc.get("status") != "COMPLETED":
-                    bad = f"that capture is {str(pc.get('status'))[:30]}, not COMPLETED"
-                elif ledger.purchase_by_capture(cid):
-                    bad = "that capture is already recorded on another purchase"
-            except (ArithmeticError, TypeError, ValueError, KeyError):
-                bad = "PayPal's capture answer was unreadable"
-            if bad:
-                raise HTTPException(409, f"{bad}; nothing changed")
+            pc, bad, http = check_vendor_capture(pu, cid)
+            if pc is None:
+                raise HTTPException(http, f"{bad}; nothing changed" + (", try again" if http == 503 else ""))
             order = str(pc.get("order_id") or "")[:64]
             if not ledger.move_purchase(pid, ("payment_unknown",), "completed", paypal_capture=cid, paypal_order=order,
                                         refund_deadline=refund_deadline(ledger.agent(pu["agent_id"]), pu["vendor"]),
@@ -1797,6 +1803,65 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 return l["href"].rstrip("/").rsplit("/", 1)[1]
         return ""
 
+    def vendor_event_purchase(typ: str, res: dict):
+        """The vendor-paid purchase a capture event is about: by capture id (the refund's 'up' link for REFUNDED),
+        else by custom_id = pid. Returns (purchase or None, capture id from the event)."""
+        cid = _capture_of_refund(res) if typ == "PAYMENT.CAPTURE.REFUNDED" else str(res.get("id", ""))
+        cid = cid if re.fullmatch(r"[A-Za-z0-9-]{1,64}", cid or "") else ""
+        pu = ledger.purchase_by_capture(cid) if cid else None
+        if not pu:
+            cu = res.get("custom_id")
+            if isinstance(cu, str) and re.fullmatch(r"pu_[0-9a-f]{12}", cu):
+                pu = ledger.purchase(cu)
+        return (pu, cid) if pu and pu["funding"] == "vendor" else (None, cid)
+
+    def vendor_webhook(typ: str, pu, cid: str) -> tuple[str, str, str]:
+        """A PayPal capture event for a vendor-paid purchase only says which purchase to re-read. The decision comes
+        from PayPal's own GET (order or capture, the same checks as reconcile). Never credits the tab, never
+        unfreezes; problems freeze the agent. Reconcile stays the source of truth if PayPal doesn't answer."""
+        pid, aid, kind = pu["id"], pu["agent_id"], typ.rsplit(".", 1)[1].lower()
+        head = f"vendor purchase {pid}"
+        if not s.vendor_payouts:
+            return aid, pid, f"{head}: {kind} event ignored; vendor payouts are off"
+        problems, row = [], {"purchase_id": pid, "status_after": None, "paypal_status": None, "note": ""}
+        with agent_lock_or_busy(aid):
+            pu = ledger.purchase(pid)
+            st = row["status_after"] = pu["status"]
+            if typ == "PAYMENT.CAPTURE.PENDING":
+                return aid, pid, f"{head}: capture pending at PayPal; nothing changed"
+            if st == "payment_pending":
+                read_vendor_order(pu, row, problems)
+            elif st in ("completed", "refund_requested", "partially_refunded") and pu["paypal_capture"]:
+                read_vendor_capture(pu, row, problems)
+                if typ == "PAYMENT.CAPTURE.COMPLETED" and not problems and row["paypal_status"] == "COMPLETED":
+                    ledger.update_purchase(pid, paypal_confirmed=time.time())
+            elif st in ("payment_unknown", "payment_failed", "failed") and typ == "PAYMENT.CAPTURE.COMPLETED" and cid:
+                pc, why, _ = check_vendor_capture(pu, cid)
+                if pc is None:
+                    return aid, pid, f"{head}: capture not verified ({why}); nothing changed"
+                order = str(pc.get("order_id") or "")[:64]
+                if st == "payment_unknown":
+                    ledger.move_purchase(pid, ("payment_unknown",), "completed", paypal_capture=cid, paypal_order=order,
+                                         refund_deadline=refund_deadline(ledger.agent(aid), pu["vendor"]),
+                                         reason="verified with PayPal after a capture webhook")
+                    row["status_after"] = "completed"
+                else:                            # money moved on a purchase we recorded as unpaid: keep it counted
+                    ledger.move_purchase(pid, (st,), "flagged", paypal_capture=cid, paypal_order=order,
+                                         flag="captured_after_refusal",
+                                         reason="PayPal shows a completed capture on a purchase recorded as not paid")
+                    row["status_after"] = "flagged"
+                    problems.append(f"PayPal shows a completed capture on purchase {pid}, recorded as {st}")
+            else:
+                return aid, pid, f"{head}: {kind} event noted; it is {st}, nothing changed"
+        if problems:
+            freeze(aid, f"PayPal {kind} event on {pid}: {problems[0]}"[:300])
+            return aid, pid, f"{head}: {problems[0]}; agent frozen for review"
+        if row["paypal_status"] in ("UNVERIFIED", "NOT_FOUND") and row["status_after"] == st:
+            return aid, pid, f"{head}: PayPal didn't confirm it on re-read; nothing changed, reconcile will check"
+        if row["status_after"] != st:
+            return aid, pid, f"{head}: now {row['status_after']} (re-read from PayPal)"
+        return aid, pid, f"{head}: PayPal still shows {row['paypal_status'] or st}; nothing changed"
+
     def handle_webhook(typ: str, res: dict) -> tuple[str, str, str]:
         """Apply one PayPal event to the ledger. Returns (agent_id, purchase_id, effect)."""
         rid = str(res.get("id", ""))
@@ -1814,6 +1879,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             return o["agent_id"], pu["id"] if pu else "", ("approved purchase completed" if kind == "approved"
                                                          else "top-up captured") + " from the webhook"
         if typ.startswith("PAYMENT.CAPTURE."):
+            vpu, vcid = vendor_event_purchase(typ, res)
+            if vpu:                              # vendor-paid: re-read PayPal, never trust the body, never a tab credit
+                return vendor_webhook(typ, vpu, vcid)
             amount = Decimal(str((res.get("amount") or {}).get("value", "0")))
             if typ == "PAYMENT.CAPTURE.REFUNDED":
                 refund_id, cid = rid, _capture_of_refund(res)

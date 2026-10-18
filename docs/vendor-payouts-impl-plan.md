@@ -234,6 +234,12 @@ Start Oct 19 after the go-ahead. Tests are written first in every step.
   purchase → `refunded`, with no ledger credit (there is no tab). `CHECKOUT.ORDER.APPROVED` and authorization events aren't
   used by vendor agents (no checkout page, no holds). Legacy handling stays for tab agents. Nothing depends on delivery
   (**UNSURE**); reconcile is the source of truth.
+  **Built (step 4):** the event body is never trusted, even with a verified signature: it only names the purchase (capture id,
+  the refund's `up` link, or `custom_id`). AgentTab then re-reads PayPal with the reconcile checks: `payment_pending` → order
+  `GET`; `completed`/`refund_requested`/`partially_refunded` → capture `GET` (refunds, partial amount, reversals);
+  `payment_unknown` + `COMPLETED` → capture `GET` checked like resolve-unknown → `completed`; a verified capture on a
+  `payment_failed`/`failed` purchase → `flagged` (keeps counting). Problems freeze; nothing unfreezes; never a tab credit; flag
+  off → ignored; PayPal not answering → nothing changes and reconcile checks later.
 - **Reconcile** (`/api/agents/{aid}/reconcile`): for vendor agents it walks vendor purchases instead of `fund` entries:
   `payment_pending`/`payment_unknown` → replay create-order with the same Request-Id (returns the first result) or `GET` the
   order; `completed`/`refund_requested`/`partially_refunded` in the last 30 days → `GET` the capture: amount, status, payee.
