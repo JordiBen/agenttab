@@ -120,7 +120,7 @@
 <section id="demoshop"><div class="wrap">
  <div class="ws" id="workspace">
   <div class="sec-head reveal"><h2 class="ws-h">Run the full demo shop</h2>
-  <p class="ws-sub">Lumen &amp; Loom, a small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card).</p></div>
+  <p class="ws-sub">Lumen &amp; Loom, a small home-goods shop. Its agent buys supplier samples, SaaS seats and competitor research. <span id="dintro">Start a session: the tab is funded with <b>$100 of PayPal sandbox money</b> (a real sandbox capture with a test card)</span>.</p></div>
  <div id="demo" class="stack" style="display:none">
   <div class="grid-ws">
    <div class="stack">
@@ -129,7 +129,7 @@
     <button type="button" class="policy clamp" onclick="this.classList.toggle('clamp')" aria-label="Owner's policy (click to expand)"><b>Owner's policy</b> <span class="more">expand</span><span id="dpolicy"></span></button>
     <p id="dexpired" class="note" style="display:none"></p>
     <div class="steplist">
-     <button class="btn btn-primary" onclick="demoStart()">1. Start demo session <span class="price">funds $100</span></button>
+     <button class="btn btn-primary" onclick="demoStart()">1. Start demo session <span class="price" id="dstartprice">funds $100</span></button>
      <button class="btn btn-step ok" onclick="demoBuy('samplebox','ceramic-mug-sample','','Quality-check a stoneware mug from a supplier before we stock it')">2. Buy a supplier mug sample <span class="price">$18</span></button>
      <button class="btn btn-step ok" onclick="demoBuy('sitescope-data','tech_detect','https://www.brooklinen.com','Compare the e-commerce platform of competitor Brooklinen with ours')">3. Competitor research <span class="price">$24</span></button>
      <button class="btn btn-step warn" onclick="demoBuy('shopsuite','inventory-seat','','Two inventory software seats to track stock across our two storage rooms',2)">4. Inventory SaaS, 2 seats <span class="price">$78 <span class="long">→ </span>needs approval</span></button>
@@ -142,14 +142,14 @@
      <div class="full"><label for="durl">Target URL (research only)</label><input id="durl" placeholder="https://competitor.example"></div>
      <div class="full"><label for="dpurpose">Purpose</label><input id="dpurpose" placeholder="e.g. evaluate napkin samples for the autumn catalog"></div>
      <div class="full row"><button class="btn btn-light" onclick="demoBuy(dvendor.value,ditem.value,durl.value,dpurpose.value)">Buy custom</button>
-      <button class="btn btn-ghost" onclick="demoReport()">AI spend report</button><button class="btn btn-ghost" onclick="demoRefund()">Refund unused tab credit</button></div>
+      <button class="btn btn-ghost" onclick="demoReport()">AI spend report</button><button class="btn btn-ghost" id="drefundbtn" onclick="demoRefund()">Refund unused tab credit</button></div>
     </div>
    </div>
       </div>
    <div class="stack">
     <div class="card"><h3>Agent console</h3><p class="sub">What the guard decided, and why.</p>
      <div class="verdict" id="dverdict" aria-live="polite"></div><p id="dbusy" class="note" role="status" style="display:none"></p><pre class="console" id="dout"></pre></div>
-    <div class="card"><h3>Tab and vendor budgets</h3><div id="dbudgets"><p class="sub">Start a session to see the tab.</p></div></div>
+    <div class="card"><h3 id="dbudgeth">Tab and vendor budgets</h3><div id="dbudgets"><p class="sub">Start a session to see the tab.</p></div></div>
    </div>
   </div>
   <div class="card"><div class="card-head"><h3>Schedule <span class="pill blue">Bryntum Scheduler</span></h3>

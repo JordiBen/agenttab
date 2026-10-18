@@ -65,6 +65,13 @@ function vendorBought(j, g) {
     (j.envelope ? ` · ${usd(j.envelope.remaining_usd)} left of the 30-day budget` : '') +
     (j.status === 'payment_pending' ? ' · PayPal is still finishing the payment' : '') +
     (j.refund_deadline ? ` · refund can be requested until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : ''); }
+// VENDOR_PAYOUTS=1 with a vendor-funded demo agent: budget wording, and no tab refund (the server answers 410).
+function vendorModeUI() {
+  $('dintro').textContent = `Start a session: the agent gets a $100 30-day budget, and each purchase is paid by PayPal straight to the vendor from the owner's saved sandbox card`;
+  $('dstartprice').textContent = '$100 budget';
+  $('dbudgeth').textContent = 'Budget and vendors';
+  $('drefundbtn').style.display = 'none';
+}
 // ---- end vendor payouts ----
 
 // ---- toasts ----
@@ -306,6 +313,7 @@ async function dload_() { if (!DK()) return; const h = {'X-Agent-Key': DK()};
     const sig = pur.map(x => x.id + ':' + x.status).join(',');
     if (DSIG !== null && sig !== DSIG && DS) DS.refresh(); DSIG = sig; }
   if (m.ok) { const j = await m.json();
+    if (j.funding_model === 'vendor') vendorModeUI();
     if (j.envelope) $('dbudgets').innerHTML = budgetPanel(j, pur); else $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#38450f')}</div>` + bars(j.vendor_budgets, pur || []);
     $('dpolicy').textContent = '"' + j.policy + '"'; } }
 // ---- MCP connect panel (demo key lives only in this tab's sessionStorage) ----
@@ -340,7 +348,7 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
   const vo = vendorOutcome(j);
   if (vo) { verdict(pill(vo[0] === 'bad' ? 'deny' : 'approval', vo[1])); toast(vo[0], vo[1], vo[2]); show(vo[2]); }
-  else if (r.status === 200 && j.funding === 'vendor') { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); show(vendorBought(j, g)); }
+  else if (r.status === 200 && j.funding === 'vendor') { verdict('<span class="stamp paid">Paid</span> ' + who); live('allow'); show(vendorBought(j, g)); }
   else if (r.status === 200) { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
   else if (r.status === 202 && j.ai_unavailable) {   // fail closed: no AI verdict means a human decides, never auto-approve
@@ -546,6 +554,7 @@ initNavHide();
 initMotion();
 const refreshLive = () => fetch('/healthz').then(r => r.json()).then(setLive).catch(() => {}); setInterval(refreshLive, 30000);
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';
+  if (h.demo_mode && 'vendors_payable' in h) vendorModeUI();
   if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); mcpPanel(); }
   else $('nodemo').style.display = ''; });
 catalog().catch(() => {}).finally(initFeed); scorecard(); initCompare();

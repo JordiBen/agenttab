@@ -2139,10 +2139,19 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return ledger.webhooks(agent_id or None)
 
     # ---------------- schedule (Bryntum Scheduler) + refund suggestions ----------------
+    def schedule_agent_detail(a) -> str | None:
+        """Vendor-funded agents (flag on) have no tab: the schedule's agent row shows the 30-day budget left instead."""
+        if not (s.vendor_payouts and a["funding_model"] == "vendor"):
+            return None
+        e = envelope_view(a["id"])
+        cents = round(e["remaining_usd"] * 100)
+        return f"budget ${cents // 100} left" if cents % 100 == 0 else f"budget ${cents // 100}.{cents % 100:02d} left"
+
     @app.get("/api/me/schedule")
     def my_schedule(a=Depends(agent_from_key)):
         sched.sweep(ledger, a["id"])
-        return sched.build(ledger, ledger.agent(a["id"]))
+        a = ledger.agent(a["id"])
+        return sched.build(ledger, a, agent_detail=schedule_agent_detail(a))
 
     @app.get("/api/schedule", dependencies=[Depends(admin)])
     def agent_schedule(agent_id: str):
@@ -2150,7 +2159,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not a:
             raise HTTPException(404, "no such agent")
         sched.sweep(ledger, agent_id)
-        return sched.build(ledger, a)
+        return sched.build(ledger, a, agent_detail=schedule_agent_detail(a))
 
     def suggestion_for(sid: str, x_admin_token: str, x_agent_key: str):
         sg = ledger.suggestion(sid)

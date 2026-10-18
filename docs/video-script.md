@@ -156,11 +156,22 @@ personal-use purchases 4 / 7 → 7 / 7, social-media targets 5 / 6 → 6 / 6. Cl
 
 **On screen:** the Schedule (Bryntum) and Purchases on the local instance, showing the $78 row's states, plus the README PayPal section.
 
-**Where the money goes (don't overstate it):** every PayPal capture lands in AgentTab's own sandbox merchant account. No
-vendor receives money through PayPal in this build: no order sets a payee (`app/` has no `payee` field), and the shop
-vendors are `"fulfillment": "simulated"` in `app/procurement.py`. The voiceover and on-screen text must never say the
-vendor is paid. This changes only if the vendor-payout spike succeeds (`docs/vendor-payouts-plan.md` on
-`feature/vendor-payouts`, not merged); until then, "the vendor gets paid" is not a claim we can make.
+**Where the money goes (don't overstate it):** on the live site today vendor payouts are off, so every PayPal capture
+lands in AgentTab's own sandbox merchant account: tab top-ups and approval holds set no payee, and the shop vendors are
+`"fulfillment": "simulated"` in `app/procurement.py`. The voiceover and on-screen text must never say a vendor is paid
+in this mode.
+
+**Vendor mode, only when vendor payouts are switched on (`VENDOR_PAYOUTS=1`; it is off on the live site):** a
+vendor-funded agent has no tab. The owner saves PayPal's sandbox test card and sets a 30-day budget; each allowed
+purchase is reserved against that budget, AgentTab's fulfilment step runs (simulated for the shop vendors), and then one
+PayPal sandbox order (`intent=CAPTURE`, `payee` = that vendor's sandbox merchant account) is paid from the saved card
+(`test_one_capture_order_straight_to_the_vendor`, `test_paypal_only_after_fulfil_and_amount_is_the_reservation`). A
+refused payment freezes the agent (`test_definite_refusal_after_delivery`), and so does a reply that doesn't match the
+order (`test_response_mismatch_is_flagged_and_freezes`). A vendor with no merchant id configured is blocked
+(`test_vendor_without_id_blocked_before_guard_and_fulfil`). A refund is requested with the vendor and never credits a
+tab (`test_refund_of_vendor_paid_purchase_never_credits_tab_or_calls_paypal`). With the flag off, the demo stays
+tab-funded (`test_demo_session_stays_tab_funded_with_the_flag_off`). Only narrate or show vendor mode if the flag is on
+on the live site when recording; otherwise leave it out.
 > "PayPal does the money work. Funding is a PayPal order, captured into the tab's integer-cent ledger, so parallel buys can't
 > overspend. Big purchases are holds, authorizations captured only after delivery and voided on failure. Webhooks are
 > signature-verified and applied once, and if PayPal declines a capture after delivery, the agent freezes until the owner

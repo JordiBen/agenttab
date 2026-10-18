@@ -72,8 +72,9 @@ def sweep(ledger: Ledger, aid: str, now: float | None = None) -> list[str]:
     return created
 
 
-def build(ledger: Ledger, agent, now: float | None = None) -> dict:
-    """Bryntum Scheduler data for one agent: one row for the agent, one per vendor it has touched."""
+def build(ledger: Ledger, agent, now: float | None = None, agent_detail: str | None = None) -> dict:
+    """Bryntum Scheduler data for one agent: one row for the agent, one per vendor it has touched.
+    agent_detail replaces the agent row's "tab $x" (vendor-funded agents have no tab: the caller passes the budget left)."""
     now = now or time.time()
     aid = agent["id"]
     cfg = pr.AgentConfig.from_row(agent)
@@ -85,7 +86,7 @@ def build(ledger: Ledger, agent, now: float | None = None) -> dict:
         if p["vendor"] not in vendors:
             vendors.append(p["vendor"])
     resources = [{"id": aid, "name": agent["name"], "kind": "agent",
-                  "detail": f"tab ${ledger.balance(aid):.2f}"},
+                  "detail": agent_detail or f"tab ${ledger.balance(aid):.2f}"},
                  {"id": f"{aid}:paypal", "name": "PayPal (sandbox)", "kind": "paypal",
                   "detail": "webhooks, refunds", "agent": aid}]
     events: list[dict] = []

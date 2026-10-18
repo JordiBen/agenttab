@@ -191,6 +191,23 @@ Complete verdicts from the primary model are cached for 10 minutes, keyed by a S
   then captures the hold. A failed delivery or a lost commit voids the hold. A capture declined after delivery reverses
   the credit and freezes the agent. The response says what happened (`auto_topup`).
 
+### Where the money goes
+- **Today on the live site (vendor payouts off):** every PayPal capture lands in
+  AgentTab's own sandbox merchant account. Tab top-ups and approval holds set no payee, and the shop vendors' delivery is simulated
+  (`"fulfillment": "simulated"` in `app/procurement.py`).
+- **Only when vendor payouts are switched on (`VENDOR_PAYOUTS=1`; it is off on the live site):** an agent can be
+  vendor-funded. AgentTab holds no money for it: the owner saves PayPal's sandbox test card and sets a 30-day budget.
+  Each allowed purchase is reserved against the budget, AgentTab's fulfilment step runs (still simulated for the shop
+  vendors), and then one PayPal sandbox order (`intent=CAPTURE`, `payee` = that vendor's sandbox merchant account) is
+  paid from the saved card (`test_one_capture_order_straight_to_the_vendor`,
+  `test_paypal_only_after_fulfil_and_amount_is_the_reservation`). A vendor with no merchant id configured is blocked
+  (`test_vendor_without_id_blocked_before_guard_and_fulfil`). A refused payment freezes the agent
+  (`test_definite_refusal_after_delivery`), and so does a reply that doesn't match the order
+  (`test_response_mismatch_is_flagged_and_freezes`). Refunds are requested with the vendor and never credit a tab
+  (`test_refund_of_vendor_paid_purchase_never_credits_tab_or_calls_paypal`). Top-ups and tab refunds answer `410` for
+  these agents (`test_owner_topups_410_for_vendor_agents`). With the flag off, a vendor-funded agent is refused rather
+  than charged to a tab (`test_flag_off_vendor_agent_stays_blocked`). These tests run against the PayPal mock.
+
 ### Try the demo agent
 1. Open the dashboard, create an agent, and copy its key.
 2. Run:
