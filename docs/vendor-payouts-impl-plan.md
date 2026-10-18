@@ -1,6 +1,8 @@
 # Implementation plan: pay vendors directly (envelope model)
 
-Status: **plan only, waiting for approval. No code on this branch.** It builds on the US sandbox re-spike in
+Status: **step 0 FAILED (Oct 18 2026): our app cannot void a hold whose payee is a vendor. Per the reviewer's rule, no code
+was written; the plan below needs a new decision (see "Step 0 result").** The rest of this file is the plan as approved in
+principle, kept for reference, with the reviewer's change (no "simulated vendor action") applied.
 [vendor-payouts-plan.md](vendor-payouts-plan.md) (section "US re-spike", Oct 18 2026). Every fact cites a PayPal page or a
 PayPal debug id from our own sandbox calls; anything not exercised yet is marked **UNSURE**. Code references are to `main`
 at d4b1dae. Vendor merchant ids never appear in this repo: they come from environment variables (section c).
@@ -15,15 +17,46 @@ at d4b1dae. Vendor merchant ids never appear in this repo: they come from enviro
 | Pay another account is a documented direct-merchant feature | https://developer.paypal.com/docs/checkout/standard/customize/pay-another-account/ |
 | An authorization holds funds for 29 days; capture within the 3-day honor period, reauthorize after it | https://developer.paypal.com/docs/checkout/standard/customize/authorization/ |
 | `PayPal-Request-Id` makes a POST idempotent; a repeat returns the latest status of the first request; it must be unique per request **and** per call type; 38-character limit | https://developer.paypal.com/api/rest/reference/idempotency/ |
-| **UNSURE: void.** Our app voiding an authorization whose payee is a vendor was **not tested**. The docs list `void` as a link on every authorization (authorization page above), but the refund 403 shows that payee-owned resources can refuse the caller. **Step 0 below tests it before any code.** | not yet run |
+| **Our app CANNOT void** an authorization whose payee is a vendor: `403 NOT_AUTHORIZED / PERMISSION_DENIED`, although the authorization lists a `void` link | step 0: debug ids `f6677437f0ba0` (hold), `f194959effd1e` (void refused), `ca4c50abfbc0d` (read back: still `CREATED`) |
 | **UNSURE: webhooks.** Whether PayPal delivers `PAYMENT.CAPTURE.*` / `PAYMENT.AUTHORIZATION.VOIDED` for vendor-payee payments to *our* app's webhook was not observed (the spike had no webhook listener). Event names: https://developer.paypal.com/api/rest/webhooks/event-names/ | not yet observed |
 
-## Step 0 (needs approval, sandbox only, before any code): the void spike
-Three calls with the existing private script pattern, one US vendor: authorize (payee = vendor, Vault card) → `POST
-/v2/payments/authorizations/{id}/void` by our app → `GET` the authorization (expect `VOIDED`). Record status and debug ids in
-vendor-payouts-plan.md. **If the void is refused, the plan changes**: holds can't be released by us, so "authorize, then
-fulfill" would leave failed purchases held for 29 days. The fallback would be fulfil-first-then-authorize-and-capture for
-instant (simulated / live data) vendors only, and the approval flow would place no hold until the owner approves.
+## Step 0 result: the void spike (approved; run Oct 18 2026, 08:11 Asia/Jerusalem (UTC+3); local, sandbox host only)
+Script `notes/scripts/vendor_void_spike.py` (private); redacted log kept privately. One US vendor (SampleBox), $10.00,
+our app's Vault card (the test Visa), merchant id from the private env file.
+
+| # | Request | HTTP | PayPal debug id | Result |
+|---|---|---|---|---|
+| prereq | `POST /v3/vault/setup-tokens` | 201 | `f10800557b219` | setup token |
+| prereq | `POST /v3/vault/payment-tokens` | 201 | `f82138096e930` | vault token (a first attempt minutes earlier was refused, `403`, debug id `f886754a2499e`; it succeeded on the re-run 3 s after the setup token; **UNSURE** why) |
+| **1** | `POST /v2/checkout/orders` intent=AUTHORIZE, `payee.merchant_id` = SampleBox (US), vault card | **201** | `f6677437f0ba0` | authorization `CREATED`, payee = SampleBox |
+| **2** | `POST /v2/payments/authorizations/{id}/void` by our app | **403** | `f194959effd1e` | `NOT_AUTHORIZED` / `PERMISSION_DENIED` on `authorization_id` |
+| **3** | `GET /v2/payments/authorizations/{id}` | 200 | `ca4c50abfbc0d` | still `CREATED`; links offered: `self, capture, void, reauthorize, up`; expires 2026-11-16T05:11:21Z |
+| cleanup | `DELETE /v3/vault/payment-tokens/<vault token>` | 204 | `f9245691bc030` | test token removed |
+
+Void response (`403`, debug id `f194959effd1e`): `{"name": "NOT_AUTHORIZED", "message": "Authorization failed due to
+insufficient permissions.", "details": [{"issue": "PERMISSION_DENIED", "field": "authorization_id", "location": "path",
+"description": "You do not have permission to access or perform operations on this resource."}]}`.
+
+**What it means:** with a vendor as payee our app can create the hold and capture it (US re-spike), but can neither void
+it (step 0) nor refund the capture (US re-spike). Every "on failure: void" path of the plan below (failed delivery,
+rejection, expiry, freeze, capture problems) would leave a hold on the owner's card until it expires (29 days:
+https://developer.paypal.com/docs/checkout/standard/customize/authorization/). The plan as written is not safe to build.
+
+**Leftover:** the step 0 hold ($10.00 sandbox, payee SampleBox) stays `CREATED` until it expires, Nov 16 2026 07:11
+Asia/Jerusalem (UTC+2). We won't capture it. **UNSURE** whether the vendor can void it from its sandbox account.
+
+**Options for the reviewer (none started):**
+1. **Capture-only, no holds.** Reserve under the lock → fulfil → one `intent: CAPTURE` order (payee + vault card) only after
+   delivery succeeds; nothing ever needs a void. Above the threshold: no hold at request time; owner approves → fulfil →
+   capture. If the card declines after delivery, the purchase is `payment_failed`, the vendor delivered unpaid, the agent is
+   frozen. All our vendors deliver instantly (simulated goods or live data), so this fits the demo. **UNSURE:** `intent:
+   CAPTURE` with payee + vault card wasn't tried (the spikes used AUTHORIZE); it needs one more approved sandbox call.
+   Trade-off: the owner's card isn't checked before delivery.
+2. **Keep the shipped design for the hackathon** (money to AgentTab's sandbox account, where void and refund both work),
+   document Option A's results, and leave vendor payouts as the documented production route.
+3. **Multiparty / partner onboarding**, which acts on the seller's behalf with `PayPal-Auth-Assertion`
+   (https://developer.paypal.com/docs/multiparty/issue-refund/). **UNSURE** whether that also covers void (the page covers
+   refunds). Not feasible before Nov 5.
 
 ## (a) Envelope model
 AgentTab holds no money. An agent has an **envelope**: owner-set limits enforced by the same `procurement.decide()` pipeline,
@@ -101,7 +134,8 @@ plus the new rule that every approved purchase is paid by the owner's saved (Vau
 
 ## (b) Refunds
 - **Before capture: void.** Failed delivery, rejection, expiry, freeze and capture problems release the hold with
-  `POST /v2/payments/authorizations/{id}/void` (`at-{pid}-void`). Nothing is charged. **UNSURE until step 0** (see above).
+  `POST /v2/payments/authorizations/{id}/void` (`at-{pid}-void`). Nothing is charged. **Refused by PayPal for vendor-payee holds (step 0, debug id `f194959effd1e`)**, so this
+  path does not work as planned; see "Step 0 result".
 - **After capture: a refund request to the vendor.** Our app gets `403 PERMISSION_DENIED` on the vendor's capture (debug ids
   `f912700c665d3`, `ca4c4b2199af4`, `f452147396f4e`). Refunding on a seller's behalf is a partner feature ("Be an approved
   partner", `PayPal-Auth-Assertion`): https://developer.paypal.com/docs/multiparty/issue-refund/. So:
@@ -112,21 +146,9 @@ plus the new rule that every approved purchase is paid by the owner's saved (Vau
     to do, debug ids above) or a `PAYMENT.CAPTURE.REFUNDED` webhook arrives (**UNSURE** it reaches us, see webhooks). Then
     `refund_requested → refunded`, and the amount stops counting against the envelope.
   - Refund windows and the non-refundable rule for live data stay as they are (`refund_one`).
-- **Demo option, labelled "simulated vendor action":** in demo mode only, a button on a `refund_requested` purchase performs
-  the vendor's refund **as the vendor**, using a REST app that belongs to that vendor's sandbox business account
-  (`VENDOR_<NAME>_CLIENT_ID/SECRET` in Render env, never in git). The UI and the API response say "Simulated vendor action:
-  in a real deployment the vendor does this". Never available with `PAYPAL_MODE=live`, never with an agent key outside a demo
-  session.
-  - Feasibility (docs only, nothing run): PayPal's help says a new REST app is created against "a Sandbox business account to
-    associate with your app" (https://www.paypal.com/us/cshelp/article/how-do-i-create-paypal-rest-api-credentials-ts1949),
-    so an app tied to SampleBox's sandbox account should act as SampleBox. **UNSURE** that such an app may refund a capture
-    created by *our* app's order (not tried; it needs the owner to create the app in the Developer Dashboard). Linking an
-    existing sandbox account works only if it isn't linked to another developer account
-    (https://developer.paypal.com/tools/sandbox/accounts/).
-  - Alternative without credentials: log in to https://www.sandbox.paypal.com as the vendor and refund from its activity
-    list (account logins: https://developer.paypal.com/api/rest/ "Get sandbox account credentials"). **UNSURE**: exact menu
-    labels (not opened). The demo would then show the request until reconcile sees the refund.
-  - If neither works, the demo shows `refund_requested` and the explanation; no fake "refunded" state.
+- **Demo refunds (reviewer decision, Oct 18):** no simulated vendor action and no per-vendor REST apps. The demo shows
+  `refund_requested` with the explanation above; when the vendor refunds, reconcile reads the capture as `REFUNDED` and moves
+  the purchase to `refunded`. No fake "refunded" state.
 
 ## (c) Vendor merchant ids from env; no id, no payment
 - `VENDOR_SAMPLEBOX_MERCHANT_ID`, `VENDOR_SHOPSUITE_MERCHANT_ID`, `VENDOR_SITESCOPE_MERCHANT_ID` (Render env and the
@@ -168,8 +190,8 @@ Mock PayPal (existing mock client, extended to record every request body, header
 12. **No card → 402 `card_required`,** never a checkout to AgentTab.
 13. **Refund after capture → `refund_requested`,** no PayPal refund call, owner and agent views say it's with the vendor; a
     later capture `GET` showing `REFUNDED` moves it to `refunded` and frees the envelope.
-14. **Simulated vendor action:** only in demo mode, only for the owner (or the demo-session owner), labelled in API and UI;
-    `403` with `PAYPAL_MODE=live` or a plain agent key.
+14. **Refund stays with the vendor:** no code path calls PayPal's refund for a vendor-paid purchase; the demo has no
+    button that refunds as the vendor.
 15. **Top-up endpoints `410`** for vendor agents; legacy tab agents unchanged (existing tests keep passing).
 16. **Webhooks:** `PAYMENT.AUTHORIZATION.VOIDED`, `PAYMENT.CAPTURE.COMPLETED/DECLINED/REFUNDED` map to the purchase by
     `custom_id`/capture id, idempotently (existing `webhook_events` table).
@@ -178,8 +200,7 @@ Mock PayPal (existing mock client, extended to record every request body, header
 18. **AI unavailable still holds for a human** (existing tests, re-run in vendor mode).
 19. **Live sandbox tests (skip without keys, run locally only):** one real authorize → capture to a US vendor; one authorize →
     void; never against the hosted site.
-20. **UI e2e:** envelope instead of balance; statuses held / refund requested with the vendor / simulated vendor action
-    label; enc() on every vendor-supplied string.
+20. **UI e2e:** envelope instead of balance; statuses held / refund requested with the vendor; enc() on every vendor-supplied string.
 
 ## (f) Time estimate (feature freeze Nov 5, deadline Nov 12)
 Today is Oct 18: 13 working days to the freeze if work starts Oct 20.
@@ -189,7 +210,7 @@ Today is Oct 18: 13 working days to the freeze if work starts Oct 20.
 | 0. Void spike (approval, 3 sandbox calls) | 0.5 |
 | Ledger: reservation, cents, migration, flag | 1.5 |
 | Purchase + approval flows, derived Request-Ids, payee layer | 2 |
-| Refund requests, simulated vendor action | 1 |
+| Refund requests (refund_requested + reconcile) | 1 |
 | Webhooks + reconcile | 1 |
 | UI (envelope, statuses), MCP descriptions | 1.5 |
 | Tests (written first, alongside each step) | 2 |
@@ -213,7 +234,7 @@ to keep the shipped design for the hackathon and ship this behind the flag, off.
   capture `GET` was exercised).
 
 ## Risks
-1. **Void untested** (step 0). Without it, failed purchases leave holds on the owner's card for up to 29 days.
+1. **Void refused** (step 0, debug id `f194959effd1e`): failed purchases would leave holds on the owner's card for up to 29 days.
 2. **Refunds depend on the vendor.** The product can only request them; the owner experience is weaker than today's
    automatic tab refunds. Real fix: multiparty partner onboarding (https://developer.paypal.com/docs/multiparty/issue-refund/,
    https://developer.paypal.com/docs/multiparty/seller-onboarding/build-onboarding/), not in hackathon scope.
@@ -231,6 +252,6 @@ to keep the shipped design for the hackathon and ship this behind the flag, off.
 9. **Copy drift:** landing copy is on another worker's branch; the docs test in (d) catches a premature claim on merge.
 
 ## Decisions needed
-1. Approve step 0 (the void spike, 3 sandbox calls).
-2. Approve the plan, or choose to keep the shipped design for the hackathon and land this behind the flag, off.
-3. For the demo refund: create one REST app per vendor sandbox account (owner, Developer Dashboard), or use the login route.
+1. Step 0 failed: choose option 1 (capture-only; needs one more approved sandbox call for `intent: CAPTURE` + payee), option 2
+   (keep the shipped design for the hackathon) or option 3 (multiparty, after the hackathon). See "Step 0 result".
+2. (Decided Oct 18: no simulated vendor action; demo refunds show `refund_requested`, reconcile detects `REFUNDED`.)
