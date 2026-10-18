@@ -1,0 +1,34 @@
+# Every package the Render build of e8322dc installed (2026-10-18, Python 3.12.7), from its 'Successfully installed' line.
+# Applied through '-c constraints.txt' in requirements.txt. uvloop/httptools are only installed where uvicorn[standard] wants them (not on Windows).
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anthropic==1.15.0
+anyio==4.15.1
+beautifulsoup4==4.15.0
+certifi==2026.10.18
+click==8.5.0
+docstring-parser==0.18.0
+fastapi==0.146.0
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.14.0
+httptools==0.9.0
+httpx==0.28.1
+httpx2==2.14.0
+idna==3.20
+jiter==0.17.0
+opentelemetry-api==1.45.1
+pydantic==2.14.1
+pydantic-core==2.50.1
+python-dotenv==1.2.4
+pyyaml==6.0.3
+sniffio==1.3.1
+soupsieve==3.0.3
+starlette==1.9.0
+truststore==0.10.5
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+uvicorn==0.54.0
+uvloop==0.23.0
+watchfiles==1.3.0
+websockets==17.2

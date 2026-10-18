@@ -1,6 +1,9 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-httpx>=0.27
-pydantic>=2.6
-beautifulsoup4>=4.12
+# Exact versions from the Render build of e8322dc (2026-10-18, Python 3.12.7). Transitive pins live in constraints.txt.
+-c constraints.txt
+fastapi==0.146.0
+starlette==1.9.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+pydantic==2.14.1
+beautifulsoup4==4.15.0
 anthropic==1.15.0
