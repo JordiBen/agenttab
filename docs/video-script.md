@@ -11,8 +11,9 @@ file and test that back it. Anything not verified is marked **UNSURE**. All numb
 - Record the demo on a **local instance**: `uvicorn app.main:app --port 8811` with `DEMO_MODE=1`, then open `http://127.0.0.1:8811/`.
 - **Take A (rules only, no AI calls):** strip `ANTHROPIC_*`, `GEMINI_*` and `LLM_*`. `/healthz` shows `ai_status:"off"`, so
   the guard runs the keyword rules. Use this take for the "rules alone" moment and for every beat except the Claude block.
-- **Take B (Claude block): needs the user's explicit OK before recording**, because it is a local live Claude call (about 2
-  calls per take: step 6, plus step 4 if it is re-shot in this take). Same local instance, with `ANTHROPIC_API_KEY` set
+- **Take B (Claude block): technically approved by the reviewer; recording is pending the project owner's decision.** It is a local
+  live Claude call (about 2 calls per take: step 6, plus step 4 if it is re-shot in this take). No Claude calls have been
+  made for this script; none run until the project owner decides. Same local instance, with `ANTHROPIC_API_KEY` set
   locally. `GUARD_PROVIDER` defaults to `anthropic` with model `claude-haiku-5-5`
   (`tests/test_claude_guard.py::test_anthropic_is_the_default_provider_with_the_exact_model`).
 - **PayPal:** use `PAYPAL_MODE=mock` (IDs read `MOCK-…/AUTH-…/CAP-…`) or local `PAYPAL_MODE=sandbox` with sandbox
@@ -127,6 +128,10 @@ Note: with Claude on (Take B), step 4 also makes one Claude call, because the po
 | No guard | 0 / 47 | 16 / 20 | 0 |
 | Rules alone | **37 / 47** | 20 / 20 | 0 |
 | Rules + Claude | **47 / 47** | **20 / 20** | 0 |
+| Held-out set (written by a separate reviewer) | TBD | TBD | TBD |
+
+**UNSURE / pending:** the held-out row is a placeholder. The set is written by the reviewer, kept out of the repo until it is run; no AI-mode results yet, so there are no numbers;
+fill it in only from a committed `eval/results.json` run, and drop the row from the video if it isn't ready.
 
 Where the difference comes from (`eval/results.json` → `by_category`): indirect injections **2 / 6 → 6 / 6**,
 personal-use purchases 4 / 7 → 7 / 7, social-media targets 5 / 6 → 6 / 6. Claude stopped 23 of the 47 attacks itself
@@ -144,12 +149,19 @@ personal-use purchases 4 / 7 → 7 / 7, social-media targets 5 / 6 → 6 / 6. Cl
 | The AI row is the committed Claude run | `tests/test_readme_scorecard.py::test_readme_ai_row_is_the_committed_claude_run` |
 | Each run names its clean commit (`f71590c`) | `tests/test_eval_sha.py::test_committed_results_name_a_clean_commit_for_every_mode`, `::test_committed_results_commit_is_in_this_history` |
 | Not held out | `eval/results.json` → `notes[3]` |
+| Held-out results | **UNSURE / pending**: written by the reviewer, kept out of the repo until it is run; no AI-mode results yet; no backing file |
 | No guard 16/20 legit: it bought 4 legit-labelled cases that should have waited for approval (`legit-15`…`legit-18`) | `eval/results.json` → `modes.none.rows`. **UNSURE** whether to show this column; it may confuse, so consider dropping the "No guard" legit cell |
 
 ## 4. PayPal (2:25–2:55)
 
 **On screen:** the Schedule (Bryntum) and Purchases on the local instance, showing the $78 row's states, plus the README PayPal section.
-> "PayPal does the money work. Funding is a PayPal order, captured into an integer-cent ledger, so parallel buys can't
+
+**Where the money goes (don't overstate it):** every PayPal capture lands in AgentTab's own sandbox merchant account. No
+vendor receives money through PayPal in this build: no order sets a payee (`app/` has no `payee` field), and the shop
+vendors are `"fulfillment": "simulated"` in `app/procurement.py`. The voiceover and on-screen text must never say the
+vendor is paid. This changes only if the vendor-payout spike succeeds (`docs/vendor-payouts-plan.md` on
+`feature/vendor-payouts`, not merged); until then, "the vendor gets paid" is not a claim we can make.
+> "PayPal does the money work. Funding is a PayPal order, captured into the tab's integer-cent ledger, so parallel buys can't
 > overspend. Big purchases are holds, authorizations captured only after delivery and voided on failure. Webhooks are
 > signature-verified and applied once, and if PayPal declines a capture after delivery, the agent freezes until the owner
 > reconciles."
@@ -161,6 +173,7 @@ personal-use purchases 4 / 7 → 7 / 7, social-media targets 5 / 6 → 6 / 6. Cl
 | A return-URL vs webhook race captures once | `tests/test_paypal_depth.py::test_return_url_and_webhook_race_authorizes_and_captures_once` |
 | Capture declined after delivery freezes the agent | `tests/test_paypal_depth.py::test_capture_decline_after_delivery_freezes_agent` |
 | Expired approval: a late payment is voided | `tests/test_paypal_depth.py::test_late_paid_link_on_expired_approval_is_voided` |
+| Captures go to AgentTab's own account; vendors receive nothing via PayPal | `app/paypal.py` and `app/main.py` (no payee on any order); `app/procurement.py` (`"fulfillment": "simulated"`). Code-cited, no dedicated test |
 | Real sandbox authorize/capture/void | `tests/test_paypal_depth.py::test_live_sandbox_authorize_capture_void_declines_and_vault` (live, skipped without sandbox keys; **UNSURE** when it last ran) |
 
 ## 5. End card (2:55–3:00)
@@ -172,7 +185,8 @@ the hosted URL `https://agenttab.onrender.com` (no clicks).
 ---
 
 ### Open items before recording
-1. **Explicit OK for Take B** (local live Claude, about 2 calls per take). Without it, show the replayed eval decision for
+1. **Take B: technically approved by the reviewer; recording pending the project owner's decision** (local live Claude, about 2
+   calls per take; no calls made yet). Without it, show the replayed eval decision for
    `indirect_injection-05` instead of a live block, and say "from our committed eval run".
 2. **UNSURE:** whether the step-6 text is blocked by Claude live (see 2b). Its eval twin was blocked in 970.6 ms.
 3. **UNSURE:** whether the UI copy changes if `feature/landing-redesign` merges first.
