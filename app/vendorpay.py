@@ -46,3 +46,60 @@ def request_id(pid: str, action: str) -> str:
     rid = f"at-{pid}-{action}"
     assert len(rid) <= 38
     return rid
+
+
+# A definite refusal: PayPal answered and made no payment (card declined, bad request, not allowed). Anything else
+# (no answer, 5xx, 409 for a simultaneous duplicate Request-Id, 429) is unknown: retried once with the same id.
+DEFINITE_REFUSAL = frozenset({400, 401, 403, 404, 422})
+
+
+def definite_refusal(e) -> bool:
+    return getattr(e, "status", 0) in DEFINITE_REFUSAL
+
+
+def check_payment(j: dict, amount_cents: int, payee_merchant_id: str, pid: str) -> tuple[str, dict]:
+    """Check PayPal's create-order answer before calling a purchase paid. Returns ("completed" | "payment_pending" |
+    "flagged", {order_id, capture_id, reason}). Reasons never contain a merchant id."""
+    from .ledger import parse_cents
+    info = {"order_id": "", "capture_id": "", "reason": ""}
+
+    def flag(why: str):
+        return "flagged", dict(info, reason=why)
+
+    def amount_ok(a) -> bool:
+        return isinstance(a, dict) and a.get("currency_code") == "USD" and parse_cents(a.get("value")) == amount_cents
+    try:
+        info["order_id"] = str(j.get("id") or "")[:64]
+        units = j.get("purchase_units") or []
+        if len(units) != 1:
+            return flag("expected exactly one purchase unit")
+        u = units[0]
+        pay = u.get("payments") or {}
+        caps = pay.get("captures") or []
+        if len(caps) == 1:
+            info["capture_id"] = str(caps[0].get("id") or "")[:64]
+        if (u.get("payee") or {}).get("merchant_id") != payee_merchant_id:
+            return flag("payee in PayPal's answer is not the configured vendor")
+        if u.get("custom_id") != pid:
+            return flag("custom_id in PayPal's answer is not this purchase")
+        if not amount_ok(u.get("amount")):
+            return flag("order amount differs from the reservation")
+        if pay.get("authorizations"):
+            return flag("unexpected authorization (a hold) in PayPal's answer")
+        if len(caps) != 1 or not info["capture_id"]:
+            return flag(f"expected exactly one capture, got {len(caps)}")
+        cap = caps[0]
+        if "payee" in cap and (cap.get("payee") or {}).get("merchant_id") != payee_merchant_id:
+            return flag("capture payee is not the configured vendor")
+        if not amount_ok(cap.get("amount")):
+            return flag("captured amount differs from the reservation")
+        if j.get("status") != "COMPLETED":
+            return flag(f"order status {str(j.get('status'))[:30]}")
+        st = cap.get("status")
+        if st == "COMPLETED":
+            return "completed", info
+        if st == "PENDING":
+            return "payment_pending", info
+        return flag(f"capture status {str(st)[:30]}")
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return flag("unreadable PayPal answer")

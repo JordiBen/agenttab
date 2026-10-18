@@ -23,7 +23,7 @@ import secrets
 import threading
 import time
 from urllib.parse import quote, urlparse
-from decimal import ROUND_UP, Decimal, InvalidOperation
+from decimal import ROUND_FLOOR, ROUND_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -31,13 +31,16 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import llm
+from . import vendorpay
 from . import mcp as mcpp
 from .config import Settings, get_settings
 from .guard import SYSTEM as GUARD_SYSTEM, SpendGuard, VerdictCache
-from .ledger import Ledger, from_micro, to_micro
+from .ledger import Ledger, from_micro, to_cents, to_micro
 from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import SIMULATABLE, PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
@@ -129,6 +132,12 @@ class TopUp(BaseModel):
 
 class FreezeReq(BaseModel):
     reason: str = Field(default="frozen by owner", min_length=1, max_length=300)
+
+class FundingReq(BaseModel):
+    """Vendor payouts (VENDOR_PAYOUTS=1): switch one agent between the tab and paying vendors directly."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    model: Literal["tab", "vendor"]
+    envelope_usd: float | None = Field(default=None, ge=0, le=100000)
 
 class AutoTopUp(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
@@ -332,7 +341,21 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             raise HTTPException(423, {"error": "agent_frozen", "reason": a["frozen_reason"],
                                       "note": "Spending is paused until the owner reconciles and unfreezes this agent."})
 
+    def envelope_view(aid: str) -> dict:
+        a = ledger.agent(aid)
+        budget = a["envelope_cents_30d"] if isinstance(a["envelope_cents_30d"], int) else 0
+        used = ledger.vendor_counted_cents(aid, time.time() - 30 * 86400)
+        return {"budget_30d_usd": budget / 100, "used_30d_usd": used / 100, "remaining_usd": max(0, budget - used) / 100}
+
     def agent_view(a) -> dict:
+        d = agent_view_base(a)
+        if s.vendor_payouts:              # vendor-payout fields only exist with the flag on
+            d["funding_model"] = a["funding_model"]
+            if a["funding_model"] == "vendor":
+                d["envelope"] = envelope_view(a["id"])
+        return d
+
+    def agent_view_base(a) -> dict:
         return {"agent_id": a["id"], "name": a["name"], "owner_email": a["owner_email"],
                 "policy": a["policy"], "daily_cap_usd": float(from_micro(a["daily_cap_micro"])),
                 "per_call_cap_usd": float(from_micro(a["per_call_cap_micro"])),
@@ -384,6 +407,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         return {"ok": True, "paypal_mode": s.paypal_mode, "ai_guard": llm.guard_enabled(s), "demo_mode": s.demo_mode,
                 "ai_status": guard.status(budget_left=limiter.count("llm-guard", DAY) < s.llm_calls_per_day),
                 "guard_provider": s.guard_provider, "models": llm.guard_models(s),
+                **({"vendors_payable": vendorpay.payable_count()} if s.vendor_payouts else {}),   # a count, never ids
                 **({"demo_policy": DEMO_POLICY} if s.demo_mode else {})}
 
     @app.get("/api/catalog")
@@ -685,6 +709,13 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         # the limits inside a single SQLite write transaction as a second line of defence. Bounded wait: 429 busy.
         with agent_lock_or_busy(aid):
             a = ledger.agent(aid)
+            if a["funding_model"] == "vendor":       # pays vendors directly: never falls back to the tab
+                if not s.vendor_payouts:
+                    raise HTTPException(503, {"error": "vendor_payouts_disabled",
+                                              "note": "This agent pays vendors directly and vendor payouts are off on "
+                                                      "this server. Nothing was bought or charged."})
+                refuse_if_frozen(a)
+                return vendor_buy(a, p, amount)
             refuse_if_frozen(a)
             cfg = pr.AgentConfig.from_row(a)
             needs_approval = cfg.approval_threshold is not None and amount > cfg.approval_threshold
@@ -757,6 +788,136 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 body["auto_topup"] = capture_hold(aid, pid, hold, prefund["entry_id"])
                 body["balance_usd"] = float(ledger.balance(aid))
             return body
+
+    # ---------------- vendor payouts, capture-only (VENDOR_PAYOUTS=1; docs/vendor-payouts-impl-plan.md) ----------------
+    def card_required(aid: str) -> JSONResponse:
+        return JSONResponse(status_code=402, content={
+            "error": "card_required",
+            "note": "This agent pays vendors from the owner's saved card and no card is saved. Nothing was bought or charged.",
+            "save_card": {"method": "POST", "endpoint": f"/api/agents/{aid}/saved-card", "who": "the owner (admin token)"}})
+
+    def cents_floor(d: Decimal) -> int:
+        return int((Decimal(d) * 100).to_integral_value(rounding=ROUND_FLOOR))
+
+    def vendor_state(aid: str) -> pr.State:
+        now = time.time()
+        usd = lambda c: Decimal(c) / 100
+        return pr.State(usd(ledger.vendor_counted_cents(aid, now - 86400)),
+                        {vid: usd(ledger.vendor_counted_cents(aid, now - 30 * 86400, vid)) for vid in pr.VENDORS},
+                        usd(ledger.vendor_counted_cents(aid, now - 30 * 86400)))
+
+    def vendor_limits(cfg: pr.AgentConfig, vendor: str) -> dict:
+        vb = cfg.vendor_budgets
+        return {"per_purchase_max_cents": cents_floor(cfg.per_purchase_max), "daily_cap_cents": cents_floor(cfg.daily_cap),
+                "vendor_budget_cents": None if vb is None else cents_floor(vb.get(vendor, Decimal(0))),
+                "envelope_cents_30d": None}        # the agent's own envelope always applies (ledger)
+
+    def sandbox_or_mock_payouts():
+        if not (paypal.mock or paypal.is_sandbox):
+            raise HTTPException(503, "vendor payouts run only against the PayPal sandbox")
+
+    def vendor_buy(a, p: pr.Purchase, amount: Decimal):
+        """Called under the per-agent lock. Guard -> reserve (one DB transaction) -> fulfil -> one PayPal capture
+        order to the vendor. Nothing is paid unless the vendor delivered, and nothing is ever paid to AgentTab."""
+        aid = a["id"]
+        sandbox_or_mock_payouts()
+        if not a["vault_id"]:                          # before the guard: no AI call for a purchase that can't be paid
+            return card_required(aid)
+        ledger.expire_vendor_approvals(aid)
+        cfg = pr.AgentConfig.from_row(a, vendor_payouts=True)
+        out = pr.decide(cfg, p, vendor_state(aid), guard_mode, guard, allow_private_targets)
+        tag = f"[{out.layer}] {out.reason}"
+        if out.outcome == "block":
+            ledger.add_entry(aid, "deny", Decimal(0), f"{p.vendor}:{p.item}", p.target, p.purpose, "deny", tag)
+            ledger.add_purchase(aid, p.vendor, p.item, p.quantity, amount, p.target, p.purpose, "denied", "",
+                                None, None, out.layer, out.reason)
+            raise HTTPException(403, {"error": "denied_by_guard", **out.as_dict()})
+        cents, payee = to_cents(amount), vendorpay.merchant_id(p.vendor)
+        lim = vendor_limits(cfg, p.vendor)
+        if out.outcome == "approval":
+            expires = time.time() + 86400
+            pid, why = ledger.reserve_vendor_purchase(aid, p.vendor, p.item, p.quantity, cents, p.target, p.purpose,
+                                                      "pending_approval", payee, lim, out.layer, out.reason,
+                                                      approval_expires=expires)
+            if not pid:
+                raise HTTPException(409, f"not reserved: {why}")
+            busy = {"ai_unavailable": True, "message": AI_BUSY_MESSAGE} if out.layer == "policy-unavailable" else {}
+            return JSONResponse(status_code=202, content={
+                "status": "approval_required", "purchase_id": pid, "amount_usd": float(amount), **busy,
+                "approval_expires_at": expires, "guard": out.as_dict(),
+                "approve": {"method": "POST", "endpoint": f"/api/purchases/{pid}/approve",
+                            "who": "the owner (admin token, or the demo-session owner)"},
+                "note": "Nothing is charged now. If the owner approves, the vendor delivers first and is then paid "
+                        "by PayPal from the owner's saved card."})
+        paypal_budget()             # spent before delivery: our own call budget never blocks paying a delivered order
+        pid, why = ledger.reserve_vendor_purchase(aid, p.vendor, p.item, p.quantity, cents, p.target, p.purpose,
+                                                  "reserved", payee, lim, out.layer, out.reason)
+        if not pid:
+            raise HTTPException(409, f"not charged: {why}")
+        if not ledger.move_purchase(pid, ("reserved",), "completing"):
+            raise HTTPException(409, "purchase changed while starting; nothing was charged")
+        return fulfil_and_pay(aid, pid, p, out.as_dict())
+
+    def fulfil_and_pay(aid: str, pid: str, p: pr.Purchase, guard_out: dict | None = None):
+        """The purchase is `completing` (reserved, counted). Deliver; pay only if delivery succeeded."""
+        try:
+            result = fulfill(p)
+        except Exception as e:
+            ledger.move_purchase(pid, ("completing",), "failed", reason=f"vendor failed ({type(e).__name__}); nothing was paid")
+            raise HTTPException(502, f"vendor failed, not charged: {type(e).__name__}")
+        ledger.move_purchase(pid, ("completing",), "completing", fulfillment=json.dumps(result)[:4000])
+        return settle_vendor_payment(aid, pid, result, guard_out)
+
+    def _issue(e: Exception) -> str:
+        raw = getattr(e, "issue", "") or (f"HTTP {e.status}" if getattr(e, "status", 0) else type(e).__name__)
+        return re.sub(r"[^A-Za-z0-9_ ]", "", str(raw))[:60] or "error"
+
+    def settle_vendor_payment(aid: str, pid: str, result, guard_out: dict | None = None):
+        """One PayPal create-order call with PayPal-Request-Id at-{pid}-pay; one retry with the same id when there
+        was no definite answer. Every outcome after delivery fails closed."""
+        pu, a = ledger.purchase(pid), ledger.agent(aid)
+        vendor = pr.VENDORS[pu["vendor"]]["name"]
+        desc = f"AgentTab: {vendor} {pu['item']} x{pu['quantity']}"
+        resp, issue = None, ""
+        for attempt in (1, 2):
+            try:
+                resp = paypal.pay_vendor(a["vault_id"], pu["amount_cents"], pu["payee_merchant_id"], pid, desc)
+                break
+            except PayPalError as e:
+                issue = _issue(e)
+                if vendorpay.definite_refusal(e):
+                    ledger.move_purchase(pid, ("completing",), "payment_failed",
+                                         reason=f"PayPal refused the payment after the vendor delivered ({issue}); nothing was charged")
+                    freeze(aid, f"payment_failed on {pid}: PayPal refused the payment ({issue}) after the vendor delivered")
+                    raise HTTPException(402, {"error": "payment_failed", "purchase_id": pid, "issue": issue,
+                                              "note": "The vendor delivered but PayPal refused the payment, so nothing was "
+                                                      "charged. The agent is frozen until the owner sorts it out with the vendor."})
+            except Exception as e:      # a bug or an unreadable answer: we don't know what PayPal did
+                issue = _issue(e)
+            log.warning("vendor payment %s: no definite answer from PayPal (%s), attempt %d", pid, issue, attempt)
+        if resp is None:
+            ledger.move_purchase(pid, ("completing",), "payment_unknown",
+                                 reason=f"no definite answer from PayPal after one retry ({issue}); reconcile replays the same Request-Id")
+            freeze(aid, f"payment_unknown on {pid}: no definite answer from PayPal ({issue})")
+            raise HTTPException(502, {"error": "payment_unknown", "purchase_id": pid, "issue": issue,
+                                      "note": "PayPal gave no definite answer. The amount keeps counting and the agent is "
+                                              "frozen until reconcile finds out whether it was paid."})
+        status, info = vendorpay.check_payment(resp, pu["amount_cents"], pu["payee_merchant_id"], pid)
+        if status == "flagged":
+            ledger.move_purchase(pid, ("completing",), "flagged", paypal_order=info["order_id"],
+                                 paypal_capture=info["capture_id"], flag=info["reason"][:200],
+                                 reason=f"PayPal's answer didn't match the purchase: {info['reason']}")
+            freeze(aid, f"payment flagged on {pid}: {info['reason']}")
+            raise HTTPException(502, {"error": "payment_flagged", "purchase_id": pid, "reason": info["reason"],
+                                      "note": "PayPal's answer didn't match this purchase. It is never retried "
+                                              "automatically; the agent is frozen for the owner to review."})
+        deadline = refund_deadline(a, pu["vendor"]) if status == "completed" else None
+        ledger.move_purchase(pid, ("completing",), status, paypal_order=info["order_id"],
+                             paypal_capture=info["capture_id"], refund_deadline=deadline)
+        return {"purchase_id": pid, "status": status, "funding": "vendor", "paid_usd": pu["amount_cents"] / 100,
+                "paid_to": vendor, "paypal_order_id": info["order_id"], "paypal_capture_id": info["capture_id"],
+                "refund_deadline": deadline, "refundable": deadline is not None, "envelope": envelope_view(aid),
+                **({"guard": guard_out} if guard_out else {}), "result": result}
 
     def auto_topup_hold(a, shortfall: Decimal) -> tuple[dict | None, str]:
         """Place a HOLD (authorization) on the owner's saved (Vault) sandbox card so an already-guard-approved
@@ -912,6 +1073,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     def refund_one(pu, note: str = "", simulate: str = "") -> dict:
         pid = pu["id"]
         pu = ledger.purchase(pid)
+        if pu["funding"] == "vendor":       # the vendor holds this money; never a tab credit or a PayPal refund by us
+            raise HTTPException(409, "this purchase was paid straight to the vendor; AgentTab can't refund it "
+                                     "(refund requests to the vendor are not available yet)")
         if pu["status"] != "completed":
             raise HTTPException(409, f"purchase is {pu['status']}, not refundable")
         if pr.VENDORS.get(pu["vendor"], {}).get("fulfillment") == "live":
@@ -990,6 +1154,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """Owner approves a pending purchase and pays it with PayPal's sandbox test card (no browser step).
         In demo mode the visitor plays the owner of their own demo agent."""
         pu = purchase_for(pid, x_admin_token, x_agent_key)
+        if pu["funding"] == "vendor":
+            raise HTTPException(409, f"vendor-paid purchase: approve it with POST /api/purchases/{pid}/approve")
         if pu["status"] != "pending_approval":
             raise HTTPException(409, f"purchase is {pu['status']}")
         if time.time() > (pu["approval_expires"] or 0):
@@ -1024,6 +1190,42 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "refund_deadline": pu["refund_deadline"], "flag": pu["flag"],
                 **({"note": pu["reason"]} if pu["status"] != "completed" else {})}
 
+    @app.post("/api/purchases/{pid}/approve")
+    def approve_vendor_purchase(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
+        """Owner approves a vendor-paid purchase above the threshold: fulfil, then one PayPal capture order to the
+        vendor. Admin token or the demo-session owner only; never a plain agent key."""
+        pu = purchase_for(pid, x_admin_token, x_agent_key)
+        if pu["funding"] != "vendor":
+            raise HTTPException(409, "not a vendor-paid purchase; use its PayPal link or approve-sandbox-card")
+        if not s.vendor_payouts:
+            raise HTTPException(503, {"error": "vendor_payouts_disabled", "note": "Vendor payouts are off on this server."})
+        aid = pu["agent_id"]
+        with agent_lock_or_busy(aid):
+            pu = ledger.purchase(pid)
+            if pu["status"] != "pending_approval":
+                raise HTTPException(409, f"purchase is {pu['status']}")
+            if time.time() > (pu["approval_expires"] or 0):
+                ledger.move_purchase(pid, ("pending_approval",), "expired", reason="approval expired; nothing was charged")
+                raise HTTPException(409, "approval has expired; nothing was charged")
+            a = ledger.agent(aid)
+            refuse_if_frozen(a)
+            if a["funding_model"] != "vendor":
+                raise HTTPException(409, "agent no longer pays vendors directly")
+            sandbox_or_mock_payouts()
+            if not a["vault_id"]:
+                return card_required(aid)
+            current = vendorpay.merchant_id(pu["vendor"])
+            if current is None:
+                raise HTTPException(403, {"error": "denied_by_guard", "layer": "payee",
+                                          "reason": "vendor has no PayPal account configured"})
+            if current != pu["payee_merchant_id"]:
+                raise HTTPException(409, "the vendor's PayPal account changed since this purchase was requested; "
+                                         "reject it and buy again")
+            paypal_budget()
+            if not ledger.move_purchase(pid, ("pending_approval",), "completing"):
+                raise HTTPException(409, f"purchase is {ledger.purchase(pid)['status']}")
+            return fulfil_and_pay(aid, pid, pr.Purchase(pu["vendor"], pu["item"], pu["quantity"], pu["purpose"], pu["target"]))
+
     @app.post("/api/purchases/{pid}/reject")
     def reject_purchase(pid: str, x_admin_token: str = Header(""), x_agent_key: str = Header("")):
         pu = purchase_for(pid, x_admin_token, x_agent_key)
@@ -1039,6 +1241,25 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         if not a:
             raise HTTPException(404, "no such agent")
         return a
+
+    @app.put("/api/agents/{aid}/funding", dependencies=[Depends(admin)])
+    def set_funding(aid: str, body: FundingReq):
+        """Owner switches one agent to paying vendors directly (envelope budget) or back to the tab."""
+        if not s.vendor_payouts:
+            raise HTTPException(404, "vendor payouts are off on this server")
+        agent_or_404(aid)
+        env = None
+        if body.model == "vendor":
+            if body.envelope_usd is None:
+                raise HTTPException(422, "envelope_usd is required for vendor payouts")
+            try:
+                env = to_cents(Decimal(str(body.envelope_usd)))
+            except (ValueError, TypeError, InvalidOperation):
+                raise HTTPException(422, "envelope_usd must be whole cents")
+        ok, why = ledger.set_funding_model(aid, body.model, env)
+        if not ok:
+            raise HTTPException(409, why)
+        return agent_view(ledger.agent(aid))
 
     @app.post("/api/agents/{aid}/freeze", dependencies=[Depends(admin)])
     def freeze_agent(aid: str, body: FreezeReq):
@@ -1258,6 +1479,8 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                     pu = ledger.purchase_by_capture(cid) if cid else None
                     return known["agent_id"], pu["id"] if pu else "", f"refund {refund_id} confirmed by PayPal"
                 pu = ledger.purchase_by_capture(cid) if cid else None
+                if pu and pu["funding"] == "vendor":     # the vendor refunded its own capture: no tab credit, ever
+                    return pu["agent_id"], pu["id"], "refund of a vendor-paid capture noted; no tab credit"
                 if pu and ledger.claim_purchase(pu["id"], "completed", "refunding"):
                     aid = pu["agent_id"]
                     ledger.add_entry(aid, "credit", from_micro(pu["amount_micro"]), f"{pu['vendor']}:{pu['item']}",

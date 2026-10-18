@@ -412,6 +412,18 @@ class Ledger:
                     db.execute("ROLLBACK")
                 raise
 
+    def _expire_vendor_approvals(self, aid: str, now: float) -> int:
+        return self.db.execute("UPDATE purchases SET status='expired', reason='approval expired; nothing was charged'"
+                               " WHERE agent_id=? AND funding='vendor' AND status='pending_approval'"
+                               " AND approval_expires IS NOT NULL AND approval_expires<?", (aid, now)).rowcount
+
+    def expire_vendor_approvals(self, aid: str) -> int:
+        """Unapproved vendor purchases past their expiry stop counting against the caps."""
+        with self.lock:
+            n = self._expire_vendor_approvals(aid, time.time())
+            self.db.commit()
+        return n
+
     def vendor_counted_cents(self, aid: str, since: float, vendor: str | None = None) -> int:
         q = (f"SELECT COALESCE(SUM(amount_cents),0) FROM purchases WHERE agent_id=? AND funding='vendor'"
              f" AND status IN ({','.join('?' * len(VENDOR_COUNTED))}) AND ts>=?")
@@ -445,6 +457,7 @@ class Ledger:
             db = self.db
             db.execute("BEGIN IMMEDIATE")
             try:
+                self._expire_vendor_approvals(aid, now)
                 a = self.agent(aid)
                 why = ""
                 if a is None:
@@ -518,8 +531,10 @@ class Ledger:
             self.db.commit()
 
     def purchases(self, aid: str, limit: int = 200):
+        """API listing. The vendor's merchant id never leaves the server."""
         rows = self.db.execute("SELECT * FROM purchases WHERE agent_id=? ORDER BY ts DESC LIMIT ?", (aid, limit))
-        return [dict(r) | {"amount_usd": float(from_micro(r["amount_micro"]))} for r in rows.fetchall()]
+        return [{k: v for k, v in dict(r).items() if k != "payee_merchant_id"} |
+                {"amount_usd": float(from_micro(r["amount_micro"]))} for r in rows.fetchall()]
 
     def captures(self, aid: str):
         # Only tab top-ups; captures that paid for a specific approved purchase are refunded per purchase.

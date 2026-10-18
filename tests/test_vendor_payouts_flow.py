@@ -51,6 +51,12 @@ def env(tmp_path, ids):
     return make(tmp_path)
 
 
+def share_paypal(pp1, pp2):
+    """Two app instances (two processes) talk to the same PayPal: share the mock's vault and vendor orders."""
+    pp2._mock_vault = pp1._mock_vault
+    pp2.mock_vendor_orders = pp1.mock_vendor_orders
+
+
 def agent(c, L, envelope=100.0, card=True, daily=250.0, **kw):
     """Vendor-funded agent: switched with the step-1 ledger call (the funding endpoint has its own tests)."""
     body = {"name": "v", "policy": pr.SHOP_POLICY, "daily_cap_usd": daily, "per_call_cap_usd": 120.0,
@@ -442,8 +448,27 @@ def test_vendor_approve_endpoint_refuses_tab_purchases(tmp_path, ids):
                                     "per_call_cap_usd": 120.0, "approval_threshold_usd": 60.0}, headers=A).json()
     rr = c.post("/api/purchases", json=BLANKETS, headers={"X-Agent-Key": r["api_key"]})
     assert rr.status_code == 202
-    assert c.post(f"/api/purchases/{rr.json()['purchase_id']}/approve", headers=A).status_code == 409
-    assert pays(pp) == []
+    ra = c.post(f"/api/purchases/{rr.json()['purchase_id']}/approve", headers=A)
+    assert ra.status_code == 409 and "not a vendor-paid purchase" in ra.text
+    assert pays(pp) == [] and L.purchase(rr.json()["purchase_id"])["status"] == "pending_approval"
+
+
+def test_live_paypal_base_refuses_vendor_flow_before_anything(tmp_path, ids, monkeypatch):
+    """Vendor payouts never run against live PayPal: refused before the guard, the reservation and fulfilment."""
+    import httpx
+    monkeypatch.setattr(httpx, "request", lambda *x, **k: pytest.fail("network call"))
+    monkeypatch.setattr(httpx, "post", lambda *x, **k: pytest.fail("network call"))
+    c, pp, L = make(tmp_path, paypal_mode="sandbox", paypal_base="https://api-m.paypal.com", allow_insecure_mock=False,
+                    public_url="http://localhost:8000")
+    r = c.post("/api/agents", json={"name": "v", "policy": pr.SHOP_POLICY, "daily_cap_usd": 250.0,
+                                    "per_call_cap_usd": 120.0}, headers=A).json()
+    assert L.set_funding_model(r["agent_id"], "vendor", 10_000)[0]
+    L.set_vault(r["agent_id"], "VAULT-FAKE", "VISA 1111")
+    fulfils = []
+    live(monkeypatch, lambda *x, **k: fulfils.append(1) or {})
+    rr = c.post("/api/purchases", json=NAPKINS, headers={"X-Agent-Key": r["api_key"]})
+    assert rr.status_code == 503 and "sandbox" in rr.text
+    assert fulfils == [] and L.purchases(r["agent_id"]) == []
 
 
 # ---------- 6. double approval ----------
@@ -468,6 +493,7 @@ def test_two_concurrent_approvals_one_payment(env, monkeypatch):
 def test_two_app_instances_approve_once(tmp_path, ids, monkeypatch):
     c1, pp1, L1 = make(tmp_path)
     c2, pp2, _ = make(tmp_path)                                  # same DB file, separate locks (two processes)
+    share_paypal(pp1, pp2)
     a = agent(c1, L1)
     pid = buy(c1, a, BLANKETS).json()["purchase_id"]
     live(monkeypatch, lambda *x, **k: time.sleep(0.2) or {"ok": 1}, item="throw-blanket-sample")
@@ -510,6 +536,7 @@ def test_parallel_buys_never_exceed_caps(tmp_path, ids, monkeypatch, cap):
 def test_parallel_buys_two_app_instances_one_db(tmp_path, ids, monkeypatch):
     c1, pp1, L = make(tmp_path, purchases_per_agent_hour=100, tool_calls_per_ip_hour=100)
     c2, pp2, _ = make(tmp_path, purchases_per_agent_hour=100, tool_calls_per_ip_hour=100)
+    share_paypal(pp1, pp2)
     a = agent(c1, L, envelope=100.0)
     live(monkeypatch, lambda *x, **k: time.sleep(0.05) or {"ok": 1})
     codes = _parallel([c1, c2], a)
@@ -564,6 +591,8 @@ def test_funding_endpoint_owner_only_and_whole_cents(env):
     assert c.put(url, json={"model": "vendor", "envelope_usd": 5.001}).status_code == 401
     assert c.put(url, json={"model": "direct", "envelope_usd": 5.0}, headers=A).status_code == 422
     assert c.put(url, json={"model": "vendor", "envelope_usd": -1}, headers=A).status_code == 422
+    assert c.put(url, json={"model": "vendor", "envelope_usd": 5.001}, headers=A).status_code == 422   # whole cents
+    assert c.put(url, json={"model": "vendor"}, headers=A).status_code == 422
     ok = c.put(url, json={"model": "vendor", "envelope_usd": 12.34}, headers=A)
     assert ok.status_code == 200 and L.agent(r["agent_id"])["envelope_cents_30d"] == 1234
     assert ok.json()["funding_model"] == "vendor" and ok.json()["envelope"]["budget_30d_usd"] == 12.34

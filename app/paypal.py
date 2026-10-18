@@ -7,6 +7,7 @@ without credentials.
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import time
@@ -53,6 +54,12 @@ class PayPalClient:
         self._mock_captures: dict[str, dict] = {}   # capture_id -> {amount, refunded, status}; tests may edit
         self._mock_vault: dict[str, dict] = {}
         self.mock_fail: dict[str, str] = {}          # offline tests: {"operation": "ISSUE"} fails it once
+        # Vendor payouts (offline): every pay_vendor request (body + PayPal-Request-Id), the orders "PayPal" made
+        # (keyed by Request-Id, so a repeat replays the first result), a per-call script and a response tamper hook.
+        self.mock_requests: list[dict] = []
+        self.mock_vendor_orders: dict[str, dict] = {}
+        self.mock_vendor_script: list = []   # "ok" | "timeout_before" | "timeout_after" | ("error", http, issue)
+        self.mock_vendor_tamper = None       # callable(response) -> None, edits the returned copy
 
     # ---------- auth ----------
     def _access_token(self) -> str:
@@ -393,6 +400,58 @@ class PayPalClient:
         if j.get("status") != "COMPLETED" or not auths or auths[0].get("status") != "CREATED":
             raise PayPalError(f"saved-card authorization not created: {j.get('status')}")
         return {"order_id": j["id"], "authorization_id": auths[0]["id"], "amount": Decimal(auths[0]["amount"]["value"])}
+
+    # ---------- vendor payouts, capture-only (docs/vendor-payouts-impl-plan.md) ----------
+    @staticmethod
+    def vendor_order_body(vault_id: str, amount_cents: int, payee_merchant_id: str, pid: str, description: str) -> dict:
+        """The body that completed in the capture-only spike (debug id f17615595ff9b): one CAPTURE order, the
+        vendor as payee, the owner's saved card as a merchant-initiated stored credential. Amount from cents."""
+        from .ledger import cents_str
+        return {"intent": "CAPTURE",
+                "purchase_units": [{"reference_id": pid, "custom_id": pid, "description": description[:127],
+                                    "amount": {"currency_code": "USD", "value": cents_str(amount_cents)},
+                                    "payee": {"merchant_id": payee_merchant_id}}],
+                "payment_source": {"card": {"vault_id": vault_id, "stored_credential": {
+                    "payment_initiator": "MERCHANT", "payment_type": "UNSCHEDULED", "usage": "SUBSEQUENT"}}}}
+
+    def pay_vendor(self, vault_id: str, amount_cents: int, payee_merchant_id: str, pid: str, description: str) -> dict:
+        """Pay the vendor straight from the owner's saved card: POST /v2/checkout/orders, PayPal-Request-Id
+        at-{pid}-pay (a repeat returns the first request's result). Returns PayPal's order JSON unchanged; the
+        caller checks status, payee and amount. No answer (timeout, network) raises PayPalError with status 0."""
+        from .vendorpay import request_id
+        rid = request_id(pid, "pay")
+        body = self.vendor_order_body(vault_id, amount_cents, payee_merchant_id, pid, description)
+        if self.mock:
+            self.mock_requests.append({"op": "pay_vendor", "request_id": rid, "body": copy.deepcopy(body)})
+            step = self.mock_vendor_script.pop(0) if self.mock_vendor_script else "ok"
+            if step == "timeout_before":
+                raise PayPalError("POST /v2/checkout/orders: timeout", "TIMEOUT", 0)
+            if isinstance(step, tuple) and step[0] == "error":
+                raise PayPalError(f"POST /v2/checkout/orders: {step[1]} {step[2]}", step[2], step[1])
+            if rid not in self.mock_vendor_orders:
+                if vault_id not in self._mock_vault:
+                    raise PayPalError("unknown vault token", "PERMISSION_DENIED", 403)
+                oid = "MOCK-" + uuid.uuid4().hex[:12].upper()
+                cid = "CAP-" + oid[5:]
+                u = copy.deepcopy(body["purchase_units"][0])
+                u.pop("description", None)
+                u["payments"] = {"captures": [{"id": cid, "status": "COMPLETED", "amount": dict(u["amount"]),
+                                               "final_capture": True, "custom_id": pid}]}
+                self.mock_vendor_orders[rid] = {"id": oid, "status": "COMPLETED", "purchase_units": [u]}
+                self._mock_record_capture(cid, Decimal(u["amount"]["value"]))
+            if step == "timeout_after":          # PayPal made the order, the answer was lost
+                raise PayPalError("POST /v2/checkout/orders: timeout", "TIMEOUT", 0)
+            out = copy.deepcopy(self.mock_vendor_orders[rid])
+            if self.mock_vendor_tamper:
+                self.mock_vendor_tamper(out)
+            return out
+        if not self.is_sandbox:
+            raise PayPalError("vendor payments are only allowed in the PayPal sandbox", "SANDBOX_ONLY", 403)
+        try:
+            return self._req("POST", "/v2/checkout/orders", body, request_id=rid)
+        except httpx.HTTPError as e:
+            raise PayPalError(f"POST /v2/checkout/orders: {type(e).__name__}",
+                              "TIMEOUT" if isinstance(e, httpx.TimeoutException) else "NETWORK", 0)
 
     def delete_vault_token(self, vault_id: str) -> None:
         if self.mock:
