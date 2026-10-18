@@ -75,3 +75,17 @@ def test_vendor_mode_copy_in_the_browser(page):
                         ".then(j => j.resources.find(r => r.kind === 'agent').detail)")
     assert row == "budget $58 left"                         # $100 - $24 napkins - $18 mug
     assert not page.errs, page.errs
+
+
+def test_vendor_bars_toast_pill_and_item_names(page):
+    """Runs after the two tests above (napkins refund requested, mug paid): the SampleBox bar still counts both."""
+    page.wait_for_function("document.getElementById('dbudgets').textContent.includes('$42.00 / $200.00')")
+    assert "$42.00 paid · $0.00 set aside" in page.inner_text("#dbudgets")
+    assert "Paid · $18.00" in page.inner_text("body") and "Bought · $18.00" not in page.inner_text("body")
+    page.wait_for_function("document.getElementById('dpurch').textContent.includes('refund with SampleBox Wholesale')")
+    clipped = page.evaluate("""[...document.querySelectorAll('#dpurch .ag-cell .pill')].filter(p => {
+        const cell = p.closest('.ag-cell'); return p.getBoundingClientRect().right > cell.getBoundingClientRect().right + 0.5; }).length""")
+    assert clipped == 0
+    items = page.inner_text("#dpurch")
+    assert "Napkin samples · SampleBox" in items and "Mug sample · SampleBox" in items and "SampleBox Wholesale · " not in items
+    assert not page.errs, page.errs
