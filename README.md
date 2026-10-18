@@ -254,7 +254,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
    - Writes a brief.
 
 ## Public demo mode (`DEMO_MODE=1`)
-- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $60 approval threshold, $120 per purchase, $250 per day). With vendor payouts switched on (the live site) it gets PayPal's sandbox test card saved in the Vault and a $100 30-day budget, and each purchase is paid to the vendor ([Where the money goes](#where-the-money-goes)); with them off, its tab is funded with $100 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends two SaaS seats ($78) to approval and approves it, watches a gift card and a prompt injection get blocked, and refunds individual purchases.
+- **Start demo session** gives a visitor their own Lumen & Loom agent (shop policy, vendor budgets, $60 approval threshold, $120 per purchase, $250 per day). With vendor payouts switched on (the live site) it gets PayPal's sandbox test card saved in the Vault and a $100 30-day budget, and each purchase is paid to the vendor ([Where the money goes](#where-the-money-goes)); with them off, its tab is funded with $100 through a real PayPal **sandbox** capture using a test card. The visitor buys a sample, sends two SaaS seats ($78) to approval and approves it, watches a gift card and a prompt injection get blocked, and asks the vendor for a refund.
 - Visitors only ever hold their own agent key. Only agents created by `/api/demo/session` (flagged as demo agents) may play
   "owner" of their own purchases (approve, reject, refund, demo clock, demo report). Regular agents can't, even on a demo
   server. All other owner endpoints need `ADMIN_TOKEN` (24+ random characters, required in demo mode, no default).
@@ -298,7 +298,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 | POST | `/api/purchases/{id}/used` | agent | Mark an item as used (no refund suggestion) |
 | POST | `/paypal/webhook` | PayPal | Signature-verified webhook events |
 | POST | `/mcp` | agent (MCP client) | MCP server: the agent's guarded tools (see above) |
-| POST | `/api/demo/session` | anyone (demo mode) | New demo agent funded with $100 of sandbox money |
+| POST | `/api/demo/session` | anyone (demo mode) | New demo agent: a $100 30-day budget and a saved sandbox card (vendor payouts on), or a $100 tab (off) |
 | GET/POST | `/api/demo/ledger` · `purchases` · `report` · `refund` · `fast-forward?days=6` | demo agent | Demo views and actions for your own demo agent |
 
 ## Safety: what the code does (and its limits)

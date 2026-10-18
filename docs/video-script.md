@@ -28,9 +28,9 @@ file and test that back it. Anything not verified is marked **UNSURE**. All numb
 | # | Section | Time | Length |
 |---|---|---|---|
 | 1 | Problem | 0:00–0:20 | 20 s |
-| 2 | Live demo: fund, injection, $78 hold, approve and capture, MCP | 0:20–1:45 | 85 s |
+| 2 | Live demo: session, injection, $78 approval, vendor payment, MCP | 0:20–1:45 | 85 s |
 | 3 | Proof: rules alone vs rules + AI | 1:45–2:25 | 40 s |
-| 4 | PayPal: why authorize-then-capture | 2:25–2:55 | 30 s |
+| 4 | PayPal: one capture order to the vendor | 2:25–2:55 | 30 s |
 | 5 | End card | 2:55–3:00 | 5 s |
 
 ---
@@ -42,22 +42,22 @@ receipt printing guard decisions.
 
 **Voiceover:**
 > "Shops want AI agents that buy things: samples, data, software seats. But giving an agent your
-> card means one poisoned web page can spend your money. AgentTab gives the agent a tab instead of a card: it's funded
-> through PayPal, has hard limits, and every purchase goes through a guard."
+> card means one poisoned web page can spend your money. AgentTab gives the agent a budget instead of a card: PayPal
+> pays the vendor, there are hard limits, and every purchase goes through a guard."
 
 | Claim | Backing |
 |---|---|
-| The agent spends from a PayPal-funded tab, not a card | `tests/test_agenttab.py::test_402_then_fund_then_charge` |
+| PayPal pays the vendor from the owner's saved card, inside a budget | `tests/test_vendor_payouts_flow.py::test_one_capture_order_straight_to_the_vendor` |
 | The hero receipt replays real eval decisions (dry run) | `app/main.py` `GET /api/replay`; `tests/test_e2e_landing.py` (receipt tests on the landing branch) |
 
 ## 2. Live demo (0:20–1:45), local instance
 
-### 2a. Fund the agent (0:20–0:30)
-**Action:** at `http://127.0.0.1:8811/#workspace`, click **"1. Start demo session"** (funds $100).
-**On screen:** the "Funded $100.00 via PayPal sandbox" toast with the order and capture ids.
-> "One click funds a demo agent with a hundred dollars through PayPal."
+### 2a. Start a session (0:20–0:30)
+**Action:** at `http://127.0.0.1:8811/#workspace`, click **"1. Start demo session"**.
+**On screen:** the "Demo agent ready" toast: "Sandbox test card saved · $100.00 30-day budget".
+> "One click gives a demo agent a hundred-dollar budget and a saved PayPal sandbox card."
 
-Backing: `static/app.js` `demoStart()`; `tests/test_agenttab.py::test_402_then_fund_then_charge`.
+Backing: `static/app.js` `demoStart()`; `tests/test_vendor_payouts_ui.py::test_demo_session_is_vendor_funded_with_the_flag_on`.
 
 ### 2b. Prompt injection: rules alone vs Claude (0:30–0:55)
 **Action (Take A, rules only):** click **"6. Try an injected instruction"**. The purpose is
@@ -77,35 +77,35 @@ Backing: `static/app.js` `demoStart()`; `tests/test_agenttab.py::test_402_then_f
 | If Claude errors or is unavailable, a human decides; never auto-approve | `tests/test_claude_guard.py::test_unavailable_claude_sends_the_purchase_to_human_approval`, `::test_sdk_errors_mean_unavailable_never_allowed` |
 | Live Claude allow/block behaviour | `tests/test_claude_guard.py::test_live_claude_blocks_a_forbidden_target`, `::test_live_claude_blocks_an_off_policy_purpose` (live tests, skipped without a key; **UNSURE** when they last ran) |
 
-### 2c. A $78 purchase waits for approval behind a PayPal hold (0:55–1:15)
+### 2c. A $78 purchase waits for approval in AgentTab (0:55–1:15)
 **Action (Take A):** click **"4. Inventory SaaS, 2 seats"** ($78).
-**On screen:** a **"Needs your approval"** verdict with `layer: approval`, and the reason *"$78.00 is above the $60.00
-approval threshold; policy check passed"*. The Purchases table shows `pending approval`.
-> "Two software seats, seventy-eight dollars. It passes the policy, but anything over sixty dollars waits for the owner.
-> When the owner approves, PayPal places a hold first, an authorization, not a charge."
+**On screen:** the **HELD** stamp with one line, "Waiting for: owner approval", and the reason *"$78.00 is above the
+$60.00 approval threshold; policy check passed"*. The Purchases table shows `pending approval`.
+> "Two software seats, seventy-eight dollars. It passes the policy, but anything over sixty dollars waits for the owner,
+> here in AgentTab. PayPal isn't called yet."
 
 | Claim | Backing |
 |---|---|
 | 2 × $39 = $78 needs approval, 1 seat does not | `tests/test_realistic_shop.py::test_two_seats_need_approval_one_seat_does_not`; threshold `SHOP_APPROVAL_THRESHOLD = 60.00` in `app/procurement.py` |
-| The approval returns 202 with a PayPal approval link | `tests/test_agenttab.py::test_approval_flow_card_and_direct_refund` (asserts `status_code == 202` and `approve_url`) |
-| The approval order uses `intent=AUTHORIZE` | `tests/test_paypal_depth.py::test_approval_link_authorizes_then_captures_after_delivery` |
+| It waits in AgentTab: no PayPal call, no PayPal link | `tests/test_vendor_payouts_flow.py::test_above_threshold_reserves_no_paypal` |
+| HELD with one line, "Waiting for: owner approval" | `tests/test_e2e_vendor_payouts.py::test_vendor_held_verdict_has_one_waiting_line` |
 
 Note: with Claude on (Take B), step 4 also makes one Claude call, because the policy check runs before the approval layer.
 
-### 2d. Owner approves, then capture after delivery (1:15–1:35)
-**Action:** in **Purchases**, click **"Approve (sandbox card)"** on the $78 row.
-**On screen:** the "Approved and paid with the sandbox card" toast; status `completed`; the response shows
-`paypal_authorization_id` then `paypal_capture_id` (local mock check on 2026-10-18: `AUTH-…` then `CAP-…`, status `completed`).
-> "The owner approves. AgentTab delivers first, then captures exactly the approved amount. If the vendor had failed, the
-> hold would simply be voided, and nothing is charged."
+### 2d. Owner approves, then delivery, then PayPal pays ShopSuite (1:15–1:35)
+**Action:** in **Purchases**, click **Approve** on the $78 row.
+**On screen:** the "Approved" toast; status `paid`, paid to ShopSuite from the saved card.
+> "The owner approves. AgentTab delivers first, then makes one PayPal order with intent CAPTURE and ShopSuite as the
+> payee, so the money lands in the vendor's account. If delivery fails, nobody touches PayPal. If PayPal's answer is
+> unclear, the agent freezes."
 
 | Claim | Backing |
 |---|---|
-| Authorize, deliver, then capture; refund goes back to the capture | `tests/test_paypal_depth.py::test_approval_link_authorizes_then_captures_after_delivery` (asserts the $78.00 refund on the capture) |
-| Card approval completes the purchase; refund only once | `tests/test_agenttab.py::test_approval_flow_card_and_direct_refund` |
-| Vendor failure voids the hold; nothing charged | `tests/test_paypal_depth.py::test_vendor_failure_voids_hold_and_charges_nothing` |
-| The captured amount must equal the approved amount | `tests/test_paypal_depth.py::test_authorized_amount_must_match_approved_amount` |
-| Double approval charges once | `tests/test_hardening.py::test_double_card_approval_charges_once` |
+| After approval: delivery, then one order with intent CAPTURE | `tests/test_vendor_payouts_flow.py::test_approve_then_fulfil_then_one_capture_order` |
+| The payee is the vendor's sandbox merchant account (ShopSuite's id from `merchant_id()` in `app/vendorpay.py`), paid from the saved card | `tests/test_vendor_payouts_flow.py::test_one_capture_order_straight_to_the_vendor` |
+| Delivery fails: no PayPal call, nothing charged | `tests/test_vendor_payouts_flow.py::test_fulfil_fails_no_paypal_call` |
+| No clear answer from PayPal: `payment_unknown`, the agent is frozen | `tests/test_vendor_payouts_flow.py::test_still_unknown_after_one_retry` |
+| Two approvals at once pay once | `tests/test_vendor_payouts_flow.py::test_two_concurrent_approvals_one_payment` |
 
 ### 2e. MCP connect (1:35–1:45)
 **Action:** scroll to **"Connect an MCP client"** (`#mcp`). Show the endpoint, click **Reveal** on the agent key, and show the generated client config.
@@ -154,38 +154,29 @@ personal-use purchases 4 / 7 → 7 / 7, social-media targets 5 / 6 → 6 / 6. Cl
 
 ## 4. PayPal (2:25–2:55)
 
-**On screen:** the Schedule (Bryntum) and Purchases on the local instance, showing the $78 row's states, plus the README PayPal section.
+**On screen:** the Schedule (Bryntum) and Purchases on the recorded build, showing the $78 row's states, plus the README
+section "Where the money goes".
 
-**Where the money goes (don't overstate it):** on the live site today vendor payouts are off, so every PayPal capture
-lands in AgentTab's own sandbox merchant account: tab top-ups and approval holds set no payee, and the shop vendors are
-`"fulfillment": "simulated"` in `app/procurement.py`. The voiceover and on-screen text must never say a vendor is paid
-in this mode.
-
-**Vendor mode, only when vendor payouts are switched on (`VENDOR_PAYOUTS=1`; it is off on the live site):** a
-vendor-funded agent has no tab. The owner saves PayPal's sandbox test card and sets a 30-day budget; each allowed
-purchase is reserved against that budget, AgentTab's fulfilment step runs (simulated for the shop vendors), and then one
-PayPal sandbox order (`intent=CAPTURE`, `payee` = that vendor's sandbox merchant account) is paid from the saved card
-(`test_one_capture_order_straight_to_the_vendor`, `test_paypal_only_after_fulfil_and_amount_is_the_reservation`). A
-refused payment freezes the agent (`test_definite_refusal_after_delivery`), and so does a reply that doesn't match the
-order (`test_response_mismatch_is_flagged_and_freezes`). A vendor with no merchant id configured is blocked
-(`test_vendor_without_id_blocked_before_guard_and_fulfil`). A refund is requested with the vendor and never credits a
-tab (`test_refund_of_vendor_paid_purchase_never_credits_tab_or_calls_paypal`). With the flag off, the demo stays
-tab-funded (`test_demo_session_stays_tab_funded_with_the_flag_off`). Only narrate or show vendor mode if the flag is on
-on the live site when recording; otherwise leave it out.
-> "PayPal does the money work. Funding is a PayPal order, captured into the tab's integer-cent ledger, so parallel buys can't
-> overspend. Big purchases are holds, authorizations captured only after delivery and voided on failure. Webhooks are
-> signature-verified and applied once, and if PayPal declines a capture after delivery, the agent freezes until the owner
-> reconciles."
+**Where the money goes (don't overstate it):** the video is filmed with vendor payouts on (`VENDOR_PAYOUTS=1`),
+as on the live site. Each purchase is one PayPal sandbox order with `intent: CAPTURE`, the vendor's sandbox merchant account as
+`payee` and the owner's saved card as the payment source, created only after AgentTab's delivery step
+(`test_one_capture_order_straight_to_the_vendor`, `test_paypal_only_after_fulfil_and_amount_is_the_reservation`). The
+shop vendors' delivery is `"fulfillment": "simulated"` in `app/procurement.py`, so the voiceover never claims a vendor
+action beyond being paid. Agents created in the owner console use a prepaid tab with authorize-then-capture holds.
+> "PayPal does the money work. Each purchase is one PayPal order with intent CAPTURE, paid from the owner's saved card
+> straight to the vendor, only after delivery. Budgets are kept in integer cents, so parallel buys can't overspend. A
+> refund is a request to the vendor that reconcile confirms, and if PayPal's answer is unclear, the agent freezes until
+> the owner reconciles."
 
 | Claim | Backing |
 |---|---|
-| Parallel buys can't overspend the balance, vendor budget or daily cap | `tests/test_hardening.py::test_parallel_purchases_never_overspend_balance`, `::test_parallel_purchases_respect_vendor_budget_and_daily_cap` |
-| Webhooks require a signature (sandbox) | `tests/test_agenttab.py::test_webhook_requires_signature_in_sandbox` |
-| A return-URL vs webhook race captures once | `tests/test_paypal_depth.py::test_return_url_and_webhook_race_authorizes_and_captures_once` |
-| Capture declined after delivery freezes the agent | `tests/test_paypal_depth.py::test_capture_decline_after_delivery_freezes_agent` |
-| Expired approval: a late payment is voided | `tests/test_paypal_depth.py::test_late_paid_link_on_expired_approval_is_voided` |
-| Captures go to AgentTab's own account; vendors receive nothing via PayPal | `app/paypal.py` and `app/main.py` (no payee on any order); `app/procurement.py` (`"fulfillment": "simulated"`). Code-cited, no dedicated test |
-| Real sandbox authorize/capture/void | `tests/test_paypal_depth.py::test_live_sandbox_authorize_capture_void_declines_and_vault` (live, skipped without sandbox keys; **UNSURE** when it last ran) |
+| One order, intent CAPTURE, the vendor as payee, from the saved card | `tests/test_vendor_payouts_flow.py::test_one_capture_order_straight_to_the_vendor` |
+| Only after delivery, for the reserved amount | `tests/test_vendor_payouts_flow.py::test_paypal_only_after_fulfil_and_amount_is_the_reservation` |
+| Parallel buys can't exceed the budget or caps | `tests/test_vendor_payouts_flow.py::test_parallel_buys_never_exceed_caps` |
+| A refund is a request to the vendor; reconcile confirms it | `tests/test_vendor_payouts_reconcile.py::test_refund_request_moves_to_refund_requested_without_paypal`, `::test_refunded_capture_becomes_refunded_and_stops_counting` |
+| An unclear answer freezes the agent; reconcile replays the same Request-Id | `tests/test_vendor_payouts_flow.py::test_still_unknown_after_one_retry`, `tests/test_vendor_payouts_reconcile.py::test_reconcile_replays_unknown_with_same_request_id` |
+| A reply that doesn't match the order is flagged and freezes the agent | `tests/test_vendor_payouts_flow.py::test_response_mismatch_is_flagged_and_freezes` |
+| Owner-console agents: authorize, deliver, then capture | `tests/test_paypal_depth.py::test_approval_link_authorizes_then_captures_after_delivery` |
 
 ## 5. End card (2:55–3:00)
 

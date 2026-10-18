@@ -9,9 +9,9 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 |---|---|---|
 | 0:00 | Open the page. | The **Live AI guard** badge in the top bar (green = the AI guard is configured and answering; orange **AI busy, human approval** = purchases that reach the policy check wait for a human). |
 | 0:10 | Click **Run the attack Gauntlet live**. | 8 attacks (one per category) + 2 legitimate buys go through the production `decide()` with the live AI guard. Each row shows the verdict, the layer that decided, the model and the latency. Dry run: no charge, no PayPal call. |
-| 0:25 | Click **Open live demo** → **1. Start demo session**. | A fresh agent funded with **$100 through a real PayPal sandbox capture** (test card). Balance and vendor budgets appear. |
-| 0:35 | Click **2** → **6** in order. | 2 mug sample bought from the tab · 3 competitor research bought (a real HTTP fetch) · 4 two SaaS seats ($78, over $60) → **held for approval** (202) · 5 gift card **blocked** (vendor not allowed) · 6 instruction injected into the purpose **blocked by the AI guard**. |
-| 0:50 | In **Purchases**, click **Approve (sandbox card)** on the SaaS seat, then **Refund** on the mug. | The seat is paid by its own PayPal sandbox capture; the mug credit returns to the tab. The **Schedule** (Bryntum) shows budgets, the refund windows and the ⚡ PayPal events. |
+| 0:25 | Click **Open live demo** → **1. Start demo session**. | A fresh agent with a **$100 30-day budget** and PayPal's sandbox test card saved in the Vault. The budget and vendor bars appear. |
+| 0:35 | Click **2** → **6** in order. | 2 mug sample paid to the vendor · 3 competitor research bought (a real HTTP fetch) · 4 two SaaS seats ($78, over $60) → **held for approval** (202) · 5 gift card **blocked** (vendor not allowed) · 6 instruction injected into the purpose **blocked by the AI guard**. |
+| 0:50 | In **Purchases**, click **Approve** on the SaaS seats, then **Request refund** on the mug. | The seats are paid by one PayPal sandbox order to ShopSuite; the mug shows **Refund requested** (the vendor refunds through PayPal; reconcile confirms it). The **Schedule** (Bryntum) shows budgets, the refund windows and the ⚡ PayPal events. |
 | 1:00 | Optional: **Demo clock: jump 6 days ahead**. | Refund windows near their end; the scheduler *proposes* refunds and waits for a human to confirm. |
 
 ## If you have five more minutes
@@ -24,6 +24,7 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
   - PayPal: [`app/paypal.py`](../app/paypal.py) (Orders v2, Payments v2 authorize/capture/void and refunds, Vault v3,
     negative testing, webhook signature verification). Holds, the freeze and reconciliation are in
     [`app/main.py`](../app/main.py) `complete_authorized()` and `reconcile()`.
+  - Vendor payouts: [`app/vendorpay.py`](../app/vendorpay.py) (`check_payment()`, `merchant_id()`); the flow is `vendor_buy()` and `settle_vendor_payment()` in [`app/main.py`](../app/main.py).
 - **Threat model mapped to tests:** [`docs/threat-model.md`](threat-model.md).
 - **Run it locally, offline** (mock PayPal, no keys): `pip install -r requirements.txt -r requirements-dev.txt && pytest -q`.
 
@@ -32,17 +33,18 @@ Nothing to install, no account, no real money: every payment is in the **PayPal 
 | Part | Status | Details |
 |---|---|---|
 | PayPal Orders v2 (create, approve, capture) | **Real, sandbox** | `api-m.sandbox.paypal.com`; owner top-ups and approval links open real sandbox checkout. |
-| Demo funding and "Approve (sandbox card)" | **Real, sandbox** | Orders v2 with PayPal's public sandbox test card, so judges don't have to log in to a sandbox buyer account. Refused against live PayPal. |
-| Authorize → capture / void | **Real, sandbox** | Approvals place a hold; captured after delivery, voided if delivery fails. |
+| Card top-up and "Approve (sandbox card)" | **Real, sandbox; tab-funded agents (owner console)** | Orders v2 with PayPal's public sandbox test card, so judges don't have to log in to a sandbox buyer account. Refused against live PayPal. |
+| Vendor payout (capture to the vendor's account) | **Real, sandbox, on the live site** | One Orders v2 order (`intent: CAPTURE`, the vendor as payee) from the saved card, after delivery. |
+| Authorize → capture / void | **Real, sandbox; tab-funded agents (owner console)** | Approvals place a hold; captured after delivery, voided if delivery fails. |
 | Forced declines | **Real, sandbox** | PayPal's `PayPal-Mock-Response` negative testing, via the owner-only `X-Simulate-Decline` header. |
 | Reconciliation + freeze | **Real, sandbox** | Ledger vs `GET /v2/payments/captures/{id}`; mismatches freeze the agent. |
 | Saved card (Vault v3) + auto top-up | **Real, sandbox** | PayPal's generic sandbox test Visa saved in Vault; merchant-initiated holds within an owner cap, captured only after the purchase commits. |
-| Refunds | **Real, sandbox** | Payments v2 refund of the specific capture (tab refunds, approval-funded purchases). Tab-funded purchase refunds are ledger credits back to the tab. |
+| Refunds | **Real, sandbox** | Vendor-paid purchases: a refund request to the vendor, confirmed by reconcile. Tab-funded agents: Payments v2 refund of the specific capture, or a ledger credit back to the tab. |
 | Webhooks | **Real, sandbox** | `POST /paypal/webhook`, every event checked with PayPal's `verify-webhook-signature`; unverified events are rejected. |
 | AI spend guard | **Real** | Claude (`claude-haiku-5-5`) through the official Anthropic SDK. If it is unavailable, or not configured in production, the purchase is held for a human. |
 | Gauntlet | **Real guard, no money** | The live AI guard on sampled eval cases; nothing is charged and PayPal is not called. |
 | SiteScope Data purchases (tech stack, Markdown, links…) | **Real** | Real HTTP fetches of public sites through the SSRF-guarded fetcher. |
-| SampleBox Wholesale, ShopSuite, GiftCards Now | **Simulated vendors** | Fulfilment returns a `SIM-…` vendor order. The money side (tab, approvals, refunds) is real sandbox PayPal. |
+| SampleBox Wholesale, ShopSuite, GiftCards Now | **Simulated vendors** | Fulfilment returns a `SIM-…` vendor order. The money side (vendor payments, refund checks) is real sandbox PayPal. |
 | Money | **Sandbox only** | No real funds anywhere. |
 | Demo clock | **Simulated time** | Shifts only your demo agent's timestamps back so deadlines approach. |
 | Mock PayPal (`PAYPAL_MODE=mock`) | **Offline dev/tests only** | Refuses to start with a public URL or with demo mode; never used on the hosted demo. |
