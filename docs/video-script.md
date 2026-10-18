@@ -9,16 +9,16 @@ file and test that back it. Anything not verified is marked **UNSURE**. All numb
 - **Never click a demo button on the hosted site** (`https://agenttab.onrender.com`). Every purchase there reaches the
   AI guard and spends the judges' AI quota. On the hosted site, show only `/` (scrolling, no clicks) and `/healthz`.
 - Record the demo on a **local instance**: `uvicorn app.main:app --port 8811` with `DEMO_MODE=1`, then open `http://127.0.0.1:8811/`.
-- **Take A (rules only, no AI calls):** strip `ANTHROPIC_*`, `GEMINI_*` and `LLM_*`. `/healthz` shows `ai_status:"off"`, so
+- **Take A (rules only, no AI calls):** strip `ANTHROPIC_*` and `LLM_*`. `/healthz` shows `ai_status:"off"`, so
   the guard runs the keyword rules. Use this take for the "rules alone" moment and for every beat except the Claude block.
 - **Take B (Claude block): technically approved by the reviewer; recording is pending the project owner's decision.** It is a local
   live Claude call (about 2 calls per take: step 6, plus step 4 if it is re-shot in this take). No Claude calls have been
   made for this script; none run until the project owner decides. Same local instance, with `ANTHROPIC_API_KEY` set
   locally. `GUARD_PROVIDER` defaults to `anthropic` with model `claude-haiku-5-5`
   (`tests/test_claude_guard.py::test_anthropic_is_the_default_provider_with_the_exact_model`).
-- **PayPal:** use `PAYPAL_MODE=mock` (IDs read `MOCK-…/AUTH-…/CAP-…`) or local `PAYPAL_MODE=sandbox` with sandbox
-  credentials (real sandbox IDs). Sandbox only, never live (`tests/test_agenttab.py::test_card_topup_refused_on_live`).
-  **UNSURE:** I have not done a sandbox-mode local run of this exact sequence.
+- **Recorded build:** the same sha as the live site, with `PAYPAL_MODE=sandbox`, `VENDOR_PAYOUTS=1` and real Claude
+  (Take A strips the AI keys only for the rules-alone beat). Sandbox only, never live
+  (`tests/test_agenttab.py::test_card_topup_refused_on_live`). **UNSURE:** no local sandbox run of this exact sequence yet.
 - Branding: say "AgentTab" only. No personal names, no company byline.
 - UI labels below are from `main` @ `7198f2a`. If `feature/landing-redesign` merges before recording, re-check the button
   labels (the step buttons and ids are kept, but copy may differ). **UNSURE** until checked on the recorded build.
@@ -180,9 +180,9 @@ action beyond being paid. Agents created in the owner console use a prepaid tab 
 
 ## 5. End card (2:55–3:00)
 
-**On screen:** "AgentTab: your agent gets a tab, not your card." Show the repo URL `https://github.com/JordiBen/agenttab` and
+**On screen:** "AgentTab. Your agent gets a budget, not your card." Show the repo URL `https://github.com/JordiBen/agenttab` and
 the hosted URL `https://agenttab.onrender.com` (no clicks).
-> "AgentTab. Your agent gets a tab, not your card."
+> "AgentTab. Your agent gets a budget, not your card."
 
 ---
 
