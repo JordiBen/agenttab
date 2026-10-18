@@ -90,6 +90,13 @@ Both tables are generated from `eval/results.json` and the archive by `python -m
   categories plus 2 legitimate buys through the same `decide()`, with the live AI guard, and shows each verdict, layer and latency.
   It's a dry run (nothing is charged, PayPal isn't called), limited to 2 runs per IP per hour and 12 per day, with its own
   daily AI budget (60 calls) and the visitor's per-IP AI budget.
+- **Compare one purchase:** the panel under the Gauntlet (`POST /api/compare`) runs one purchase, either a preset from
+  `eval/cases.json` or one you write (vendor and item from the catalog, purpose and target up to 300 characters), through
+  "Rules + keyword check" and "Rules + AI" side by side. It's a dry run: PayPal isn't called, nothing is written to the
+  ledger and no URL is fetched (`tests/test_compare.py`). If Claude can't answer (no provider, busy, budget used up) the
+  AI side is HELD for a human, never ALLOWED. Limited to 5 runs per IP per hour and 60 per day, with its own daily AI
+  budget (40 calls) that also counts against the visitor's per-IP AI budget. A repeat of a recent purchase is marked
+  "cached" and costs no AI call.
 - Reproduce: `python -m eval.run_eval` (no guard + keyword, free) and `python -m eval.run_eval --modes ai` (about 43 AI calls; needs `ANTHROPIC_API_KEY`; the previous ai run is archived to `eval/archive/` first), then `python -m eval.readme_tables` to regenerate the tables above.
 
 ![dashboard](docs/dashboard.png)
@@ -276,7 +283,7 @@ python -m agent.buyer_agent --key atk_... --goal "Compare the tech stacks of com
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt && pytest -q
 ```
-226 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
+264 offline tests, including browser e2e tests that skip without Chrome (+6 live ones that skip without keys: 3 Claude, 1 Gemini, 2 PayPal sandbox): concurrency (parallel buys, capture/webhook races, double
 approval, auto top-up caps), demo privileges, rate limits, fail-closed AI guard, SSRF (redirects, IP forms, pinning, size cap),
 per-capture refunds, authorize/capture/void, forced declines, reconciliation freeze, saved-card top-ups, MCP protocol
 and tool guarding,

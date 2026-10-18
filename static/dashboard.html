@@ -156,6 +156,25 @@
     <p>10 live decisions · about 5 AI calls · 0 PayPal calls</p></div></div>
   </div>
  </div>
+ <section class="cmp" id="compare" aria-labelledby="cmph">
+  <h3 id="cmph">Same purchase, two guards</h3>
+  <p class="cmp-sub">Pick a purchase from the eval set, or write your own. The left receipt runs the rules and the keyword check; the right one runs the same rules and then asks Claude. Dry run: PayPal isn't called, nothing is fetched, nothing is written to the ledger. A live verdict can differ from the committed eval run.</p>
+  <form class="cmp-form" id="cmpform" data-ui onsubmit="event.preventDefault(); runCompare()">
+   <label class="cmp-f cmp-wide">Purchase<select id="cmpcase" onchange="cmpMode()"><option value="">Loading purchases…</option></select></label>
+   <div class="cmp-custom" id="cmpcustom" hidden>
+    <label class="cmp-f">Vendor<select id="cmpvendor" onchange="cmpItems()"></select></label>
+    <label class="cmp-f">Item<select id="cmpitem"></select></label>
+    <label class="cmp-f cmp-wide">Purpose <span class="cmp-hint">(up to 300 characters)</span><textarea id="cmppurpose" maxlength="300" rows="3" placeholder="What the agent says the purchase is for"></textarea></label>
+    <label class="cmp-f cmp-wide">Target URL <span class="cmp-hint">(optional, never fetched)</span><input id="cmptarget" maxlength="300" placeholder="https://"></label>
+   </div>
+   <button class="cmp-btn" id="cmpbtn" type="submit">Compare the two guards</button>
+  </form>
+  <p class="cmp-status" id="cmpstatus" role="status" aria-live="polite"></p>
+  <div class="cmp-pair" id="cmppair">
+   <article class="cmp-r" data-ui id="cmpl" aria-label="Rules + keyword check"><h4>Rules + keyword check</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
+   <article class="cmp-r" data-ui id="cmpr" aria-label="Rules + AI"><h4>Rules + AI</h4><p class="cmp-empty">Waiting for a purchase.</p></article>
+  </div>
+ </section>
 </div></section>
 
 <section class="ws" id="workspace"><div class="wrap">

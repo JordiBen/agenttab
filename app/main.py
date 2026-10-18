@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import llm
 from . import mcp as mcpp
 from .config import Settings, get_settings
-from .guard import SpendGuard, VerdictCache
+from .guard import SYSTEM as GUARD_SYSTEM, SpendGuard, VerdictCache
 from .ledger import Ledger, from_micro, to_micro
 from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import SIMULATABLE, PayPalClient, PayPalError
@@ -71,6 +71,15 @@ class PolicyUpdate(BaseModel):
     vendor_budgets: dict[str, float] | None = None
     approval_threshold_usd: float | None = None
     refund_window_days: int | None = Field(default=None, ge=0, le=180)
+
+class CompareIn(BaseModel):
+    case_id: str = Field(default="", max_length=64)
+    vendor: str = Field(default="", max_length=64)
+    item: str = Field(default="", max_length=64)
+    quantity: int = Field(default=1, ge=1, le=100)
+    purpose: str = Field(default="", max_length=300)
+    target: str = Field(default="", max_length=300)
+
 
 class PurchaseReq(BaseModel):
     vendor: str = Field(max_length=64)
@@ -1588,6 +1597,98 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
                 "unguarded_would_buy": sum(r["no_guard"] == "allow" for r in attacks),
                 "llm_calls": sum(1 for r in rows if r["model"]), "paypal_calls": 0,
                 "note": "Dry run through the production decide(): no money moves and PayPal is not called."}
+
+    # ---------------- compare panel: one purchase, rules alone vs rules + AI (dry run) ----------------
+    # Always require_ai: with no provider (or no budget, or an error) the AI side is "unavailable" and the purchase is
+    # held for a human; it never falls back to the keyword check, so the two columns never silently show the same mode.
+    compare_guard = SpendGuard(s, ai_allowed=lambda: llm_budget("llm-compare", s.compare_llm_calls_per_day),
+                               require_ai=True, cache=verdicts)
+    COMPARE_TEXT_MAX = 300
+    COMPARE_REASON_MAX = 200
+    VERDICT_WORD = {"allow": "allowed", "block": "blocked", "approval": "held"}   # dry run: never "paid"
+    _sys = " ".join(GUARD_SYSTEM.split()).lower()
+    SYSTEM_CHUNKS = {_sys[i:i + 40] for i in range(0, max(1, len(_sys) - 39), 10)}   # any 50-char quote hits one
+
+    def quotes_system_prompt(text: str) -> bool:
+        t = " ".join((text or "").split()).lower()
+        return any(chunk in t for chunk in SYSTEM_CHUNKS)
+
+    def compare_presets() -> list[str]:
+        """One preset per category (first case of each), indirect injection first, then two legitimate buys."""
+        first: dict[str, str] = {}
+        ids = {c["id"] for c in gauntlet_cases()}
+        if "indirect_injection-05" in ids:   # the demo video's step-6 twin: rules allow it, the AI blocks it
+            first["indirect_injection"] = "indirect_injection-05"
+        for c in gauntlet_cases():
+            first.setdefault(c["category"], c["id"])
+        legit = [c["id"] for c in gauntlet_cases() if not c["attack"]][:2]
+        cats = ("indirect_injection",) + tuple(k for k in GAUNTLET_CATS if k != "indirect_injection")
+        return [first[k] for k in cats if k in first] + legit
+
+    @app.get("/api/compare/cases")
+    def compare_cases():
+        cases = {c["id"]: c for c in gauntlet_cases()}
+        return {"cases": [{"id": i, "category": cases[i]["category"], "vendor": cases[i]["vendor"], "item": cases[i]["item"],
+                           "quantity": cases[i].get("quantity", 1), "target": cases[i].get("target", ""),
+                           "purpose": cases[i]["purpose"], "expected": cases[i]["expected"]} for i in compare_presets()]}
+
+    def compare_side(out) -> dict:
+        unavailable = out.layer == "policy-unavailable"
+        return {"verdict": VERDICT_WORD.get(out.outcome, "held"), "outcome": out.outcome, "layer": out.layer,
+                "reason": ("AI unavailable, human approval" if unavailable
+                           else "reason withheld: it quoted the guard's instructions" if quotes_system_prompt(out.reason)
+                           else out.reason)[:COMPARE_REASON_MAX],
+                "ai_unavailable": unavailable, "model": out.model or None, "cached": bool(out.cached),
+                "amount_usd": float(out.amount or 0)}
+
+    @app.post("/api/compare")
+    def compare(body: CompareIn, request: Request):
+        """Dry run of ONE purchase through the production decide() twice: "Rules + keyword check" (no LLM, cannot
+        call one) and "Rules + AI" (at most one Claude call; none on a cache hit or when a rule stops it first).
+        Nothing is charged, PayPal is never called, nothing is written to the ledger and no URL is fetched."""
+        limit("compare:" + client_ip(request), s.compare_runs_per_ip_hour, HOUR,
+              "compare limit for your IP reached; try again in an hour")
+        limit("compare:all", s.compare_runs_per_day, DAY,
+              "today's compare runs are used up; the committed scorecard has the full 67-case run")
+        expected = None
+        if body.case_id:
+            c = next((c for c in gauntlet_cases() if c["id"] == body.case_id and c["id"] in compare_presets()), None)
+            if not c:
+                raise HTTPException(404, "unknown case")
+            p = pr.Purchase(c["vendor"], c["item"], c.get("quantity", 1), c["purpose"], c.get("target", ""))
+            st = c.get("state") or {}
+            state = pr.State(Decimal(st.get("spent_24h", "0")),
+                             {k: Decimal(v) for k, v in (st.get("vendor_spent_30d") or {}).items()})
+            expected = c["expected"]
+        else:
+            if any(ch < " " and ch not in "\t" for ch in body.purpose + body.target):
+                raise HTTPException(422, "control characters are not allowed")
+            if body.vendor not in pr.VENDORS or body.item not in pr.VENDORS[body.vendor]["items"]:
+                raise HTTPException(422, "pick a vendor and item from the catalog")
+            if body.target:                                # judge-entered target: must be a safe public URL
+                try:
+                    check_url(body.target, allow_private=allow_private_targets)
+                except UnsafeTarget as e:
+                    raise HTTPException(422, f"target: {e}")
+            p = pr.Purchase(body.vendor, body.item, body.quantity, body.purpose.strip(), body.target.strip())
+            state = pr.State()
+        cfg = pr.AgentConfig(pr.SHOP_POLICY, dict(pr.SHOP_VENDOR_BUDGETS), pr.SHOP_APPROVAL_THRESHOLD,
+                             pr.SHOP_PER_PURCHASE_MAX, pr.SHOP_DAILY_CAP)
+        CURRENT_IP.set(client_ip(request))
+        rules = pr.decide(cfg, p, state, "keyword", None)                   # literal URL checks only; no fetches
+        t0 = time.perf_counter()
+        ai = pr.decide(cfg, p, state, "ai", compare_guard)
+        ms = round((time.perf_counter() - t0) * 1000)
+        a = compare_side(ai)
+        a["llm_called"] = bool(ai.model) and not ai.cached
+        a["latency_ms"] = ms
+        return {"dry_run": True, "paypal_calls": 0, "ledger_writes": 0, "fetches": 0,
+                "purchase": {"vendor": p.vendor, "vendor_name": pr.VENDORS[p.vendor]["name"], "item": p.item,
+                             "item_name": pr.VENDORS[p.vendor]["items"][p.item]["name"], "quantity": p.quantity,
+                             "target": p.target, "purpose": p.purpose},
+                "rules": {"label": "Rules + keyword check", **compare_side(rules)},
+                "ai": {"label": "Rules + AI", **a}, "expected": VERDICT_WORD.get(expected) if expected else None,
+                "note": "Dry run: no money moves, PayPal isn't called, nothing is fetched or stored."}
 
     @app.post("/api/demo/refund")
     def demo_refund(request: Request, a=Depends(demo_agent)):

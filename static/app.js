@@ -344,13 +344,67 @@ async function demoFF() { if (!DK()) return show('Start a demo session first.');
   r.ok && toast('info', 'Demo clock +6 days', `${j.new_suggestions} new refund suggestion(s) from the scheduling agent.`);
   show(r.ok ? `Demo clock moved 6 days ahead for your agent. The scheduling agent made ${j.new_suggestions} new refund suggestion(s). Confirm or dismiss them below the timeline.` : JSON.stringify(j.detail || j)); dload(); DS && DS.refresh(); }
 
+// ---- compare panel: the same purchase through rules + keywords and through rules + AI (dry run) ----
+// Stamps never say PAID: nothing is paid here. Any verdict we don't recognise is shown as HELD.
+const CMP_STAMP = {allowed: ['ALLOWED', 'pass'], blocked: ['BLOCKED', 'block'], held: ['HELD', 'hold']};
+const cmpStamp = v => CMP_STAMP[v] || CMP_STAMP.held;
+const cmpWords = s => String(s || '').replace(/[_-]+/g, ' ');
+const CMP_LAYER = {catalog: 'Catalog', unsafe_target: 'Unsafe target', purpose: 'Purpose rule', injection: 'Injection rule', allowlist: 'Vendor allowlist',
+  caps: 'Spending caps', approval: 'Approval threshold', 'policy-ai': 'Claude', 'policy-keyword': 'Keyword check', 'policy-unavailable': 'Claude unavailable', none: 'No guard'};
+let CMP_CASES = [], CMP_CAT = [];
+async function initCompare() { if (!$('compare')) return;
+  try {
+    const [c, k] = await Promise.all([fetch('/api/compare/cases').then(r => r.json()), fetch('/api/catalog').then(r => r.json())]);
+    CMP_CASES = c.cases || []; CMP_CAT = k.vendors || [];
+  } catch (e) { $('cmpstatus').textContent = 'Could not load the purchases. Reload the page to try again.'; return; }
+  const sel = $('cmpcase'); sel.textContent = '';
+  for (const x of CMP_CASES) { const o = document.createElement('option'); o.value = x.id;
+    const p = x.purpose.length > 70 ? x.purpose.slice(0, 69) + '…' : x.purpose;
+    o.textContent = `${cmpWords(x.category)}: ${p}`; sel.appendChild(o); }
+  const own = document.createElement('option'); own.value = ''; own.textContent = 'Write your own purchase…'; sel.appendChild(own);
+  const vs = $('cmpvendor'); vs.textContent = '';
+  for (const v of CMP_CAT) { const o = document.createElement('option'); o.value = v.vendor; o.textContent = v.name; vs.appendChild(o); }
+  cmpItems(); cmpMode(); }
+function cmpItems() { const v = CMP_CAT.find(x => x.vendor === $('cmpvendor').value), is = $('cmpitem'); is.textContent = '';
+  for (const i of (v ? v.items : [])) { const o = document.createElement('option'); o.value = i.item; o.textContent = `${i.name} ($${i.price_usd})`; is.appendChild(o); } }
+function cmpMode() { $('cmpcustom').hidden = $('cmpcase').value !== ''; }
+function cmpReceipt(side, purchase, latency) {
+  const [word, cls] = cmpStamp(side.verdict);
+  const meta = side.llm_called ? `Claude called · ${enc(side.model)} · ${enc(latency)} ms`
+    : side.cached ? `<span class="cmp-flag">cached</span> same verdict as a recent run · ${enc(side.model)} · Claude not called again`
+    : side.ai_unavailable ? 'Claude gave no verdict, so a human decides'
+    : side.label === 'Rules + AI' ? 'Claude not called: the rules decided first' : 'Keyword check only: never calls an AI';
+  return `<h4>${enc(side.label)}</h4>
+   <dl class="cmp-lines"><div><dt>Vendor</dt><dd>${enc(purchase.vendor_name)}</dd></div>
+    <div><dt>Item</dt><dd>${enc(purchase.item_name)} × ${enc(purchase.quantity)}</dd></div>
+    <div><dt>Amount</dt><dd class="num">${enc(usd(side.amount_usd))}</dd></div>
+    <div><dt>Purpose</dt><dd class="cmp-text">${enc(purchase.purpose) || '<span class="cmp-none">none given</span>'}</dd></div>
+    ${purchase.target ? `<div><dt>Target</dt><dd class="cmp-text">${enc(purchase.target)}</dd></div>` : ''}</dl>
+   <span class="stamp ${cls}${REDUCED ? '' : ' land'}">${word}</span>
+   <p class="cmp-why"><strong>${enc(CMP_LAYER[side.layer] || cmpWords(side.layer))}:</strong> ${enc(side.reason)}</p>
+   <p class="cmp-meta">${meta}</p>`; }
+async function runCompare() { const b = $('cmpbtn'), st = $('cmpstatus'); const id = $('cmpcase').value;
+  const body = id ? {case_id: id} : {vendor: $('cmpvendor').value, item: $('cmpitem').value, quantity: 1,
+    purpose: $('cmppurpose').value.slice(0, 300), target: $('cmptarget').value.trim().slice(0, 300)};
+  b.disabled = true; st.textContent = 'Checking both guards…';
+  try {
+    const r = await fetch('/api/compare', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const d = j.detail; st.textContent = r.status === 429 ? 'Comparison limit reached for now. Try again later.'
+      : typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg).join('; ') : 'That purchase could not be compared.'; return; }
+    $('cmpl').innerHTML = cmpReceipt(j.rules, j.purchase, j.rules.latency_ms);
+    $('cmpr').innerHTML = cmpReceipt(j.ai, j.purchase, j.ai.latency_ms);
+    st.textContent = `Dry run: ${j.paypal_calls} PayPal calls, ${j.ledger_writes} ledger writes, ${j.fetches} fetches.` + (j.expected ? ` The eval label for this purchase is "${j.expected}".` : '');
+  } catch (e) { st.textContent = 'Network error. Nothing was bought.'; }
+  finally { b.disabled = false; } }
+
 // ---- boot ----
 initMotion();
 const refreshLive = () => fetch('/healthz').then(r => r.json()).then(setLive).catch(() => {}); setInterval(refreshLive, 30000);
 fetch('/healthz').then(r => r.json()).then(h => { setLive(h); if (h.paypal_mode !== 'live') $('cardbtn').style.display = '';
   if (h.demo_mode) { $('demo').style.display = ''; if (h.demo_policy) $('dpolicy').textContent = '"' + h.demo_policy + '"'; catalog(); dload(); mcpPanel(); }
   else $('nodemo').style.display = ''; });
-scorecard(); initFeed();
+scorecard(); initFeed(); initCompare();
 window.addEventListener('load', initSchedules);
 { const q = new URLSearchParams(location.search);
   if (q.get('payment_error')) { $('report').textContent = 'PayPal payment was not completed (it may have been cancelled, already paid another way, or not approved yet). Nothing was charged twice; try the approval link again if needed.'; toast('warn', 'PayPal payment not completed', 'Nothing was charged twice.'); }

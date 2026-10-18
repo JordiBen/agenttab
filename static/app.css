@@ -382,3 +382,49 @@ footer b{color:#fff} footer a{color:var(--ink2)}
 .t-mcp:hover .t-link{text-decoration:underline}
 @media (max-width:640px){.eyebrow .chip.chip-mcp{display:inline-flex}}
 @media (max-width:800px){.t-mcp{grid-column:auto}}
+
+/* ---- compare panel: one purchase, two guards (docs/DESIGN.md tokens, scoped so it reads the same on any page theme) ---- */
+.cmp{--bg:#ecebe7;--paper:#f4f4f1;--surface:#e1dfd9;--ink:#38450f;--muted:#5d683a;--stamp-block:#a3261b;--stamp-hold:#7a5200;
+ --radius:6px;--tooth:12px;
+ --saw-down:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 1' preserveAspectRatio='none'%3E%3Cpath d='M0 0H2L1 1Z'/%3E%3C/svg%3E");
+ --solid:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1' preserveAspectRatio='none'%3E%3Crect width='1' height='1'/%3E%3C/svg%3E");
+ margin-top:40px;padding:clamp(20px,3vw,40px);border-radius:var(--radius);background:var(--bg);color:var(--ink);font-size:16px;line-height:1.5}
+.cmp h3{color:var(--ink);font-size:clamp(1.5rem,1.2rem + 1.2vw,2.25rem);font-weight:500;letter-spacing:-.025em;line-height:1.1}
+.cmp-sub{max-width:68ch;margin:12px 0 24px;font-size:1rem;color:var(--ink)}
+.cmp-form{display:grid;grid-template-columns:1fr 1fr;gap:16px 20px;align-items:end}
+.cmp-custom{display:contents}.cmp-custom[hidden]{display:none}
+.cmp-f{display:grid;gap:6px;font-weight:600;font-size:1rem;color:var(--ink)}
+.cmp-wide{grid-column:1/-1}
+.cmp-hint{font-weight:400;color:var(--muted)}
+.cmp select,.cmp input,.cmp textarea{font:inherit;font-size:1rem;font-weight:400;color:var(--ink);background:var(--paper);border:0;border-radius:var(--radius);
+ padding:11px 12px;width:100%;min-height:44px}
+.cmp textarea{resize:vertical}
+.cmp ::placeholder{color:var(--muted);opacity:1}
+.cmp :focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.cmp-btn{grid-column:1/-1;justify-self:start;font:inherit;font-size:1rem;font-weight:600;color:var(--paper);background:var(--ink);border:0;
+ border-radius:var(--radius);padding:12px 22px;min-height:44px;cursor:pointer;transition:transform .12s var(--ease)}
+.cmp-btn:active{transform:translateY(1px)} .cmp-btn:disabled{cursor:wait;opacity:1;background:var(--muted)}
+.cmp-status{min-height:1.5em;margin:16px 0;color:var(--ink)}
+.cmp-pair{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+.cmp-r{background:var(--paper);color:var(--ink);padding:22px 22px calc(26px + var(--tooth)/2);min-width:0;
+ -webkit-mask:var(--saw-down) bottom/var(--tooth) calc(var(--tooth)/2) repeat-x,var(--solid) top/100% calc(100% - var(--tooth)/2 + 1px) no-repeat;
+ mask:var(--saw-down) bottom/var(--tooth) calc(var(--tooth)/2) repeat-x,var(--solid) top/100% calc(100% - var(--tooth)/2 + 1px) no-repeat}
+.cmp-r h4{color:var(--ink);font-size:1.125rem;font-weight:600;letter-spacing:-.01em;margin-bottom:14px}
+.cmp-empty{color:var(--muted);margin:0}
+.cmp-lines{margin:0 0 18px;display:grid;gap:8px}
+.cmp-lines div{display:grid;grid-template-columns:6.5em 1fr;gap:12px}
+.cmp-lines dt{color:var(--muted)} .cmp-lines dd{margin:0;min-width:0}
+.cmp-lines .num{font-variant-numeric:tabular-nums}
+.cmp-text{overflow-wrap:anywhere;white-space:pre-wrap}
+.cmp-none{color:var(--muted)}
+.cmp .stamp{display:inline-block;transform:rotate(-6deg);font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:1.5rem;line-height:1;
+ padding:8px 12px 7px;border-radius:var(--radius);color:var(--paper);background:var(--ink);margin:4px 0 14px}
+.cmp .stamp.block{background:var(--stamp-block)} .cmp .stamp.hold{background:var(--stamp-hold)}
+.cmp .stamp.pass{background:var(--surface);color:var(--ink)}
+.cmp .stamp.land{animation:cmpstamp .18s var(--ease) both}
+@keyframes cmpstamp{from{transform:rotate(-6deg) scale(1.15)}to{transform:rotate(-6deg) scale(1)}}
+.cmp-why{margin:0 0 10px;overflow-wrap:anywhere}
+.cmp-meta{margin:0;font-size:.875rem;color:var(--muted)}
+.cmp-flag{display:inline-block;font-weight:700;color:var(--paper);background:var(--ink);border-radius:4px;padding:1px 7px;margin-right:4px}
+@media (max-width:640px){.cmp-form,.cmp-pair{grid-template-columns:1fr}.cmp-lines div{grid-template-columns:5em 1fr;gap:10px}.cmp-r{padding-left:18px;padding-right:18px}}
+@media (prefers-reduced-motion:reduce){.cmp .stamp.land{animation:none}.cmp-btn{transition:none}}
