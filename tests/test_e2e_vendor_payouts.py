@@ -136,3 +136,24 @@ def test_vendor_held_verdict_has_one_waiting_line(page):
     assert "Waiting for: owner approval" in v and "Needs your approval" not in v
     assert page.evaluate("document.querySelectorAll('#dverdict .pill').length") == 1
     assert not page.errs, page.errs
+
+
+def test_vendor_item_shows_the_quantity(page):
+    """After the held $64 buy above (2 blanket samples): the Item column says "Blanket sample ×2" (video-gaps item 6)."""
+    page.wait_for_function("[...document.querySelectorAll('#dpurch [col-id=\"item\"]')].some(c => c.innerText.includes('×2'))")
+    items = [r["item"] for r in _rows(page)]
+    assert "Blanket sample ×2" in items, items
+    assert not page.errs, page.errs
+
+
+def test_schedule_vendor_rows_show_the_short_name_with_the_full_name_on_hover(page):
+    """Bryntum vendor rows: "SampleBox" in the row, "SampleBox Wholesale" in the tooltip (video-gaps item 10)."""
+    page.wait_for_function("[...document.querySelectorAll('#dsched .sch-res.vendor b')].length >= 3", timeout=20000)
+    names = page.evaluate("[...document.querySelectorAll('#dsched .sch-res.vendor b')].map(b => b.innerText.trim())")
+    assert "SampleBox" in names and "ShopSuite" in names and "SampleBox Wholesale" not in names, names
+    cell = page.locator("#dsched .sch-res.vendor", has_text="SampleBox").first
+    cell.scroll_into_view_if_needed(); cell.hover()
+    page.wait_for_function("[...document.querySelectorAll('.b-tooltip')].some(t => t.offsetParent && t.innerText.includes('SampleBox Wholesale'))",
+                           timeout=10000)
+    page.mouse.move(5, 5)
+    assert not page.errs, page.errs
