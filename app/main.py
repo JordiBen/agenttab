@@ -41,6 +41,8 @@ from . import mcp as mcpp
 from .config import Settings, get_settings
 from .guard import SYSTEM as GUARD_SYSTEM, SpendGuard, VerdictCache
 from .ledger import Ledger, from_micro, parse_cents, to_cents, to_micro
+
+VENDOR_PAID = ("completed", "refund_requested", "partially_refunded")   # paid to the vendor, still counting
 from .ratelimit import DAY, HOUR, RateLimiter
 from .paypal import SIMULATABLE, PayPalClient, PayPalError
 from .tools import DESCRIPTIONS, PRICES, TOOLS, UnsafeTarget, check_url
@@ -360,8 +362,17 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     def envelope_view(aid: str) -> dict:
         a = ledger.agent(aid)
         budget = a["envelope_cents_30d"] if isinstance(a["envelope_cents_30d"], int) else 0
-        used = ledger.vendor_counted_cents(aid, time.time() - 30 * 86400)
-        return {"budget_30d_usd": budget / 100, "used_30d_usd": used / 100, "remaining_usd": max(0, budget - used) / 100}
+        since = time.time() - 30 * 86400
+        used = ledger.vendor_counted_cents(aid, since)
+        paid = ledger.vendor_counted_cents(aid, since, statuses=VENDOR_PAID)
+        return {"budget_30d_usd": budget / 100, "used_30d_usd": used / 100, "remaining_usd": max(0, budget - used) / 100,
+                "paid_usd": paid / 100, "reserved_usd": (used - paid) / 100}
+
+    def no_tab_for_vendor(a) -> None:
+        """Vendor-funded agents have no tab: AgentTab holds no money for them, so top-ups and tab refunds are gone."""
+        if a and a["funding_model"] == "vendor":
+            raise HTTPException(410, {"error": "no_tab", "note": "AgentTab doesn't hold money for this agent: it pays "
+                                      "vendors from the owner's saved card. The owner sets a 30-day budget instead."})
 
     def agent_view(a) -> dict:
         d = agent_view_base(a)
@@ -492,6 +503,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """Return unused credit to the payer's PayPal, newest captures first."""
         if not ledger.agent(aid):
             raise HTTPException(404, "no such agent")
+        no_tab_for_vendor(ledger.agent(aid))
         return do_refund(aid)
 
     def do_refund(aid: str):
@@ -577,6 +589,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     def owner_topup(aid: str, body: TopUp):
         if not ledger.agent(aid):
             raise HTTPException(404, "no such agent")
+        no_tab_for_vendor(ledger.agent(aid))
         return _topup(aid, money(body.amount_usd))
 
     @app.post("/api/agents/{aid}/topup-sandbox-card", dependencies=[Depends(admin)])
@@ -585,6 +598,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         A declined card (402) credits nothing."""
         if not ledger.agent(aid):
             raise HTTPException(404, "no such agent")
+        no_tab_for_vendor(ledger.agent(aid))
         if not (paypal.mock or paypal.is_sandbox):
             raise HTTPException(403, "only available in PayPal sandbox")
         amount = money(body.amount_usd)
@@ -604,6 +618,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
     @app.post("/api/me/topup-request")
     def agent_topup_request(body: TopUp, request: Request, a=Depends(agent_from_key)):
         """The agent asks its human for more budget: returns a PayPal approval link to forward."""
+        no_tab_for_vendor(a)
         refuse_if_frozen(a)
         amount = money(body.amount_usd)
         limit("topup-agent:" + a["id"], s.topup_requests_per_agent_hour, HOUR, "too many top-up requests for this agent; try later")
@@ -1757,6 +1772,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """Owner tops up the tab from the saved card (merchant-initiated, no browser step). Counts toward the
         30-day saved-card cap when one is set."""
         a = agent_or_404(aid)
+        no_tab_for_vendor(a)
         sandbox_only()
         if not a["vault_id"]:
             raise HTTPException(409, "no saved card; POST /api/agents/{id}/saved-card first")
@@ -1783,6 +1799,7 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         """Let purchases the guard already allowed top up the tab from the saved card when it runs short:
         amount_usd per top-up, at most monthly_cap_usd per rolling 30 days. Both null turns it off."""
         a = agent_or_404(aid)
+        no_tab_for_vendor(a)
         if body.amount_usd is None and body.monthly_cap_usd is None:
             ledger.set_auto_topup(aid, None, None)
             return agent_view(ledger.agent(aid))
@@ -2037,6 +2054,9 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
             return {"outcome": "link_created", **agent_topup_request(TopUp(amount_usd=args.amount_usd), request,
                                                                       ledger.agent(a["id"]))}, False
         except HTTPException as e:
+            if e.status_code == 410:
+                return {"outcome": "no_topups", "explanation": "This agent pays vendors from your owner's saved card, so "
+                        "there is no tab to top up. If the 30-day budget runs out, ask your owner to raise it."}, False
             return {"outcome": "error", "http_status": e.status_code, "detail": _err_detail(e)}, True
 
     def mcp_purchases(a, args: _ListArgs, request: Request):
@@ -2189,6 +2209,21 @@ def create_app(settings: Settings | None = None, allow_private_targets: bool | N
         ag = ledger.create_agent("demo-" + secrets.token_hex(3), "", DEMO_POLICY, pr.SHOP_DAILY_CAP,
                                  pr.SHOP_PER_PURCHASE_MAX, dict(pr.SHOP_VENDOR_BUDGETS),
                                  pr.SHOP_APPROVAL_THRESHOLD, pr.SHOP_REFUND_WINDOW_DAYS, is_demo=True)
+        if s.vendor_payouts:
+            # Vendor-funded demo: PayPal's sandbox test card saved in the Vault and a 30-day budget. No top-up,
+            # no money held by AgentTab; each purchase is paid to the vendor from the saved card after delivery.
+            aid = ag["agent_id"]
+            sandbox_or_mock_payouts()
+            paypal_budget()
+            try:
+                v = paypal.vault_sandbox_card(op_id=f"demo-{aid}")
+            except PayPalError as e:
+                raise HTTPException(502, f"PayPal sandbox couldn't save the test card ({_issue(e)}); try again")
+            ledger.set_vault(aid, v["vault_id"], f"{v['brand']} {v['last4']}")
+            ok, why = ledger.set_funding_model(aid, "vendor", to_cents(pr.SHOP_DEMO_FUNDING))
+            if not ok:
+                raise HTTPException(500, f"demo setup failed: {why}")
+            return {"agent_key": ag["api_key"], **agent_view(ledger.agent(aid))}
         paypal_budget()
         try:
             cap = paypal.sandbox_card_topup(pr.SHOP_DEMO_FUNDING, ag["agent_id"], op_id=f"demo-{ag['agent_id']}")

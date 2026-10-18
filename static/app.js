@@ -18,6 +18,55 @@ const pill = (v, label, tip) => `<span class="pill ${PILL[v] || 'gray'}"${(tip |
 const frozenBadge = a => a && a.frozen ? pill('frozen', 'frozen', 'Frozen: ' + (a.frozen_reason || 'no new spending until the owner unfreezes it')) : pill('active', 'active', 'Spending allowed');
 const pillCell = p => p.value == null ? '' : pill(p.value);
 
+// ---- vendor payouts ----
+// Agents that pay vendors straight from the owner's saved card (server flag VENDOR_PAYOUTS=1). Plain words, hover tips.
+Object.assign(LABEL, {reserved: 'starting', completing: 'delivering', payment_pending: 'payment pending',
+  payment_unknown: 'payment unclear', payment_failed: 'payment refused', flagged: 'needs review',
+  refund_requested: 'refund requested', partially_refunded: 'partly refunded'});
+Object.assign(PILL, {reserved: 'warn', completing: 'warn', payment_pending: 'warn', payment_unknown: 'bad',
+  payment_failed: 'bad', flagged: 'bad', refund_requested: 'violet', partially_refunded: 'violet'});
+const VTIP = {reserved: 'Budget set aside. The vendor is about to deliver; nothing is paid yet.',
+  completing: 'The vendor is delivering. The saved card is charged only after delivery.',
+  payment_pending: 'PayPal accepted the payment but has not finished it. It still counts against the budget.',
+  payment_unknown: 'PayPal gave no clear answer. Spending is frozen until the owner reconciles or resolves it.',
+  payment_failed: 'The vendor delivered, but PayPal refused the payment, so nothing was charged. Spending is frozen.',
+  flagged: 'PayPal did not confirm this purchase as recorded. Spending is frozen for the owner to review.',
+  refund_requested: 'A refund was requested from the vendor. The vendor refunds through PayPal.',
+  partially_refunded: 'The vendor refunded part of it through PayPal.'};
+Object.assign(TIP, VTIP);
+function vstatus(d) {
+  if (d.status === 'refund_requested' && d.refund && d.refund.with) return pill('refund_requested', 'refund with ' + d.refund.with, d.refund.note);
+  if (d.status === 'partially_refunded' && d.refund) return pill('partially_refunded', d.refund.refunded_usd != null ? usd(d.refund.refunded_usd) + ' refunded' : 'partly refunded', d.refund.note);
+  return pill(d.status); }
+function vactions(d, o) {
+  if (d.status === 'pending_approval') return `<button class="act alt" onclick="pAct('${enc(d.id)}','approve',${o})">Approve</button><button class="act" onclick="pAct('${enc(d.id)}','reject',${o})">Reject</button>`;
+  if (d.status === 'completed' && d.refund_deadline * 1000 > Date.now()) return `<button class="act" onclick="pAct('${enc(d.id)}','refund',${o})">Request refund</button>`;
+  if (d.status === 'payment_unknown' && o === 'true') return `<button class="act" onclick="resolveUnknown('${enc(d.id)}')">Resolve</button>`;
+  return ''; }
+async function resolveUnknown(pid) {
+  const cid = prompt('PayPal capture id for this payment. Leave it empty if PayPal shows it was not paid.');
+  if (cid === null) return;
+  const body = cid.trim() ? {capture_id: cid.trim()} : {not_paid: true};
+  if (!cid.trim() && !confirm('Mark this purchase as not paid? It stops counting against the budget.')) return;
+  const r = await fetch(`/api/purchases/${pid}/resolve-unknown`, {method: 'POST', headers: H(), body: JSON.stringify(body)}); const j = await r.json();
+  r.ok ? toast('ok', 'Resolved', j.note || '') : toast('bad', 'Not resolved', typeof j.detail === 'string' ? j.detail : '');
+  load(); OS && OS.refresh(); }
+function budgetPanel(j, pur) { const e = j.envelope;
+  return `<div class="bal"><div><b>${usd(e.remaining_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}left of ${usd(e.budget_30d_usd)} 30-day budget · ${usd(e.paid_usd)} paid to vendors · ${usd(e.reserved_usd)} set aside</div></div></div>` + bars(j.vendor_budgets, pur || []); }
+const VOUT = {card_required: ['warn', 'No saved card', 'Save a card for this agent first. Nothing was bought or charged.'],
+  payment_failed: ['bad', 'Payment refused', 'The vendor delivered, but PayPal refused the payment, so nothing was charged. Spending is frozen.'],
+  payment_unknown: ['bad', 'Payment unclear', 'PayPal gave no clear answer. Spending is frozen until the owner reconciles.'],
+  payment_flagged: ['bad', 'Needs review', 'PayPal did not confirm this purchase as recorded. Spending is frozen for review.'],
+  vendor_payouts_disabled: ['warn', 'Vendor payments are off', 'Nothing was bought or charged.']};
+function vendorOutcome(j) { const e = j && (j.error || (j.detail && j.detail.error)); return VOUT[e] || null; }
+function vendorBought(j, g) {
+  toast('ok', 'Bought · ' + usd(j.paid_usd), 'Paid to ' + (j.paid_to || 'the vendor') + ' from the saved card');
+  return `${g ? g.reason + '\n\n' : ''}Paid ${usd(j.paid_usd)} to ${j.paid_to || 'the vendor'} from the saved card` +
+    (j.envelope ? ` · ${usd(j.envelope.remaining_usd)} left of the 30-day budget` : '') +
+    (j.status === 'payment_pending' ? ' · PayPal is still finishing the payment' : '') +
+    (j.refund_deadline ? ` · refund can be requested until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : ''); }
+// ---- end vendor payouts ----
+
 // ---- toasts ----
 // toast marker: the sawtooth tooth in the verdict colour (no emoji or symbol glyphs as UI)
 const TOAST = {ok: ['ok', 'var(--ok)'], bad: ['bad', 'var(--bad)'], warn: ['warn', 'var(--warn)'], info: ['info', 'var(--muted)'], violet: ['refund', 'var(--muted)']};
@@ -46,7 +95,7 @@ const H = () => ({'Content-Type': 'application/json', 'X-Admin-Token': T()});
 const money = p => p.value == null ? '' : '$' + Number(p.value).toFixed(4);
 const agentsGrid = agGrid.createGrid($('agents'), {theme: gridTheme, rowData: [],
   rowSelection: {mode: 'singleRow'},
-  columnDefs: [{field: 'name'}, {headerName: 'Status', field: 'frozen', cellRenderer: p => frozenBadge(p.data), minWidth: 105, maxWidth: 120, tooltipValueGetter: p => p.data.frozen_reason || ''}, {field: 'agent_id'}, {field: 'balance_usd', headerName: 'Balance', valueFormatter: money},
+  columnDefs: [{field: 'name'}, {headerName: 'Status', field: 'frozen', cellRenderer: p => frozenBadge(p.data), minWidth: 105, maxWidth: 120, tooltipValueGetter: p => p.data.frozen_reason || ''}, {field: 'agent_id'}, {field: 'balance_usd', headerName: 'Balance', valueFormatter: money, valueGetter: p => p.data.envelope ? p.data.envelope.remaining_usd : p.data.balance_usd, tooltipValueGetter: p => p.data.envelope ? 'Left of the 30-day budget' : ''},
     {field: 'spent_24h_usd', headerName: 'Spent 24h', valueFormatter: money}, {field: 'daily_cap_usd', headerName: 'Daily cap', valueFormatter: money, editable: true},
     {field: 'per_call_cap_usd', headerName: 'Per-call cap', valueFormatter: money, editable: true}, {field: 'policy', flex: 2, editable: true, tooltipField: 'policy'}],
   defaultColDef: DEF,
@@ -65,6 +114,9 @@ async function load() {
   const l = await fetch('/api/ledger', {headers: H()}); if (l.ok) ledgerGrid.setGridOption('rowData', await l.json());
   const a0 = agentsGrid.getSelectedRows()[0] || agentsGrid.getDisplayedRowAtIndex(0)?.data;
   if (a0) { const p = await fetch('/api/purchases?agent_id=' + a0.agent_id, {headers: H()}); if (p.ok) oPurch.setGridOption('rowData', await p.json()); }
+  const vendorAgent = !!(a0 && a0.funding_model === 'vendor');    // no tab: no top-ups or tab refunds (the server answers 410)
+  for (const id of ['amt', 'fundbtn', 'refundbtn']) $(id).hidden = vendorAgent;
+  $('cardbtn').hidden = vendorAgent;
 }
 const sel = () => { const r = agentsGrid.getSelectedRows()[0] || agentsGrid.getDisplayedRowAtIndex(0)?.data; if (!r) toast('warn', 'Create an agent first'); return r; };
 async function createAgent() {
@@ -254,7 +306,7 @@ async function dload_() { if (!DK()) return; const h = {'X-Agent-Key': DK()};
     const sig = pur.map(x => x.id + ':' + x.status).join(',');
     if (DSIG !== null && sig !== DSIG && DS) DS.refresh(); DSIG = sig; }
   if (m.ok) { const j = await m.json();
-    $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#38450f')}</div>` + bars(j.vendor_budgets, pur || []);
+    if (j.envelope) $('dbudgets').innerHTML = budgetPanel(j, pur); else $('dbudgets').innerHTML = `<div class="bal"><div><b>${usd(j.balance_usd)}</b><div class="sub" style="margin:6px 0 0">${j.frozen ? frozenBadge(j) + ' ' : ''}tab balance · ${usd(j.spent_24h_usd)} spent in 24 h of ${usd(j.daily_cap_usd)} daily cap</div></div>${spark(balanceSeries(led || []), 150, 38, '#38450f')}</div>` + bars(j.vendor_budgets, pur || []);
     $('dpolicy').textContent = '"' + j.policy + '"'; } }
 // ---- MCP connect panel (demo key lives only in this tab's sessionStorage) ----
 let MCP_SHOW = false;
@@ -272,7 +324,11 @@ async function demoStart() { show('Funding your agent through PayPal sandbox…'
   const r = await fetch('/api/demo/session', {method: 'POST'}); const j = await r.json();
   if (!r.ok) { verdict(pill('deny', 'error')); toast('bad', 'Could not start a session', j.detail || ''); return show(j.detail || j); }
   sessionStorage.dkey = j.agent_key; $('dexpired').style.display = 'none'; MCP_SHOW = false; mcpPanel();
-  DS && DS.refresh(); verdict(pill('fund', 'funded'));
+  DS && DS.refresh();
+  if (j.funding_model === 'vendor' && j.envelope) { verdict(pill('fund', 'ready'));
+    toast('ok', 'Demo agent ready', 'Sandbox test card saved · ' + usd(j.envelope.budget_30d_usd) + ' 30-day budget');
+    show(`Agent ${j.name} is ready. A PayPal sandbox test card is saved and the 30-day budget is ${usd(j.envelope.budget_30d_usd)}.\nEach purchase is paid to the vendor from that card after delivery.`); return dload(); }
+  verdict(pill('fund', 'funded'));
   toast('ok', 'Funded ' + usd(j.balance_usd) + ' via PayPal sandbox', 'Capture ' + j.paypal_capture_id);
   show(`Agent ${j.name} funded: ${usd(j.balance_usd)}\nPayPal sandbox order ${j.paypal_order_id}\nCapture ${j.paypal_capture_id}`); dload(); }
 async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK()) { toast('info', 'Start a demo session first', 'Step 1 funds your agent with $100 of sandbox money.'); return show('Start a demo session first.'); }
@@ -282,7 +338,10 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
   const wl = g ? whoLine({200: 'allow', 202: 'approval', 403: 'block'}[r.status], g.layer) : '', who = wl ? `<span class="pill gray">${enc(wl)}</span>` : '';
   const unit = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item)?.price_usd; const amt = unit == null ? null : unit * quantity;
   const live = o => g && feedLive({vendor, item, target, purpose, amount_usd: amt, outcome: o, layer: g.layer, model: g.model, latency_ms: null, reason: g.reason});
-  if (r.status === 200) { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
+  const vo = vendorOutcome(j);
+  if (vo) { verdict(pill(vo[0] === 'bad' ? 'deny' : 'approval', vo[1])); toast(vo[0], vo[1], vo[2]); show(vo[2]); }
+  else if (r.status === 200 && j.funding === 'vendor') { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); show(vendorBought(j, g)); }
+  else if (r.status === 200) { verdict('<span class="stamp paid">Paid</span> ' + pill('allow', 'Bought') + who); live('allow'); toast('ok', 'Bought · ' + usd(j.charged_usd), 'Tab balance ' + usd(j.balance_usd));
     show(`${g.reason}\n\nCharged ${usd(j.charged_usd)} · tab balance ${usd(j.balance_usd)} · ` + (j.refund_deadline ? `refundable until ${new Date(j.refund_deadline * 1000).toLocaleString()}` : 'delivered data (final sale)') + '\n\n' + JSON.stringify(j.result, null, 1).slice(0, 700)); }
   else if (r.status === 202 && j.ai_unavailable) {   // fail closed: no AI verdict means a human decides, never auto-approve
     refreshLive();
@@ -291,28 +350,31 @@ async function demoBuy(vendor, item, target, purpose, quantity = 1) { if (!DK())
     $('dbusy').textContent = j.message; $('dbusy').style.display = '';
     show(`${j.message}.\n\n${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or reject it.`); }
   else if (r.status === 202) { verdict('<span class="stamp hold">Held</span> ' + pill('approval', 'Needs your approval') + who); live('approval'); toast('warn', 'Held for your approval', 'Approve it in Purchases, or reject it.');
-    show(`${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or right-click it on the schedule. The approval link expires in 24 h.`); }
+    show(j.approve ? `${g.reason}\n\nApprove or reject it in the Purchases table. Nothing is charged unless you approve; it expires in 24 h.`
+      : `${g.reason}\n\nApprove it in the Purchases table ("Approve (sandbox card)") or right-click it on the schedule. The approval link expires in 24 h.`); }
   else if (r.status === 403) { verdict(`<span class="stamp block${REDUCED ? '' : ' land'}">Blocked</span> ` + who); live('block'); toast('bad', 'Blocked by the guard', g.reason); show(g.reason); }
   else if (r.status === 423) { verdict(pill('frozen', 'Agent frozen')); toast('bad', 'Agent frozen', 'No new spending until the owner reconciles and unfreezes it.'); show(j.detail || j); }
   else if (r.status === 402) { verdict(pill('deny', 'Tab empty')); toast('warn', 'Tab empty', 'The agent would now ask its human for a PayPal top-up.'); show(j); }
   else { verdict(pill('deny', 'Error ' + r.status)); toast('bad', 'Error ' + r.status, typeof j.detail === 'string' ? j.detail : ''); show(j.detail || j); }
   dload(); DS && DS.refresh(); }
-const ACT_DONE = {'approve-sandbox-card': ['ok', 'Approved and paid with the sandbox card'], reject: ['info', 'Purchase rejected'], refund: ['violet', 'Purchase refunded']};
+const ACT_DONE = {'approve-sandbox-card': ['ok', 'Approved and paid with the sandbox card'], approve: ['ok', 'Approved', 'The vendor delivers, then is paid from the saved card.'], reject: ['info', 'Purchase rejected'], refund: ['violet', 'Purchase refunded']};
 async function pAct(pid, act, owner) { const h = owner ? H() : {'X-Agent-Key': DK()}; let r;
   try { r = await (owner ? fetch : dfetch)(`/api/purchases/${pid}/${act}`, {method: 'POST', headers: h}); } catch (e) { return; }
   const j = await r.json(); const out = r.ok ? JSON.stringify(j, null, 1) : 'Error: ' + JSON.stringify(j.detail || j);
-  r.ok ? toast(...(ACT_DONE[act] || ['ok', 'Done'])) : toast('bad', 'Could not ' + act.replace(/-/g, ' '), typeof j.detail === 'string' ? j.detail : '');
+  r.ok ? toast(...(j.status === 'refund_requested' ? ['violet', 'Refund requested', 'With ' + (j.with || 'the vendor') + '. The vendor refunds through PayPal.'] : ACT_DONE[act] || ['ok', 'Done'])) : toast('bad', 'Could not ' + act.replace(/-/g, ' '), typeof j.detail === 'string' ? j.detail : '');
   if (owner) $('report').textContent = out; else { verdict(r.ok ? pill('allow', act.replace(/-/g, ' ') + ' done') : pill('deny', 'error')); show(out); }
   owner ? (load(), OS && OS.refresh()) : (dload(), DS && DS.refresh()); }
 function purchCols(owner) { const o = owner ? 'true' : 'false'; return [
   {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 122, maxWidth: 130},
   {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item), tooltipValueGetter: p => p.data.vendor + ' · ' + p.data.item},
   {field: 'amount_usd', headerName: 'Amount', valueFormatter: p => '$' + Number(p.value).toFixed(2), minWidth: 90, maxWidth: 100},
-  {field: 'status', cellRenderer: pillCell, minWidth: 165},
-  {field: 'funding', headerName: 'Paid from', minWidth: 100, maxWidth: 110},
+  {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 165},
+  {field: 'funding', headerName: 'Paid from', minWidth: 100, maxWidth: 130, valueGetter: p => p.data.funding === 'vendor' ? 'saved card' : p.data.funding,
+   tooltipValueGetter: p => p.data.paid_to ? 'Paid to ' + p.data.paid_to + ' from the saved card' : ''},
   {field: 'refund_deadline', headerName: 'Refundable until', minWidth: 140, valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleDateString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : (p.data.status === 'completed' ? 'final sale' : '')},
   {field: 'decision_source', headerName: 'Decided by', minWidth: 115}, {field: 'reason', flex: 2, minWidth: 200, tooltipField: 'reason'},
   {headerName: 'Actions', minWidth: 215, sortable: false, filter: false, cellRenderer: p => { const d = p.data;
+    if (d.funding === 'vendor') return vactions(d, o);
     if (d.status === 'pending_approval') return `<button class="act alt" onclick="pAct('${d.id}','approve-sandbox-card',${o})">Approve (sandbox card)</button><button class="act" onclick="pAct('${d.id}','reject',${o})">Reject</button>`;
     if (d.status === 'completed' && d.refund_deadline * 1000 > Date.now()) return `<button class="act" onclick="pAct('${d.id}','refund',${o})">Refund</button>`; return ''; }}]; }
 const gopt = {theme: gridTheme, defaultColDef: DEF, rowData: [], getRowStyle: p => p.data.status === 'denied' ? DENY_ROW : null};

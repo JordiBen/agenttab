@@ -54,7 +54,8 @@ def test_vendor_demo_budget_buy_and_refund_request(page):
     page.evaluate("demoBuy('samplebox', 'linen-napkin-samples', '', 'linen napkin samples for the spring catalog')")
     page.wait_for_function("document.getElementById('dpurch').textContent.includes('Request refund')")
     assert "SampleBox" in page.inner_text("#dpurch")
-    page.wait_for_function("document.getElementById('dbudgets').textContent.includes('left of $76.00')")
+    page.wait_for_function("document.getElementById('dbudgets').textContent.includes('$24.00 paid to vendors')")
+    assert page.inner_text('#dbudgets').startswith('$76.00')
     page.click("#dpurch >> text=Request refund")
     page.wait_for_function("document.getElementById('dpurch').textContent.includes('refund with SampleBox')")
     assert not page.errs, page.errs

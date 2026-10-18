@@ -21,14 +21,12 @@ HTML = (ROOT / "static" / "dashboard.html").read_text(encoding="utf-8")
 
 
 # ================= 410 for vendor-funded agents =================
-TOPUPS = [("post", "/api/agents/{aid}/topup", {"amount_usd": 10.0}),
-          ("post", "/api/agents/{aid}/topup-sandbox-card", {"amount_usd": 10.0}),
-          ("post", "/api/agents/{aid}/topup-saved-card", {"amount_usd": 10.0}),
-          ("post", "/api/agents/{aid}/refund", None),
-          ("put", "/api/agents/{aid}/auto-topup", {"amount_usd": 10.0, "monthly_cap_usd": 20.0})]
-
-
-@pytest.mark.parametrize("method,path,body", TOPUPS)
+@pytest.mark.parametrize("method,path,body", [("post", "/api/agents/{aid}/topup", {"amount_usd": 10.0}),
+                         ("post", "/api/agents/{aid}/topup-sandbox-card", {"amount_usd": 10.0}),
+                         ("post", "/api/agents/{aid}/topup-saved-card", {"amount_usd": 10.0}),
+                         ("post", "/api/agents/{aid}/refund", None),
+                         ("put", "/api/agents/{aid}/auto-topup", {"amount_usd": 10.0, "monthly_cap_usd": 20.0})]
+)
 def test_owner_topups_410_for_vendor_agents(env, method, path, body):
     c, pp, L = env
     a = agent(c, L)
@@ -122,17 +120,14 @@ def test_demo_session_card_failure_creates_nothing_usable(tmp_path, ids):
 
 
 # ================= dashboard (static, no browser) =================
-VENDOR_STATUSES = ["reserved", "completing", "payment_pending", "payment_unknown", "payment_failed", "flagged",
-                   "refund_requested", "partially_refunded"]
-
-
 def _section():
     m = re.search(r"// ---- vendor payouts ----(.*?)// ---- end vendor payouts ----", JS, re.S)
     assert m, "app.js needs a '// ---- vendor payouts ----' section"
     return m.group(1)
 
 
-@pytest.mark.parametrize("status", VENDOR_STATUSES)
+@pytest.mark.parametrize("status", ["reserved", "completing", "payment_pending", "payment_unknown", "payment_failed", "flagged",
+                                    "refund_requested", "partially_refunded"])
 def test_every_vendor_status_has_a_human_label_and_a_tip(status):
     sec = _section()
     m = re.search(rf"\b{status}: '([^']+)'", sec)

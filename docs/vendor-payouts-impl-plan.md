@@ -2,9 +2,15 @@
 
 Status: **in progress on this branch, not merged.** The reviewer chose Option 1 (capture-only) on Oct 18 2026; the capture-only
 spike succeeded (see "Capture-only spike") and the code was approved the same day, built behind `VENDOR_PAYOUTS=1` (off by
-default). Done: step 1 (ledger reservation, cents, migration, flag, `payee` layer; `tests/test_vendor_payouts.py`) and step 2
-(capture-only buy + owner approval over HTTP, mock PayPal only; `tests/test_vendor_payouts_flow.py`). Not yet: refund
-requests, reconcile replay, webhooks, UI, the local live-sandbox test. Never exercised against real PayPal from the app. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
+default). Done: step 1 (ledger reservation, cents, migration, flag, `payee` layer; `tests/test_vendor_payouts.py`), step 2
+(capture-only buy + owner approval over HTTP, mock PayPal only; `tests/test_vendor_payouts_flow.py`), step 3
+(owner refund requests to the vendor, no PayPal call; reconcile replays `payment_unknown` with the same Request-Id only
+within 5 hours of the first attempt because PayPal keeps Orders v2 Request-Ids 6 hours, reads pending orders and captures,
+detects refunds, releases cut-off rows, never approves or unfreezes; `tests/test_vendor_payouts_reconcile.py`) and step 4
+(review findings 1-4: 401 token refresh, MCP outcomes, owner `resolve-unknown`, partial refund amounts,
+`tests/test_vendor_payouts_review.py`; webhooks that re-read PayPal, `tests/test_vendor_payouts_webhooks.py`; 410 on top-ups
+for vendor-funded agents, vendor-funded demo sessions, envelope with paid/set-aside, dashboard statuses incl. "refund with
+<vendor>", `tests/test_vendor_payouts_ui.py` and `tests/test_e2e_vendor_payouts.py`). Not yet: the local live-sandbox run. Never exercised against real PayPal from the app. Every fact cites a PayPal page or a PayPal debug id from our own sandbox calls; anything
 not exercised yet is marked **UNSURE**. Code references are to `main` at d4b1dae. Vendor merchant ids never appear in this
 repo: they come from environment variables (section c). Earlier research and spikes: [vendor-payouts-plan.md](vendor-payouts-plan.md).
 

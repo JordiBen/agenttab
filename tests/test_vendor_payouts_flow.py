@@ -615,7 +615,8 @@ def test_me_shows_envelope_never_ids(env):
     me = c.get("/api/me", headers={"X-Agent-Key": a["api_key"]})
     j = me.json()
     assert j["funding_model"] == "vendor"
-    assert j["envelope"] == {"budget_30d_usd": 100.0, "used_30d_usd": 24.0, "remaining_usd": 76.0}
+    assert j["envelope"] == {"budget_30d_usd": 100.0, "used_30d_usd": 24.0, "remaining_usd": 76.0, "paid_usd": 24.0,
+                             "reserved_usd": 0.0}
     no_ids_in(me.text)
     lst = c.get("/api/me/purchases", headers={"X-Agent-Key": a["api_key"]})
     no_ids_in(lst.text)

@@ -442,12 +442,13 @@ class Ledger:
     def has_vendor_rows(self, aid: str) -> bool:
         return self.db.execute("SELECT 1 FROM purchases WHERE agent_id=? AND funding='vendor' LIMIT 1", (aid,)).fetchone() is not None
 
-    def vendor_counted_cents(self, aid: str, since: float, vendor: str | None = None) -> int:
+    def vendor_counted_cents(self, aid: str, since: float, vendor: str | None = None,
+                             statuses: tuple[str, ...] | None = None) -> int:
         # A partial refund counts what is left, but only when PayPal showed the refunded amount (refunded_cents).
         q = (f"SELECT COALESCE(SUM(amount_cents - CASE WHEN status='partially_refunded' THEN COALESCE(refunded_cents,0)"
              f" ELSE 0 END),0) FROM purchases WHERE agent_id=? AND funding='vendor'"
-             f" AND status IN ({','.join('?' * len(VENDOR_COUNTED))}) AND ts>=?")
-        args = [aid, *VENDOR_COUNTED, since]
+             f" AND status IN ({','.join('?' * len(statuses or VENDOR_COUNTED))}) AND ts>=?")
+        args = [aid, *(statuses or VENDOR_COUNTED), since]
         if vendor is not None:
             q += " AND vendor=?"
             args.append(vendor)
