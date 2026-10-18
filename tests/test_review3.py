@@ -1,5 +1,6 @@
 """Review round 3: reconcile settles auto top-up credits whose hold was never captured; the schedule shows a
 declined capture / cancelled hold instead of a stale 'Needs approval'."""
+from concurrent.futures import CancelledError
 from decimal import Decimal
 
 from app.paypal import PayPalError
@@ -20,15 +21,20 @@ def _crashed_auto_topup(tmp_path):
     c.put(f"/api/agents/{aid}/auto-topup", json={"amount_usd": 100, "monthly_cap_usd": 300}, headers=A)
     pp, led = c.app.state.paypal, c.app.state.ledger
     real = pp.capture_authorization
+    crashed = []
 
     def crash(*a, **k):
+        crashed.append(a)
         raise SystemExit("worker killed between commit and capture")
     pp.capture_authorization = crash
     try:
         buy(c, ag["api_key"], **MUG)
-    except SystemExit:
+    except (SystemExit, CancelledError):
+        # starlette<1.9 TestClient re-raises the SystemExit; starlette>=1.9 runs the app as a portal task, so a
+        # BaseException tears the portal down and the caller sees CancelledError (starlette PR #3491).
         pass
     pp.capture_authorization = real
+    assert len(crashed) == 1, "the simulated crash must have fired exactly once"
     fund = [e for e in led.entries(aid) if e["kind"] == "fund"]
     assert len(fund) == 1 and fund[0]["paypal_ref"] == "" and fund[0]["capture_ref"].startswith("AUTH-")
     assert [p["status"] for p in led.purchases(aid)] == ["completed"] and led.balance(aid) == Decimal("82.00")
