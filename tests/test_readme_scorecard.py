@@ -6,7 +6,7 @@ ROOT = Path(__file__).parent.parent
 
 def test_readme_scorecard_tables_match_results_json():
     from eval import readme_tables
-    readme = (ROOT / "README.md").read_text()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert readme == readme_tables.apply(readme), "README scorecard is out of date: run python -m eval.readme_tables"
     for start, _ in readme_tables.MARKERS:
         assert start in readme
@@ -15,7 +15,7 @@ def test_readme_scorecard_tables_match_results_json():
 def test_readme_ai_row_is_the_committed_claude_run():
     import json
     from eval import readme_tables
-    r = json.loads((ROOT / "eval" / "results.json").read_text())
+    r = json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8"))
     ai = r["modes"]["ai"]
     table = readme_tables.scorecard_table(r, readme_tables.load_archive())
     row = next(l for l in table.splitlines() if l.startswith(f"| {ai['label']} |"))
@@ -33,4 +33,4 @@ def test_scorecard_api_passes_stale_modes_through(tmp_path):
     c = TestClient(create_app(Settings(paypal_mode="mock", allow_insecure_mock=True, db_path=str(tmp_path / "s.db"),
                                        admin_token="adm", llm_base_url="", llm_api_key="", anthropic_api_key="")))
     j = c.get("/api/scorecard").json()
-    assert j["stale_modes"] == json.loads((ROOT / "eval" / "results.json").read_text()).get("stale_modes", [])
+    assert j["stale_modes"] == json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8")).get("stale_modes", [])

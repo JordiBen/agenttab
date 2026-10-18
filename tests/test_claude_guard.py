@@ -181,12 +181,12 @@ def test_anthropic_is_the_default_provider_with_the_exact_model(monkeypatch):
 
 
 def test_sdk_is_pinned_and_key_is_render_secret_never_in_git():
-    req = (ROOT / "requirements.txt").read_text()
+    req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert re.search(r"^anthropic==\d+\.\d+\.\d+$", req, re.M)
-    y = (ROOT / "render.yaml").read_text()
+    y = (ROOT / "render.yaml").read_text(encoding="utf-8")
     assert re.search(r"- key: ANTHROPIC_API_KEY\n\s+sync: false", y)
     for f in [*ROOT.glob("app/*.py"), *ROOT.glob("static/*.js"), ROOT / "render.yaml", ROOT / "README.md"]:
-        assert "sk-ant-" not in f.read_text(), f
+        assert "sk-ant-" not in f.read_text(encoding="utf-8"), f
 
 
 def test_gemini_stays_an_optional_provider(monkeypatch):
@@ -263,23 +263,27 @@ def test_healthz_is_busy_when_the_daily_ai_budget_is_used_up(tmp_path, monkeypat
     assert c.get("/healthz").json()["ai_status"] == "busy"
 
 
-def test_badge_says_live_ai_guard_or_ai_busy_and_model_appears_only_in_proof():
-    js, html = (ROOT / "static/app.js").read_text(), (ROOT / "static/dashboard.html").read_text()
-    assert "'Live AI guard'" in js and "'AI busy, human approval'" in js and "h.ai_status" in js
-    badge = js[js.index("function setLive"):js.index("const pm = $('proofmodel')")]
-    assert "models" not in badge and "model" not in badge.replace("proofmodel", "")      # no model name in the badge
-    proof = html[html.index('<section id="proof"'):]
-    assert 'id="proofmodel"' in proof and 'id="proofmodel"' not in html[:html.index('<section id="proof"')]
+def test_badge_says_ai_guard_on_or_busy_and_model_appears_only_for_developers():
+    # landing-copy v2: the pill reads "AI guard: on" / "AI guard busy: purchases wait for you"; the model name moved from
+    # the Proof section (which is now one table) into the For developers section.
+    js, html = (ROOT / "static/app.js").read_text(encoding="utf-8"), (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
+    assert "'AI guard: on'" in js and "'AI guard busy: purchases wait for you'" in js and "h.ai_status" in js
+    badge = js[js.index("function setLive"):js.index("const pm = $('devmodel')")]
+    assert "models" not in badge and "model" not in badge.replace("devmodel", "")      # no model name in the badge
+    dev = html[html.index('<section id="developers"'):]
+    assert 'id="devmodel"' in dev and 'id="devmodel"' not in html[:html.index('<section id="developers"')]
     assert "Gemini" not in html and "claude-haiku" not in html
-    css = (ROOT / "static/app.css").read_text()
-    assert ".live.busy" in css and "#fb923c" in css
+    css = (ROOT / "static/app.css").read_text(encoding="utf-8")
+    # busy has its own colour (DESIGN.md hold token since the landing redesign; was the dark theme's #fb923c)
+    busy = css[css.index(".live.busy"):].split("}")[0]
+    assert "color:" in busy and ("var(--stamp-hold)" in busy or "#fb923c" in busy)
 
 
 # ---------- (e) eval: old Gemini results archived, never deleted ----------
 def test_old_gemini_results_are_archived_with_their_cases():
     arch = ROOT / "eval/archive"
-    res = json.loads((arch / "results-gemini-2026-10-17-previous-catalog.json").read_text())
-    cases = json.loads((arch / "cases-2026-10-17-previous-catalog.json").read_text())
+    res = json.loads((arch / "results-gemini-2026-10-17-previous-catalog.json").read_text(encoding="utf-8"))
+    cases = json.loads((arch / "cases-2026-10-17-previous-catalog.json").read_text(encoding="utf-8"))
     ai = res["modes"]["ai"]
     assert ai["models"] and all(m.startswith("gemini") for m in ai["models"])
     assert {r["id"] for r in ai["rows"]} == {c["id"] for c in cases} and len(cases) == res["cases"]
@@ -289,8 +293,8 @@ def test_a_new_ai_run_archives_the_previous_one_first(tmp_path, monkeypatch):
     from eval import run_eval
     monkeypatch.setattr(run_eval, "ARCHIVE", tmp_path / "archive")
     p = run_eval.archive_mode("ai", {"run_at": "2026-10-17T18:54:23+00:00", "models": ["gemini-3.5-flash-lite"], "rows": []})
-    assert p.exists() and json.loads(p.read_text())["models"] == ["gemini-3.5-flash-lite"]
-    src = (ROOT / "eval/run_eval.py").read_text()
+    assert p.exists() and json.loads(p.read_text(encoding="utf-8"))["models"] == ["gemini-3.5-flash-lite"]
+    src = (ROOT / "eval/run_eval.py").read_text(encoding="utf-8")
     assert 'archive_mode("ai", modes["ai"])' in src
 
 

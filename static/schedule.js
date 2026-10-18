@@ -52,10 +52,10 @@
         eventTooltip: {
           template: ({eventRecord: e}) => `<div class="sch-tip"><b>${enc(e.name)}</b>
             <div>${DateHelper.format(e.startDate, 'MMM D HH:mm')}${+e.endDate !== +e.startDate ? ' → ' + DateHelper.format(e.endDate, 'MMM D HH:mm') : ''}</div>
-            ${e.status ? `<div>Status: <b>${enc(e.status)}</b>${e.funding ? ' · paid from ' + enc(e.funding === 'direct' ? 'PayPal approval' : 'tab') : ''}${e.confirmed ? ' · ✓ PayPal webhook confirmed' : ''}${e.used ? ' · used' : ''}</div>` : ''}
+            ${e.status ? `<div>Status: <b>${enc(e.status)}</b>${e.funding ? ' · paid from ' + enc(e.funding === 'direct' ? 'PayPal approval' : 'tab') : ''}${e.confirmed ? ' · PayPal webhook confirmed' : ''}${e.used ? ' · used' : ''}</div>` : ''}
             ${e.flag ? `<div style="color:#c0392b">PayPal: capture ${enc(e.flag)}</div>` : ''}
             ${e.reason ? `<div class="sch-reason">${enc(e.reason).slice(0, 300)}</div>` : ''}
-            ${e.suggestion ? `<div class="sch-sugg">💡 ${enc(e.suggestion.reason)}<br><i>Right-click → confirm or dismiss</i></div>` : ''}</div>`
+            ${e.suggestion ? `<div class="sch-sugg"><b>Suggestion:</b> ${enc(e.suggestion.reason)}<br><i>Right-click → confirm or dismiss</i></div>` : ''}</div>`
         },
         eventMenu: {
           processItems({eventRecord: e, items}) {
@@ -86,7 +86,7 @@
         if (e.type === 'approval') return '';                 // label is drawn to the right (labels feature)
         // Fit the label to the bar: ~7 px per character after the icon; milestones get a fixed budget outside.
         const room = e.isMilestone ? 34 : Math.max(4, Math.floor(((renderData.width || 120) - 36) / 8.2));
-        return enc(shortLabel(e, room)) + (e.confirmed ? ' ✓' : '');
+        return enc(shortLabel(e, room)) + (e.confirmed ? ' · confirmed' : '');
       }
     });
     async function refresh() {
@@ -106,7 +106,7 @@
       if (opts.listEl) {
         opts.listEl.innerHTML = j.suggestions.length
           ? '<b>Refund suggestions from the scheduling agent</b> (nothing is refunded until you confirm):' + j.suggestions.map(s =>
-            `<div class="sugg"><span>💡 ${enc(s.reason)} <small>(window closes ${new Date(s.due * 1000).toLocaleString()})</small></span>
+            `<div class="sugg"><span><b>Suggestion:</b> ${enc(s.reason)} <small>(window closes ${new Date(s.due * 1000).toLocaleString()})</small></span>
              <button class="act" data-p="/api/suggestions/${s.id}/confirm">Confirm refund</button>
              <button class="act alt" data-p="/api/suggestions/${s.id}/dismiss">Dismiss</button></div>`).join('')
           : '<small>No refund suggestions right now. The scheduling agent proposes refunds for duplicates, unused items within 48 h of their deadline, and captures PayPal reports as reversed.</small>';

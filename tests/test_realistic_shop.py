@@ -62,7 +62,7 @@ def test_two_seats_need_approval_one_seat_does_not():
 
 
 def test_every_eval_caps_case_still_trips_its_own_limit():
-    cases = {c["id"]: c for c in json.loads((ROOT / "eval/cases.json").read_text())}
+    cases = {c["id"]: c for c in json.loads((ROOT / "eval/cases.json").read_text(encoding="utf-8"))}
     want = {"caps-01": "per-purchase max", "caps-06": "per-purchase max", "caps-04": "daily cap",
             "caps-02": "30-day budget", "caps-03": "30-day budget", "caps-05": "30-day budget"}
     assert {i for i, c in cases.items() if c["category"] == "caps"} == set(want)
@@ -103,7 +103,7 @@ def test_per_ip_llm_budget_is_60_a_day():
 
 
 def test_demo_buttons_show_the_real_catalog_price():
-    h = (ROOT / "static/dashboard.html").read_text()
+    h = (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
     buttons = re.findall(r"onclick=\"demoBuy\('([^']+)','([^']+)','[^']*','[^']*'(?:,(\d+))?\)\">([^<]*)<span class=\"price\">([^<]*)", h)
     assert len(buttons) == 5
     priced = 0
@@ -120,9 +120,9 @@ def test_demo_buttons_show_the_real_catalog_price():
 # ---------- (b) branding ----------
 def test_no_by_webintel_tools_on_the_page_and_vendor_is_sitescope_data(tmp_path):
     for f in ("static/dashboard.html", "static/app.js", "static/schedule.js", "static/app.css", "app/paypal.py"):
-        assert "webintel" not in (ROOT / f).read_text().lower(), f
+        assert "webintel" not in (ROOT / f).read_text(encoding="utf-8").lower(), f
     assert "webintel-data" not in pr.VENDORS and pr.VENDORS["sitescope-data"]["name"] == "SiteScope Data"
-    assert not any("webintel" in json.dumps(c).lower() for c in json.loads((ROOT / "eval/cases.json").read_text()))
+    assert not any("webintel" in json.dumps(c).lower() for c in json.loads((ROOT / "eval/cases.json").read_text(encoding="utf-8")))
     c = _demo_client(tmp_path)
     assert "webintel" not in c.get("/").text.lower()
     assert any(v["vendor"] == "sitescope-data" and v["name"] == "SiteScope Data" for v in c.get("/api/catalog").json()["vendors"])
@@ -132,9 +132,9 @@ def test_no_by_webintel_tools_on_the_page_and_vendor_is_sitescope_data(tmp_path)
 def test_eval_marks_modes_run_on_older_cases_as_stale(tmp_path):
     from eval import run_eval
     out = tmp_path / "r.json"
-    old_ai = {k: v for k, v in json.loads((ROOT / "eval/results.json").read_text())["modes"]["ai"].items() if k != "cases_sha256"}
-    out.write_text(json.dumps({"modes": {"ai": old_ai}}))                     # an ai run without this cases.json's hash
+    old_ai = {k: v for k, v in json.loads((ROOT / "eval/results.json").read_text(encoding="utf-8"))["modes"]["ai"].items() if k != "cases_sha256"}
+    out.write_text(json.dumps({"modes": {"ai": old_ai}}), encoding="utf-8")                     # an ai run without this cases.json's hash
     res = run_eval.main(["--modes", "none,keyword", "--out", str(out)])
     assert res["stale_modes"] == ["ai"]
     assert res["modes"]["keyword"]["cases_sha256"] == run_eval.cases_fingerprint()
-    assert "stale_modes" in (ROOT / "static/app.js").read_text()
+    assert "stale_modes" in (ROOT / "static/app.js").read_text(encoding="utf-8")

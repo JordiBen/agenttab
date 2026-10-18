@@ -176,8 +176,8 @@ def test_ai_unavailable_purchase_says_guard_busy_waiting_for_human(tmp_path, mon
     assert r.status_code == 202 and j["status"] == "approval_required" and j["ai_unavailable"] is True
     assert j["message"] == "AI guard is busy, purchase is waiting for human approval, by design"
     assert c.app.state.ledger.balance(ag["agent_id"]) == Decimal("100.00")  # nothing charged, nothing auto-approved
-    js = (ROOT / "static/app.js").read_text()
-    assert "j.ai_unavailable" in js and "dbusy" in js and 'id="dbusy"' in (ROOT / "static/dashboard.html").read_text()
+    js = (ROOT / "static/app.js").read_text(encoding="utf-8")
+    assert "j.ai_unavailable" in js and "dbusy" in js and 'id="dbusy"' in (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
 
 
 def test_normal_approval_has_no_busy_message(tmp_path):
@@ -190,28 +190,33 @@ def test_normal_approval_has_no_busy_message(tmp_path):
 
 # ---------- (4) MCP prominence ----------
 def _html():
-    return (ROOT / "static/dashboard.html").read_text()
+    return (ROOT / "static/dashboard.html").read_text(encoding="utf-8")
 
 
-def test_hero_has_an_mcp_badge_that_claims_only_what_was_verified():
+def test_mcp_line_in_the_developer_section_claims_only_what_was_verified():
+    # landing-copy v2: the hero's MCP badge moved to the For developers section (top bar link "Developers").
     h = _html()
-    hero = h[h.index('<header class="hero"'):h.index("</header>")]
-    m = re.search(r'<a class="chip chip-mcp" id="heromcp" href="#mcp">(.*?)</a>', hero)
-    assert m and "Works with any MCP client" in m.group(1)
+    nav = h[h.index('<nav class="nav"'):h.index("</nav>")]
+    assert 'href="#developers">Developers</a>' in nav
+    dev = h[h.index('<section id="developers"'):h.index("</section>", h.index('<section id="developers"'))]
+    m = re.search(r"<li><a [^>]*><b>MCP:</b></a>(.*?)</li>", dev, re.S)
+    assert m and "six guarded tools" in m.group(1) and "agent key only" in m.group(1)
     # Interop was verified with the official MCP Python SDK only, not with Claude or Cursor apps.
     assert not re.search(r"works with (claude|cursor)", h, re.I)
 
 
-def test_features_bento_has_an_mcp_card_linking_to_the_panel():
+def test_developer_mcp_line_links_to_the_panel():
     h = _html()
-    bento = h[h.index('class="bento'):h.index('<section id="proof"')]
-    assert re.search(r'<a class="tile t-mcp[^"]*" id="bentomcp" href="#mcp">', bento)
+    dev = h[h.index('<ul class="ticks dev-list">'):h.index("</ul>", h.index('<ul class="ticks dev-list">'))]
+    item = re.search(r"<li><a [^>]*><b>MCP:</b></a>.*?</li>", dev, re.S)
+    assert item and re.search(r'<a id="bentomcp"[^>]*href="#mcp"', item.group(0))
 
 
-def test_mcp_panel_sits_directly_after_the_buy_buttons():
+def test_mcp_panel_sits_in_the_developer_section_right_after_its_list():
+    # landing-copy v2 section 8: "Keep the MCP connect panel here". It used to sit right after the buy buttons.
     h = _html()
-    guided, mcp, sched = h.index('id="dguided"'), h.index('id="mcp"'), h.index('id="dsched"')
-    assert guided < mcp < sched
-    between = h[guided:mcp]
-    assert "6. Try an injected instruction" in between            # the buy buttons come right before
-    assert 'id="dverdict"' not in between and 'id="dbudgets"' not in between   # nothing else in between
+    dev0 = h.index('<section id="developers"'); dev1 = h.index("</section>", dev0)
+    guided, lst, mcp = h.index('id="dguided"'), h.index('<ul class="ticks dev-list">'), h.index('id="mcp"')
+    assert guided < dev0 < lst < mcp < dev1
+    between = h[h.index("</ul>", lst):h.rindex("<div", 0, mcp)]   # up to the panel's own opening tag
+    assert 'class="card' not in between                                 # no other card in between

@@ -67,6 +67,11 @@ class Settings:
     gauntlet_runs_per_ip_hour: int = _env_int("GAUNTLET_RUNS_PER_IP_HOUR", 2)
     gauntlet_runs_per_day: int = _env_int("GAUNTLET_RUNS_PER_DAY", 12)
     gauntlet_llm_calls_per_day: int = _env_int("GAUNTLET_LLM_CALLS_PER_DAY", 60)
+    # Compare panel ("Rules + keyword check" vs "Rules + AI" on one purchase): dry run, its own LLM budget,
+    # not shared with the Gauntlet; its calls also count against llm_calls_per_ip_day.
+    compare_runs_per_ip_hour: int = _env_int("COMPARE_RUNS_PER_IP_HOUR", 5)
+    compare_runs_per_day: int = _env_int("COMPARE_RUNS_PER_DAY", 60)
+    compare_llm_calls_per_day: int = _env_int("COMPARE_LLM_CALLS_PER_DAY", 40)
     # Offline mock PayPal is for localhost only. Tests set this to run mock + demo mode together.
     allow_insecure_mock: bool = field(default_factory=lambda: os.getenv("ALLOW_INSECURE_MOCK", "0") == "1")
 

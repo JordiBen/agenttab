@@ -43,7 +43,7 @@ def archive_mode(mode: str, m: dict) -> Path:
     tag = (m.get("run_at") or "unknown").replace(":", "").replace("+0000", "Z")
     models = "-".join(m.get("models") or []) or "no-model"
     out = ARCHIVE / f"results-{mode}-{models}-{tag}.json"
-    out.write_text(json.dumps({"archived_from": "eval/results.json", "mode": mode, **m}, indent=1) + "\n")
+    out.write_text(json.dumps({"archived_from": "eval/results.json", "mode": mode, **m}, indent=1) + "\n", encoding="utf-8")
     return out
 
 
@@ -67,7 +67,7 @@ def shop_config() -> pr.AgentConfig:
 
 
 def load_cases() -> list[dict]:
-    return json.loads(CASES.read_text())
+    return json.loads(CASES.read_text(encoding="utf-8"))
 
 
 def cases_fingerprint() -> str:
@@ -151,7 +151,7 @@ def main(argv=None):
     ap.add_argument("--out", default=str(RESULTS))
     a = ap.parse_args(argv)
     cases = load_cases()
-    prev = json.loads(Path(a.out).read_text()) if Path(a.out).exists() else {}
+    prev = json.loads(Path(a.out).read_text(encoding="utf-8")) if Path(a.out).exists() else {}
     modes = dict(prev.get("modes") or {})
     s = Settings()
     for mode in [m.strip() for m in a.modes.split(",") if m.strip()]:
@@ -185,7 +185,7 @@ def main(argv=None):
     if "ai" in ordered and ordered["ai"]["heuristic_fallbacks"]:
         res["notes"].append(f"{ordered['ai']['heuristic_fallbacks']} ai-mode decision(s) fell back to the keyword check "
                             "(Gemini error or quota).")
-    Path(a.out).write_text(json.dumps(res, indent=1))
+    Path(a.out).write_text(json.dumps(res, indent=1), encoding="utf-8")
     return res
 
 
