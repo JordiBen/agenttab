@@ -1,1 +1,10 @@
-pytest>=8
+# Test tools, pinned exactly (versions from a fresh venv built from requirements.txt on Python 3.12.7, 2026-10-18).
+# Browser e2e tests skip when Playwright's Chromium isn't installed (python -m playwright install chromium).
+pytest==9.1.1
+pluggy==1.7.0
+iniconfig==2.3.1
+packaging==26.3
+pygments==2.21.0
+playwright==1.64.0
+greenlet==3.5.6
+pyee==14.0.0
