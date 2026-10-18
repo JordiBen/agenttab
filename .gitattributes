@@ -1,0 +1,22 @@
+# Line endings: the repository stores LF and every checkout keeps LF, whatever core.autocrlf says on the machine.
+# This matters for more than style: files that are hashed (SRI integrity in static/*.html, eval result sha256s) must
+# have the same bytes on Windows as on Linux.
+* text=auto eol=lf
+
+# Vendored third-party files are served byte for byte and pinned with SRI hashes: never convert them.
+static/vendor/** -text
+
+# Binary assets.
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.mp4 binary
+*.pdf binary
+*.sqlite3 binary
+*.db binary

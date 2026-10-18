@@ -1,5 +1,6 @@
 /* AgentTab API reference: Swagger UI dressed in the site's tokens (DESIGN.md). Bone page, olive ink, Roundo, one radius.
-   Method colours come from our palette, not Swagger's green/blue. Hairlines only inside [data-ui] (the reference body). */
+   Method colours come from our palette, not Swagger's green/blue. No hairline rules or outlined boxes: blocks are told apart by fills (paper on bone). The only 1px borders are on real
+   form inputs and Swagger's own parameter/response tables, both inside [data-ui] (taste-skill: data-ui). */
 .docs .nav{position:relative}                       /* no app.js here: a plain header, never over a heading */
 .docs-nav .wrap{justify-content:space-between}
 .docs-back{font-weight:600;font-size:1.0625rem;color:var(--ink);text-decoration:underline;text-underline-offset:3px}
@@ -14,20 +15,20 @@
 .swagger-ui .topbar,.swagger-ui .information-container,.swagger-ui .scheme-container{display:none}
 .swagger-ui .wrapper{padding:0;max-width:none}
 .swagger-ui a{color:var(--ink)}
-.swagger-ui .opblock-tag{color:var(--ink);font-size:var(--step-lead);border-bottom:1px solid var(--surface)}
+.swagger-ui .opblock-tag{color:var(--ink);font-size:var(--step-lead);border:0}           /* no divider rule: spacing does it */
 .swagger-ui .opblock-tag small{color:var(--muted);font-size:1rem}
-.swagger-ui .opblock{border-radius:var(--radius);box-shadow:none;background:var(--paper);border:1px solid var(--surface);margin:0 0 10px}
-.swagger-ui .opblock .opblock-summary{border-color:var(--surface)}
+.swagger-ui .opblock{border-radius:var(--radius);box-shadow:none;background:var(--paper);border:0;margin:0 0 10px}
+.swagger-ui .opblock .opblock-summary,.swagger-ui .opblock.is-open .opblock-summary{border:0}
 .swagger-ui .opblock .opblock-summary-method{border-radius:var(--radius);font-weight:700;font-size:14px;min-width:76px;text-shadow:none}
 .swagger-ui .opblock .opblock-summary-path,.swagger-ui .opblock .opblock-summary-path__deprecated{color:var(--ink);font-size:16px}
 .swagger-ui .opblock .opblock-summary-description{color:var(--muted);font-size:15px}
-.swagger-ui .opblock.opblock-get,.swagger-ui .opblock.opblock-head{background:var(--paper);border-color:var(--surface)}
+.swagger-ui .opblock.opblock-get,.swagger-ui .opblock.opblock-head{background:var(--paper);border:0}
 .swagger-ui .opblock.opblock-get .opblock-summary-method,.swagger-ui .opblock.opblock-head .opblock-summary-method{background:var(--surface);color:var(--ink)}
 .swagger-ui .opblock.opblock-post .opblock-summary-method{background:var(--accent);color:var(--accent-ink)}
-.swagger-ui .opblock.opblock-post{background:var(--paper);border-color:var(--surface)}
+.swagger-ui .opblock.opblock-post{background:var(--paper);border:0}
 .swagger-ui .opblock.opblock-delete .opblock-summary-method{background:var(--stamp-block);color:var(--paper)}
 .swagger-ui .opblock.opblock-put .opblock-summary-method,.swagger-ui .opblock.opblock-patch .opblock-summary-method{background:var(--stamp-hold);color:var(--paper)}
-.swagger-ui .opblock.opblock-delete,.swagger-ui .opblock.opblock-put,.swagger-ui .opblock.opblock-patch{background:var(--paper);border-color:var(--surface)}
+.swagger-ui .opblock.opblock-delete,.swagger-ui .opblock.opblock-put,.swagger-ui .opblock.opblock-patch{background:var(--paper);border:0}
 .swagger-ui .opblock .opblock-section-header{background:var(--bg);box-shadow:none}
 .swagger-ui .opblock .opblock-section-header h4,.swagger-ui .opblock-description-wrapper p,.swagger-ui .responses-inner h4,
 .swagger-ui .responses-inner h5,.swagger-ui .response-col_status,.swagger-ui .response-col_description,.swagger-ui table thead tr th,
@@ -38,9 +39,10 @@
 .swagger-ui .btn{border-radius:var(--radius);box-shadow:none;color:var(--ink);border-color:var(--ink);font-size:15px}
 .swagger-ui .btn.execute,.swagger-ui .btn.authorize{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .swagger-ui .btn.authorize svg{fill:var(--accent-ink)}
+/* taste-skill-ignore: real form inputs inside [data-ui] keep a 1px outline so they read as fields */
 .swagger-ui select,.swagger-ui input[type=text],.swagger-ui textarea{border-radius:var(--radius);background:var(--paper);color:var(--ink);border:1px solid var(--surface);font-size:15px}
 .swagger-ui .microlight,.swagger-ui .highlight-code pre,.swagger-ui pre{background:var(--ink) !important;color:var(--accent-ink) !important;border-radius:var(--radius);font-size:14px}
-.swagger-ui section.models{border:1px solid var(--surface);border-radius:var(--radius);background:var(--paper)}
+.swagger-ui section.models{border:0;border-radius:var(--radius);background:var(--paper)}
 .swagger-ui section.models h4,.swagger-ui section.models .model-container .model-box{color:var(--ink);font-size:16px}
 .swagger-ui section.models .model-container{background:var(--bg)}
 .swagger-ui .model-toggle:after,.swagger-ui .arrow,.swagger-ui svg.arrow{fill:var(--ink)}
@@ -50,3 +52,9 @@
 .swagger-ui .response-control-media-type code,.swagger-ui small{font-size:14px;color:var(--ink)}
 .swagger-ui .response-control-media-type--accept-controller code,.swagger-ui code{color:var(--ink);background:var(--surface);font-size:14px}
 .swagger-ui pre.microlight,.swagger-ui .microlight,.swagger-ui pre.microlight *{font-size:14px !important}
+
+/* shown by docs.js when the Swagger UI bundle did not load: say so and link the raw OpenAPI document */
+.docs-fallback{background:var(--paper);border-radius:var(--radius);padding:24px clamp(16px,3vw,32px);color:var(--ink)}
+.docs-fallback p{margin:0 0 8px;font-size:var(--step-body);max-width:60ch}
+.docs-fallback p:last-child{margin:0}
+.docs-fallback a{color:var(--ink);font-weight:600;text-decoration:underline;text-underline-offset:3px}

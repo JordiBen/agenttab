@@ -117,3 +117,71 @@ def test_back_link_returns_to_the_site_in_the_same_tab(browser, server):
         assert len(browser.contexts[-1].pages) == 1                                  # same tab, no new one
     finally:
         pg.close()
+
+
+BUNDLE = "**/static/vendor/swagger-ui-5.33.3/swagger-ui-bundle.js"
+HAIRLINES = r"""() => { const out = [];
+  for (const el of document.querySelectorAll('#swagger-ui *')) {
+    if (!el.getClientRects().length || ['INPUT', 'SELECT', 'TEXTAREA', 'TH', 'TD', 'TR', 'TABLE', 'THEAD', 'TBODY'].includes(el.tagName)
+        || el.closest('table')) continue;
+    const cs = getComputedStyle(el);
+    for (const s of ['Top', 'Bottom', 'Left', 'Right']) {
+      const w = parseFloat(cs['border' + s + 'Width']);
+      if (cs['border' + s + 'Style'] !== 'none' && w > 0 && w <= 1) { out.push(el.tagName + '.' + String(el.className).slice(0, 50) + ' ' + s); break; }
+    }
+  }
+  return [...new Set(out)].slice(0, 20); }"""
+
+
+def _fallback_page(browser, server, handler):
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    pg.errs, pg.console = [], []
+    pg.on("pageerror", lambda e: pg.errs.append(str(e)))
+    pg.on("console", lambda m: pg.console.append(m.text))
+    pg.route(BUNDLE, handler)
+    pg.goto(server + "/docs", wait_until="load")
+    pg.wait_for_selector("#swagger-ui .docs-fallback", timeout=10000)
+    return pg
+
+
+def _assert_fallback(pg, server):
+    box = pg.locator("#swagger-ui .docs-fallback")
+    assert box.is_visible() and box.get_attribute("role") == "alert"
+    assert "The interactive reference didn't load in this browser." in box.inner_text()
+    link = box.locator("a")
+    assert link.get_attribute("href") == "/openapi.json" and link.inner_text() == "/openapi.json"
+    assert pg.evaluate("typeof window.SwaggerUIBundle") == "undefined"
+    assert pg.evaluate(AUDIT) == []                                          # readable, our font, enough contrast
+    link.click(); pg.wait_for_url(server + "/openapi.json")
+
+
+def test_docs_shows_a_message_and_the_openapi_link_when_the_bundle_cannot_load(browser, server):
+    pg = _fallback_page(browser, server, lambda route: route.abort())
+    try:
+        _assert_fallback(pg, server)
+        assert pg.errs == []
+    finally:
+        pg.close()
+
+
+def test_docs_shows_the_message_when_sri_rejects_a_crlf_converted_bundle(browser, server):
+    """The Windows bug, reproduced in the browser: the bundle arrives with CRLF line endings, its hash no longer
+    matches the integrity attribute, Chrome refuses to run it. The page must still say what happened."""
+    def crlf(route):
+        body = httpx.get(route.request.url, timeout=10).content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        route.fulfill(status=200, body=body, headers={"content-type": "text/javascript"})
+    pg = _fallback_page(browser, server, crlf)
+    try:
+        assert any("integrity" in m.lower() for m in pg.console), pg.console          # blocked by SRI, not missing
+        _assert_fallback(pg, server)
+    finally:
+        pg.close()
+
+
+def test_docs_reference_has_no_hairline_boxes_outside_inputs_and_tables(browser, server):
+    pg = _docs(browser, server)
+    try:
+        pg.click("#swagger-ui .opblock-post .opblock-summary >> nth=0"); pg.wait_for_timeout(500)
+        assert pg.evaluate(HAIRLINES) == []
+    finally:
+        pg.close()
