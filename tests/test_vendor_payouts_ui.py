@@ -137,7 +137,8 @@ def test_every_vendor_status_has_a_human_label_and_a_tip(status):
 
 def test_refund_requested_says_with_the_vendor():
     sec = _section()
-    assert "refund.with" in sec and "'refund with '" in sec
+    # the vendor moved from the pill text to its tooltip (the note names it) and the Vendor column (test_vendor_polish_ui)
+    assert "pill('refund_requested', 'Refund requested', d.refund.note)" in sec and "headerName: 'Vendor'" in sec
 
 
 def test_vendor_rows_use_the_vendor_actions():

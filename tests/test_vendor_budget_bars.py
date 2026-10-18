@@ -72,13 +72,13 @@ def test_vendor_toast_says_paid_and_tab_toast_says_bought():
 def test_status_column_is_wide_enough_for_the_vendor_refund_pill():
     col = next(l for l in JS.splitlines() if "{field: 'status', cellRenderer: p => p.data.funding === 'vendor'" in l)
     w = int(re.search(r"minWidth: (\d+)", col).group(1))
-    longest = max(len("refund with " + v["name"]) for v in pr.VENDORS.values())
-    assert w >= 8 * longest, (w, longest)                     # ~7 px per character at meta size plus pill padding
+    assert w >= 8 * len("Refund requested"), w               # the pill text; the vendor is in its tooltip and own column
 
 
 # ---------- 4. short item names for vendor rows ----------
 def test_vendor_rows_show_the_short_item_name():
-    col = next(l for l in JS.splitlines() if "{headerName: 'Item', minWidth: 210" in l)
-    # vendor rows lead with the short item name; the vendor follows (it stays visible, tests/test_e2e_vendor_payouts.py)
-    assert "p.data.funding === 'vendor' ? itemName(p.data.vendor, p.data.item) + ' · ' + vendorName(p.data.vendor)" in col
-    assert "vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item)" in col   # tab rows unchanged
+    col = next(l for l in JS.splitlines() if "{colId: 'item', headerName: 'Item'" in l)
+    # vendor mode: the short item name alone; the vendor short name has its own column (tests/test_e2e_vendor_payouts.py)
+    assert "valueGetter: p => itemName(p.data.vendor, p.data.item)," in col
+    tab = next(l for l in JS.splitlines() if "{headerName: 'Item', minWidth: 210" in l)
+    assert "vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item)" in tab   # tab rows unchanged

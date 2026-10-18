@@ -58,7 +58,8 @@ NODE = shutil.which("node")
 @pytest.mark.skipif(not NODE, reason="node not installed")
 def test_vendor_mode_copy_in_node(tmp_path):
     js = tmp_path / "vm.js"
-    js.write_text("const els = {};\n"
+    js.write_text("const els = {}; let VMODE = false; const cols = [];\n"
+                  "const dPurch = {setGridOption: (k, v) => cols.push([k, v])}; const purchCols = (o, v) => 'vendor:' + v;\n"
                   "const ph = {textContent: 'Start a session to see the tab.'};\n"
                   "const $ = id => els[id] || (els[id] = {id, textContent: 'tab copy', hidden: false, style: {display: ''},\n"
                   "  querySelector: sel => sel === 'p.sub' ? ph : null});\n"
@@ -70,6 +71,7 @@ def test_vendor_mode_copy_in_node(tmp_path):
     assert out["dbudgeth"]["textContent"] == "Budget and vendors"
     assert out["drefundbtn"]["style"]["display"] == "none"
     assert out["placeholder"]["textContent"] == "Start a session to see the budget."   # before a session: no "tab"
+    assert out["drefundtext"]["innerHTML"] == "you can ask the vendor for a refund within <b>7 days</b>"
 
 
 def test_vendor_mode_copy_static():
