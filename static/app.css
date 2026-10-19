@@ -106,7 +106,11 @@ html{scroll-padding-top:var(--nav-h,64px)}   /* anchor jumps land just below the
 .hero-acts{display:flex;flex-wrap:wrap;align-items:center;gap:14px 24px}
 .hero .lead{font-size:var(--step-lead);max-width:46ch;margin:0 0 32px;line-height:1.35}
 .honest{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:18px;font-size:1rem;color:var(--muted)}
-.heroproof{display:block;margin-top:10px;font-size:var(--step-small);color:var(--muted);text-decoration:none}
+/* shown only when /api/scorecard answers, so the .reveal observer can't pace it: own entrance, same pace as the honest line
+   (.reveal .24s var(--ease), honest = 4th hero .reveal -> 3*60ms delay). Restarts when [hidden] is removed; reduced motion: animation:none */
+@keyframes heroproof-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.heroproof{display:block;margin-top:10px;font-size:var(--step-small);color:var(--muted);text-decoration:none;animation:heroproof-in .24s var(--ease) .18s both}
+.heroproof[hidden]{display:none}   /* display:block above would otherwise beat [hidden]; the entrance must start when it is shown */
 .heroproof:hover{color:var(--ink);text-decoration:underline}
 .receipt{background:var(--paper);height:clamp(420px,38vw,448px);padding:28px clamp(20px,3vw,36px) 40px;
   display:flex;flex-direction:column;overflow:hidden;font-variant-numeric:tabular-nums}
