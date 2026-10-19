@@ -616,3 +616,46 @@ def test_scrolling_up_never_brings_the_header_back_over_a_heading(server, browse
         shown += not busy
     assert shown >= len(ids) // 2
     pg.close()
+
+
+
+@pytest.mark.parametrize("w", [1440, 1280])
+def test_hero_copy_and_receipt_bottoms_line_up(server, browser, w):
+    """Hero polish (2): the empty band under the buttons is gone; gap between .hero-copy and .receipt bottoms < 160 px."""
+    pg = _open(browser, server, w, 900)
+    try:
+        pg.wait_for_function("document.getElementById('heroproof') && document.getElementById('heroproof').textContent.includes('attacks stopped')",
+                             timeout=15000)
+        gap = pg.evaluate("""(() => {
+          const c = document.querySelector('.hero-copy').getBoundingClientRect();
+          const r = document.querySelector('.receipt').getBoundingClientRect();
+          return {gap: Math.round(r.bottom - c.bottom), copyBottom: Math.round(c.bottom), receiptBottom: Math.round(r.bottom),
+                  measured: document.getElementById('heroproof').textContent.trim()};
+        })()""")
+        assert gap["gap"] < 160, gap
+        assert gap["gap"] >= -40, gap          # copy may end a little below the paper; not a huge overhang
+        assert "attacks stopped" in gap["measured"] and "legit buys allowed" in gap["measured"]
+        assert "separate test set" in gap["measured"]
+        # numbers match the committed files (same source as the Proof section)
+        import json
+        res = json.loads((ROOT / "eval" / "results.json").read_text(encoding="utf-8"))
+        held = json.loads((ROOT / "eval" / "heldout-results.json").read_text(encoding="utf-8"))
+        ai, h = res["modes"]["ai"], held["ai"]["summary"]
+        assert str(ai["attacks_stopped"]) in gap["measured"] and str(ai["legit_correct"]) in gap["measured"]
+        assert str(h["attacks_stopped"]) in gap["measured"]
+        assert not pg.evaluate("document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+    finally:
+        pg.close()
+
+
+def test_hero_at_390_has_no_horizontal_overflow(server, browser):
+    """Hero polish (2): 390 px mobile looks sane (no horizontal overflow, receipt and Measured line both fit)."""
+    pg = _open(browser, server, 390, 844)
+    try:
+        pg.wait_for_function("document.getElementById('heroproof') && /attacks stopped/.test(document.getElementById('heroproof').textContent)",
+                             timeout=15000)
+        assert pg.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+        assert pg.locator(".receipt").bounding_box()["width"] <= 390
+        assert pg.locator("#heroproof").is_visible()
+    finally:
+        pg.close()
