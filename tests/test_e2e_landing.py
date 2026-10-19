@@ -659,3 +659,63 @@ def test_hero_at_390_has_no_horizontal_overflow(server, browser):
         assert pg.locator("#heroproof").is_visible()
     finally:
         pg.close()
+
+
+_PROOF_STATE = """(() => { const q = document.getElementById('heroproof'), h = document.querySelector('.hero .honest');
+  if (!q || q.hidden || !/attacks stopped/.test(q.textContent)) return false;
+  const cq = getComputedStyle(q), ch = getComputedStyle(h);
+  return {opacity: +cq.opacity, anims: q.getAnimations().map(a => a.animationName || a.transitionProperty),
+          animName: cq.animationName, honestOpacity: +ch.opacity}; })()"""
+
+
+def test_hero_proof_line_fades_in_even_when_scorecard_lands_after_the_hero_reveal(server, browser):
+    """t81u (2): the proof line must not pop in at full opacity. Hold /api/scorecard until the hero .reveal entrance is
+    finished, then release it; on the first frame the line is shown it must still be entering (opacity < 1, animating)."""
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    held = []
+    pg.route("**/api/scorecard", lambda route: held.append(route))
+    try:
+        pg.goto(server + "/")
+        pg.wait_for_function("document.querySelector('.hero .honest').classList.contains('in')"
+                             " && document.querySelector('.hero .honest').getAnimations().length === 0", timeout=15000)
+        assert pg.evaluate("getComputedStyle(document.querySelector('.hero .honest')).opacity") == "1"
+        assert held, "scorecard request should be parked"
+        for r in held:
+            r.continue_()
+        st = pg.wait_for_function(_PROOF_STATE, polling="raf", timeout=15000).json_value()
+        assert st["opacity"] < 1, st
+        assert "heroproof-in" in st["anims"], st
+        pg.wait_for_function("getComputedStyle(document.getElementById('heroproof')).opacity === '1'", timeout=5000)
+    finally:
+        pg.close()
+
+
+def _css_ms(v: str) -> float:
+    v = v.strip()
+    return float(v[:-2]) if v.endswith("ms") else float(v[:-1]) * 1000
+
+
+def test_hero_proof_line_uses_the_honest_line_pace(server, browser):
+    """t81u (2): same duration/easing as the hero .reveal and the honest line's delay, so it never runs ahead of it."""
+    pg = _open(browser, server, 1440, 900)
+    try:
+        pg.wait_for_function(_PROOF_STATE, timeout=15000)
+        pace = pg.evaluate("""(() => { const q = getComputedStyle(document.getElementById('heroproof')),
+            h = document.querySelector('.hero .honest'), ch = getComputedStyle(h);
+          return {qd: q.animationDuration, qdel: q.animationDelay, qe: q.animationTimingFunction,
+                  hd: ch.transitionDuration.split(',')[0], hdel: h.style.transitionDelay, he: ch.transitionTimingFunction.split(',')[0]}; })()""")
+        assert pace["qd"] == pace["hd"] and pace["qe"] == pace["he"], pace
+        assert _css_ms(pace["qdel"]) == _css_ms(pace["hdel"]) > 0, pace
+    finally:
+        pg.close()
+
+
+def test_hero_proof_line_is_static_with_reduced_motion(server, browser):
+    """t81u (2): prefers-reduced-motion: no animation at all; the line is at opacity 1 on its first shown frame."""
+    pg = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+    try:
+        pg.goto(server + "/")
+        st = pg.wait_for_function(_PROOF_STATE, polling="raf", timeout=15000).json_value()
+        assert st["opacity"] == 1 and st["anims"] == [] and st["animName"] == "none", st
+    finally:
+        pg.close()
