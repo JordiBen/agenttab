@@ -44,7 +44,8 @@ def test_catalog_has_short_vendor_names(env):
 def _cols(vendor: bool):
     src = ("const hhmm = p => 'T'; const vstatus = d => 'S'; const pillCell = p => 'P'; const vactions = (d, o) => 'A';\n"
            "const itemName = (v, i) => 'Mug sample'; const vendorName = v => 'SampleBox Wholesale';\n"
-           "const vendorShort = v => 'SampleBox';\n" + _fn(_section(), "vendorPurchCols") + _fn(JS, "purchCols") +
+           "const vendorShort = v => 'SampleBox';\n" + re.search(r"^const itemLabel = .*$", JS, re.M).group(0) + "\n" +
+           _fn(_section(), "vendorPurchCols") + _fn(JS, "purchCols") +
            f"\nconst cols = purchCols(false, {str(vendor).lower()});\n"
            "const row = {data: {vendor: 'samplebox', item: 'ceramic-mug-sample', funding: 'vendor', status: 'completed'}};\n"
            "process.stdout.write(JSON.stringify(cols.map(c => ({h: c.headerName || c.field, id: c.colId, min: c.minWidth || 90,\n"

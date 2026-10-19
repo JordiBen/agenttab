@@ -96,7 +96,8 @@ def build(ledger: Ledger, agent, now: float | None = None, agent_detail: str | N
         allowed = cfg.vendor_budgets is None or vid in cfg.vendor_budgets
         rid = f"{aid}:{vid}"
         detail = v["category"] if allowed else "not on allowlist"
-        resources.append({"id": rid, "name": v["name"], "kind": "vendor", "detail": detail, "agent": aid})
+        resources.append({"id": rid, "name": v["name"], "short": pr.VENDOR_SHORT.get(vid, v["name"]), "kind": "vendor",
+                          "detail": detail, "agent": aid})
         if allowed and cfg.vendor_budgets is not None:
             budget = cfg.vendor_budgets[vid]
             spent = vendor_spent[vid] if vendor_spent and vid in vendor_spent else ledger.vendor_spent_since(aid, vid, now - BUDGET_DAYS * DAY)

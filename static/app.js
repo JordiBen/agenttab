@@ -71,13 +71,13 @@ let VMODE = false, OVMODE = false;
 const vendorShort = vendor => (CAT || []).find(v => v.vendor === vendor)?.short || vendorName(vendor);
 function vendorPurchCols(o) { return [
   {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 112, maxWidth: 124},
-  {colId: 'item', headerName: 'Item', minWidth: 136, flex: 1.2, valueGetter: p => itemName(p.data.vendor, p.data.item), tooltipValueGetter: p => vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item)},
+  {colId: 'item', headerName: 'Item', minWidth: 136, flex: 1.6, valueGetter: p => itemLabel(p.data), tooltipValueGetter: p => vendorName(p.data.vendor) + ' · ' + itemLabel(p.data)},
   {colId: 'vendor', headerName: 'Vendor', minWidth: 100, maxWidth: 120, valueGetter: p => vendorShort(p.data.vendor), tooltipValueGetter: p => vendorName(p.data.vendor)},
   {field: 'amount_usd', headerName: 'Amount', valueFormatter: p => '$' + Number(p.value).toFixed(2), minWidth: 98, maxWidth: 106,
    tooltipValueGetter: p => p.data.paid_to ? 'Paid to ' + p.data.paid_to + ' from the saved card' : 'From the saved card'},
   {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 156},
   {field: 'refund_deadline', headerName: 'Refund until', minWidth: 138, valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleDateString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : (p.data.status === 'completed' ? 'final sale' : '')},
-  {field: 'decision_source', headerName: 'Decided by', minWidth: 118, tooltipField: 'decision_source'}, {field: 'reason', flex: 1.5, minWidth: 76, tooltipField: 'reason'},
+  {field: 'decision_source', headerName: 'Decided by', minWidth: 118, tooltipField: 'decision_source'}, {field: 'reason', flex: 1.2, minWidth: 76, tooltipField: 'reason'},
   {headerName: 'Actions', minWidth: 162, sortable: false, filter: false, cellRenderer: p => p.data.funding === 'vendor' ? vactions(p.data, o) : ''}]; }
 // VENDOR_PAYOUTS=1 with a vendor-funded demo agent: budget wording, and no tab refund (the server answers 410).
 function vendorModeUI() {
@@ -195,6 +195,7 @@ const stampFor = (outcome, live) => outcome === 'allow' ? (live ? ['paid', 'PAID
 const stamp = (outcome, live) => { const [c, w] = stampFor(outcome, live); return `<span class="stamp ${c}">${w}</span>`; };
 // The page shows each item's short name; the full description stays in the API and the guard's prompt.
 const itemName = (vendor, item) => { const i = (CAT || []).find(v => v.vendor === vendor)?.items.find(i => i.item === item); return i ? (i.short || i.name) : item; };
+const itemLabel = d => itemName(d.vendor, d.item) + (d.quantity > 1 ? ' ×' + d.quantity : '');   // "Inventory app seat ×2"
 const vendorName = vendor => (CAT || []).find(v => v.vendor === vendor)?.name || vendor;
 // Who decided, in plain words (the layer names stay in the API and the For developers section).
 const STOPPED_BY = {'policy-ai': 'AI guard (Claude)', 'policy-keyword': 'keyword check', 'policy-heuristic': 'keyword check', allowlist: 'vendor not allowed',
@@ -393,8 +394,8 @@ async function pAct(pid, act, owner) { const h = owner ? H() : {'X-Agent-Key': D
   owner ? (load(), OS && OS.refresh()) : (dload(), DS && DS.refresh()); }
 function purchCols(owner, vendor = false) { const o = owner ? 'true' : 'false'; if (vendor) return vendorPurchCols(o); return [
   {field: 'ts', headerName: 'Time', sort: 'desc', valueFormatter: hhmm, minWidth: 122, maxWidth: 130},
-  {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => p.data.funding === 'vendor' ? itemName(p.data.vendor, p.data.item) + ' · ' + vendorName(p.data.vendor) : vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item),
-   tooltipValueGetter: p => p.data.funding === 'vendor' ? vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item) : p.data.vendor + ' · ' + p.data.item},
+  {headerName: 'Item', minWidth: 210, flex: 1.3, valueGetter: p => p.data.funding === 'vendor' ? itemLabel(p.data) + ' · ' + vendorName(p.data.vendor) : vendorName(p.data.vendor) + ' · ' + itemLabel(p.data),
+   tooltipValueGetter: p => p.data.funding === 'vendor' ? vendorName(p.data.vendor) + ' · ' + itemLabel(p.data) : p.data.vendor + ' · ' + p.data.item},
   {field: 'amount_usd', headerName: 'Amount', valueFormatter: p => '$' + Number(p.value).toFixed(2), minWidth: 90, maxWidth: 100},
   {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 250},
   {field: 'funding', headerName: 'Paid from', minWidth: 100, maxWidth: 130, valueGetter: p => p.data.funding === 'vendor' ? 'saved card' : p.data.funding,

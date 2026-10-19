@@ -31,7 +31,7 @@
       static fields = ['type', 'purchaseId', 'amount', 'status', 'reason', 'funding', 'suggestion', 'confirmed',
         'flag', 'used', 'percent'];
     }
-    class AtResource extends ResourceModel { static fields = ['kind', 'detail', 'agent', 'budget']; }
+    class AtResource extends ResourceModel { static fields = ['kind', 'detail', 'agent', 'budget', 'short']; }
     const now = new Date();
     const sch = new Scheduler({
       appendTo: el, autoHeight: true, minHeight: 300, rowHeight: 48, barMargin: 9, eventStyle: 'tonal',
@@ -42,9 +42,12 @@
       resourceStore: {modelClass: AtResource}, eventStore: {modelClass: AtEvent},
       columns: [{text: 'Agent / vendor', field: 'name', width: innerWidth < 800 ? 124 : 250, htmlEncode: false,
         renderer: ({record}) => `<div class="sch-res ${record.kind}"><i class="fa ${record.kind === 'agent' ? 'fa-robot' : record.kind === 'paypal' ? 'fa-bolt' : 'fa-store'}"></i>
-           <div style="min-width:0;flex:1"><b>${enc(record.name)}</b>${record.budget ? `<div class="sch-bud"><span class="sch-bud-bar"><i style="width:${Math.min(100, record.budget.percent)}%"></i></span><span>${enc(record.budget.text)}</span></div>`
-             : `<div class="sch-sub">${enc(record.detail)}</div>`}</div></div>`}],
+           <div style="min-width:0;flex:1"><b>${enc(record.kind === 'vendor' ? record.short || record.name : record.name)}</b>${record.budget ? `<div class="sch-bud"><span class="sch-bud-bar"><i style="width:${Math.min(100, record.budget.percent)}%"></i></span><span>${enc(record.budget.text)}</span></div>`
+             : `<div class="sch-sub">${enc(record.detail)}</div>`}</div></div>`,
+        // Vendor rows show the short name; the full name is in the cell tooltip.
+        tooltipRenderer: ({record}) => record.kind === 'vendor' && record.short && record.short !== record.name ? enc(record.name) : null}],
       features: {
+        cellTooltip: {hoverDelay: 300},
         stickyEvents: false, eventDrag: false, eventResize: false, eventEdit: false, eventDragCreate: false, scheduleMenu: false,
         timeRanges: {showCurrentTimeLine: true},
         // Short events (a 24 h approval is one day wide) carry their label to the right instead of clipping it.

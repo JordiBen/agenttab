@@ -79,6 +79,8 @@ def test_status_column_is_wide_enough_for_the_vendor_refund_pill():
 def test_vendor_rows_show_the_short_item_name():
     col = next(l for l in JS.splitlines() if "{colId: 'item', headerName: 'Item'" in l)
     # vendor mode: the short item name alone; the vendor short name has its own column (tests/test_e2e_vendor_payouts.py)
-    assert "valueGetter: p => itemName(p.data.vendor, p.data.item)," in col
+    # itemLabel = the short item name, plus "×{qty}" when more than one is bought (tests/test_video_gaps.py)
+    assert "const itemLabel = d => itemName(d.vendor, d.item) + " in JS
+    assert "valueGetter: p => itemLabel(p.data)," in col
     tab = next(l for l in JS.splitlines() if "{headerName: 'Item', minWidth: 210" in l)
-    assert "vendorName(p.data.vendor) + ' · ' + itemName(p.data.vendor, p.data.item)" in tab   # tab rows unchanged
+    assert "vendorName(p.data.vendor) + ' · ' + itemLabel(p.data)" in tab   # tab rows: same text, plus "×{qty}"

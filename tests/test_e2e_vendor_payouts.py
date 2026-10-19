@@ -143,6 +143,10 @@ def test_vendor_item_shows_the_quantity(page):
     page.wait_for_function("[...document.querySelectorAll('#dpurch [col-id=\"item\"]')].some(c => c.innerText.includes('×2'))")
     items = [r["item"] for r in _rows(page)]
     assert "Blanket sample ×2" in items, items
+    page.set_viewport_size({"width": 1440, "height": 900}); page.wait_for_timeout(500)
+    clipped = page.evaluate("""[...document.querySelectorAll('#dpurch .ag-center-cols-container [col-id="item"]')]
+      .filter(c => { const v = c.querySelector('.ag-cell-value') || c; return v.scrollWidth > v.clientWidth + 1; }).map(c => c.innerText)""")
+    assert clipped == [], clipped                       # at 1440 the "×2" is on screen, not behind an ellipsis
     assert not page.errs, page.errs
 
 
