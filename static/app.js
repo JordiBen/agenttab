@@ -445,6 +445,11 @@ async function scorecard() { const r = await fetch('/api/scorecard'); if (!r.ok)
   $('prooffoot').innerHTML = `${j.cases} labeled purchases, written by the team and revised after the first run${h ? `; the separate ${h.cases}-case set was written by an independent reviewer` : ''}. Full results and code: <a href="https://github.com/JordiBen/agenttab/tree/main/eval">eval/</a>.`;
   $('hown').textContent = j.cases;
   if (j.test_count) $('testcount').textContent = j.test_count + ' ';
+  const hp = $('heroproof');
+  if (hp && m.ai) {   // same /api/scorecard numbers the Proof table uses; never hardcode them here
+    hp.textContent = `Measured: ${m.ai.attacks_stopped} attacks stopped · ${m.ai.legit_correct} legit buys allowed`
+      + (ha ? ` · ${ha.attacks_stopped} on a separate test set` : '');
+    hp.hidden = false; }
   if (stale.includes('ai')) { STALE_AI = true; if (!$('feedmode').classList.contains('on')) $('feedfoot').textContent = 'Replayed from our committed test run, previous catalog (dry run: no money moved). Your own demo purchases print here live.'; }
   problem(j); }
 // The problem section's example: one real case, with its real verdicts with no guard and with AgentTab (rules + Claude).

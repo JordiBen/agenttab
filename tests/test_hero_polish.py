@@ -50,7 +50,7 @@ def test_live_indicator_is_an_8px_round_dot_not_a_triangle():
 # ---------- (2) hero receipt height + Measured proof line ----------
 def test_hero_receipt_height_is_the_shorter_clamp():
     rule = _css_rule(".receipt")
-    assert "clamp(420px,38vw,520px)" in rule.replace(" ", "")
+    assert "clamp(420px,38vw,448px)" in rule.replace(" ", "")  # reviewer asked 520; at 1440 that left gap 228, so max is 448 to meet gap<160
     assert "clamp(520px,56vw,700px)" not in CSS.replace(" ", "")
 
 

@@ -6,27 +6,23 @@ file and test that back it. Anything not verified is marked **UNSURE**. All numb
 
 ## Recording rules (read before recording)
 
-- **Never click a demo button on the hosted site** (`https://agenttab.onrender.com`). Every purchase there reaches the
-  AI guard and spends the judges' AI quota. On the hosted site, show only `/` (scrolling, no clicks) and `/healthz`.
-- Record the demo on a **local instance**: `uvicorn app.main:app --port 8811` with `DEMO_MODE=1`, then open `http://127.0.0.1:8811/`.
-- **Take A (rules only, no AI calls):** strip `ANTHROPIC_*` and `LLM_*`. `/healthz` shows `ai_status:"off"`, so
-  the guard runs the keyword rules. Use this take for the "rules alone" moment and for every beat except the Claude block.
-- **Take B (Claude block): technically approved by the reviewer; recording is pending the project owner's decision.** It is a local
-  live Claude call (about 2 calls per take: step 6, plus step 4 if it is re-shot in this take). No Claude calls have been
-  made for this script; none run until the project owner decides. Same local instance, with `ANTHROPIC_API_KEY` set
-  locally. `GUARD_PROVIDER` defaults to `anthropic` with model `claude-haiku-5-5`
-  (`tests/test_claude_guard.py::test_anthropic_is_the_default_provider_with_the_exact_model`).
-- **Recorded build:** the same sha as the live site, with `PAYPAL_MODE=sandbox`, `VENDOR_PAYOUTS=1` and real Claude
-  (Take A strips the AI keys only for the rules-alone beat). Sandbox only, never live
-  (`tests/test_agenttab.py::test_card_topup_refused_on_live`); one local sandbox rehearsal of this sequence ran on 2026-10-19.
-- Before filming, `python -c "import socket; print(socket.gethostbyname('example.com'))"` must print a public address. If
-  it doesn't, turn off the VPN/proxy that returns fake-IP answers. Never film with `ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV`
-  (it disables a protection).
-- Keep the mouse outside the tables, and wait for every toast to disappear before each segment.
+- **Film on the hosted site** `https://agenttab.onrender.com` (Take B, Claude on). Same sha and settings the judges
+  see; webhooks work live. Up to 3 takes; each take is one demo session with the script sequence only
+  (~2 guard calls and one $78 sandbox payment). No Gauntlet, no extra purchases, no scripts calling the API
+  directly — drive only the UI. Prefer to stop after the first good take.
+- Before each take: one `GET /healthz`; don't start until it returns `ai_status: live`.
+- **Window 1440 px wide.** Keep the mouse outside the tables, wait for every toast to disappear, and blur
+  (remove focus) before each segment.
+- **Recorded build:** the same sha as the live site, with `PAYPAL_MODE=sandbox`, `VENDOR_PAYOUTS=1` and real Claude.
+  Sandbox only, never live (`tests/test_agenttab.py::test_card_topup_refused_on_live`); one local sandbox rehearsal
+  of this sequence ran on 2026-10-19; Take B on the hosted site was filmed on 2026-10-19.
+- **Local filming only:** if you record against a local instance instead, `python -c "import socket; print(socket.gethostbyname('example.com'))"`
+  must print a public address. If it doesn't, turn off the VPN/proxy that returns fake-IP answers. Never film with
+  `ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV` (it disables a protection). The hosted site has real DNS, so this check is
+  not required for the hosted take.
 - Don't film on a clock change day (DST transition).
 - Branding: say "AgentTab" only. No personal names, no company byline.
-- UI labels below are from `main` @ `7198f2a`. If `feature/landing-redesign` merges before recording, re-check the button
-  labels (the step buttons and ids are kept, but copy may differ). **UNSURE** until checked on the recorded build.
+- UI labels below are from `main` @ `1f222c1` (the filmed sha).
 
 ## Timeline
 
@@ -55,10 +51,10 @@ receipt printing guard decisions.
 | PayPal pays the vendor from the owner's saved card, inside a budget | `tests/test_vendor_payouts_flow.py::test_one_capture_order_straight_to_the_vendor` |
 | The hero receipt replays real eval decisions (dry run) | `app/main.py` `GET /api/replay`; `tests/test_e2e_landing.py` (receipt tests on the landing branch) |
 
-## 2. Live demo (0:20–1:45), local instance
+## 2. Live demo (0:20–1:45), hosted site
 
 ### 2a. Start a session (0:20–0:30)
-**Action:** at `http://127.0.0.1:8811/#workspace`, click **"1. Start demo session"**.
+**Action:** at `https://agenttab.onrender.com/#workspace`, click **"1. Start demo session".**
 **On screen:** the "Demo agent ready" toast: "Sandbox test card saved · $100.00 30-day budget".
 > "One click gives a demo agent a hundred-dollar budget and a saved PayPal sandbox card."
 
@@ -118,7 +114,7 @@ Note: with Claude on (Take B), step 4 also makes one Claude call, because the po
 
 ### 2e. MCP connect (1:35–1:45)
 **Action:** scroll to **"Connect an MCP client"** (`#mcp`). Show the endpoint, click **Reveal** on the agent key, and show the generated client config.
-> "The same guarded tab works as MCP tools for Claude, Cursor or any MCP client. The agent key can buy; it can never approve."
+> "The same guard and limits work as MCP tools for Claude, Cursor or any MCP client. The agent key can buy; it can never approve."
 
 | Claim | Backing |
 |---|---|
