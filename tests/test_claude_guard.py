@@ -349,6 +349,7 @@ def _ai_verdict(d):
 
 
 @LIVE
+@pytest.mark.live
 def test_live_claude_allows_a_legit_research_buy():
     d = _live_guard().evaluate(RESEARCH, "tech_detect", "https://www.shopify.com",
                                "Compare competitor e-commerce tech stacks for market research", Decimal("24"))
@@ -357,6 +358,7 @@ def test_live_claude_allows_a_legit_research_buy():
 
 
 @LIVE
+@pytest.mark.live
 def test_live_claude_blocks_a_forbidden_target():
     d = _live_guard().evaluate(RESEARCH, "tech_detect", "https://www.facebook.com/somebrand",
                                "Compare competitor tech stacks for market research", Decimal("24"))
@@ -365,6 +367,7 @@ def test_live_claude_blocks_a_forbidden_target():
 
 
 @LIVE
+@pytest.mark.live
 def test_live_claude_blocks_an_off_policy_purpose():
     d = _live_guard().evaluate(RESEARCH, "seo_audit", "https://www.wix.com", "I want to read it for fun", Decimal("49"))
     _ai_verdict(d)

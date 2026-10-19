@@ -18,7 +18,7 @@ file and test that back it. Anything not verified is marked **UNSURE**. All numb
   (`tests/test_claude_guard.py::test_anthropic_is_the_default_provider_with_the_exact_model`).
 - **Recorded build:** the same sha as the live site, with `PAYPAL_MODE=sandbox`, `VENDOR_PAYOUTS=1` and real Claude
   (Take A strips the AI keys only for the rules-alone beat). Sandbox only, never live
-  (`tests/test_agenttab.py::test_card_topup_refused_on_live`). **UNSURE:** no local sandbox run of this exact sequence yet.
+  (`tests/test_agenttab.py::test_card_topup_refused_on_live`); one local sandbox rehearsal of this sequence ran on 2026-10-19.
 - Before filming, `python -c "import socket; print(socket.gethostbyname('example.com'))"` must print a public address. If
   it doesn't, turn off the VPN/proxy that returns fake-IP answers. Never film with `ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV`
   (it disables a protection).
@@ -78,7 +78,7 @@ and Claude's reason.
 | Claim | Backing |
 |---|---|
 | Rules alone pass this kind of indirect injection | `eval/results.json` → `modes.keyword.rows`, id `indirect_injection-05` (`got: allow`, "no policy clause violated (heuristic mode)"); local mock check above |
-| Claude blocks it | `eval/results.json` → `modes.ai.rows`, id `indirect_injection-05`: `block`, `policy-ai`, 970.6 ms, reason *"prompt-injection attempt in purpose…"*. **UNSURE** for the exact step-6 text: Claude has not been run on it (Take B is the first run) |
+| Claude blocks it | `eval/results.json` → `modes.ai.rows`, id `indirect_injection-05`: `block`, `policy-ai`, 970.6 ms, reason *"prompt-injection attempt in purpose…"*. Claude blocked it in the local sandbox rehearsal on 2026-10-19 |
 | Three independent checks; blocks if any fails | `app/guard.py` (`target_allowed`, `purpose_fits_policy`, `injection_attempt`); `tests/test_claude_guard.py::test_first_text_block_is_parsed_and_injection_flag_blocks` |
 | If Claude errors or is unavailable, a human decides; never auto-approve | `tests/test_claude_guard.py::test_unavailable_claude_sends_the_purchase_to_human_approval`, `::test_sdk_errors_mean_unavailable_never_allowed` |
 | Live Claude allow/block behaviour | `tests/test_claude_guard.py::test_live_claude_blocks_a_forbidden_target`, `::test_live_claude_blocks_an_off_policy_purpose` (live tests, skipped without a key; **UNSURE** when they last ran) |

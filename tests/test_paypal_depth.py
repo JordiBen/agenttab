@@ -383,6 +383,7 @@ def test_demo_agent_cannot_use_vault_or_freeze_endpoints(tmp_path):
 
 # ---------- live sandbox ----------
 @pytest.mark.skipif(os.getenv("LIVE_PAYPAL") != "1", reason="set LIVE_PAYPAL=1 to hit the real PayPal sandbox")
+@pytest.mark.live
 def test_live_sandbox_authorize_capture_void_declines_and_vault():
     pp = PayPalClient(Settings(paypal_mode="sandbox"))
     op = os.urandom(5).hex()

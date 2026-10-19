@@ -202,6 +202,7 @@ def test_ai_guard_garbage_fails_closed(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.getenv("LIVE_AI") != "1", reason="set LIVE_AI=1 to call the real Gemini API")
+@pytest.mark.live
 def test_live_gemini_guard():
     from app.config import get_settings
     g = SpendGuard(get_settings())
@@ -236,6 +237,7 @@ def test_card_topup_refused_on_live(tmp_path):
 
 
 @pytest.mark.skipif(os.getenv("LIVE_PAYPAL") != "1", reason="set LIVE_PAYPAL=1 to hit the real PayPal sandbox")
+@pytest.mark.live
 def test_live_paypal_sandbox(tmp_path):
     s = Settings(paypal_mode="sandbox", db_path=str(tmp_path / "pp.db"), admin_token="adm",
                  llm_base_url="", llm_api_key="", public_url="http://testserver")

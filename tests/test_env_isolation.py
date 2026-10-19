@@ -23,9 +23,12 @@ LIVE_TESTS = ["tests/test_agenttab.py::test_live_gemini_guard", "tests/test_agen
               "tests/test_paypal_depth.py::test_live_sandbox_authorize_capture_void_declines_and_vault"]
 
 
+def _secret(k: str) -> bool:
+    return k.startswith(SECRET_PREFIXES) or k in SECRET_NAMES or bool(re.fullmatch(r"VENDOR_\w+_MERCHANT_ID", k))
+
+
 def _leaks() -> list[str]:
-    return sorted(k for k in os.environ if k.startswith(SECRET_PREFIXES) or k in SECRET_NAMES
-                  or re.fullmatch(r"VENDOR_\w+_MERCHANT_ID", k))
+    return sorted(k for k in os.environ if _secret(k))
 
 
 def test_probe_no_keys_in_env_and_the_app_starts_in_mock_mode(tmp_path, monkeypatch):
@@ -67,9 +70,16 @@ def test_live_marker_is_registered_and_on_every_live_test():
 
 @pytest.mark.skipif(os.getenv("AGENTTAB_ISOLATION_CHILD") == "1", reason="inside the child run")
 def test_live_tests_skip_without_the_explicit_flag():
-    env = {k: v for k, v in os.environ.items() if k != "AGENTTAB_LIVE_TESTS"} | {"LIVE_AI": "1", "LIVE_PAYPAL": "1",
-                                                                              "AGENTTAB_ISOLATION_CHILD": "1"}
-    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rs", "-m", "live", "-p", "no:cacheprovider"], cwd=ROOT,
-                       env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
-    assert "6 skipped" in r.stdout and "AGENTTAB_LIVE_TESTS=1" in r.stdout, r.stdout[-2000:]
-    assert " passed" not in r.stdout and " failed" not in r.stdout
+    """Every other switch is on (LIVE_AI, LIVE_PAYPAL, a fake key), so only the missing flag can skip them."""
+    # Belt and braces: no real key goes to the child, and every outside base URL points at a closed local port.
+    dead = "http://127.0.0.1:9"
+    env = {k: v for k, v in os.environ.items() if k != "AGENTTAB_LIVE_TESTS" and not _secret(k)} | {
+        "LIVE_AI": "1", "LIVE_PAYPAL": "1", "AGENTTAB_ISOLATION_CHILD": "1", "ANTHROPIC_API_KEY": FAKE,
+        "ANTHROPIC_BASE_URL": dead, "LLM_BASE_URL": dead, "PAYPAL_BASE": dead}
+    files = sorted({t.split("::")[0] for t in LIVE_TESTS})
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rs", "-m", "live", "-p", "no:cacheprovider", *files],
+                       cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
+    flag_skips = [l for l in r.stdout.splitlines() if l.startswith("SKIPPED") and "set AGENTTAB_LIVE_TESTS=1 to run it" in l]
+    assert len(flag_skips) == len(LIVE_TESTS), r.stdout[-2000:]
+    assert re.search(rf"\b{len(LIVE_TESTS)} skipped\b", r.stdout), r.stdout[-2000:]
+    assert " passed" not in r.stdout and " failed" not in r.stdout and " error" not in r.stdout

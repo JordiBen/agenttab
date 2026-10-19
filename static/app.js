@@ -77,8 +77,8 @@ function vendorPurchCols(o) { return [
    tooltipValueGetter: p => p.data.paid_to ? 'Paid to ' + p.data.paid_to + ' from the saved card' : 'From the saved card'},
   {field: 'status', cellRenderer: p => p.data.funding === 'vendor' ? vstatus(p.data) : pillCell(p), minWidth: 156},
   {field: 'refund_deadline', headerName: 'Refund until', minWidth: 138, valueFormatter: p => p.value ? new Date(p.value * 1000).toLocaleDateString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : (p.data.status === 'completed' ? 'final sale' : '')},
-  {field: 'decision_source', headerName: 'Decided by', minWidth: 118, tooltipField: 'decision_source'}, {field: 'reason', flex: 1.2, minWidth: 76, tooltipField: 'reason'},
-  {headerName: 'Actions', minWidth: 162, sortable: false, filter: false, cellRenderer: p => p.data.funding === 'vendor' ? vactions(p.data, o) : ''}]; }
+  {field: 'decision_source', headerName: 'Decided by', minWidth: 128, tooltipField: 'decision_source'}, {field: 'reason', flex: 1.2, minWidth: 46, tooltipField: 'reason'},
+  {headerName: 'Actions', minWidth: 182, sortable: false, filter: false, cellRenderer: p => p.data.funding === 'vendor' ? vactions(p.data, o) : ''}]; }
 // VENDOR_PAYOUTS=1 with a vendor-funded demo agent: budget wording, and no tab refund (the server answers 410).
 function vendorModeUI() {
   $('dintro').textContent = `Start a session: the agent gets a $100 30-day budget, and each purchase is paid by PayPal straight to the vendor from the owner's saved sandbox card`;
