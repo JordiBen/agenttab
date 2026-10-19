@@ -208,3 +208,17 @@ def test_recording_rules_check_dns_toasts_mouse_and_clock_change():
     assert "Never film with `ALLOW_PRIVATE_TARGETS_FOR_LOCAL_DEV`" in rules
     assert "mouse outside the tables" in rules.lower() and "toast" in rules.lower()
     assert "clock change" in rules.lower() and "DST" in rules
+
+
+# ---------- t77u (C) rehearsal facts ----------
+def test_2b_table_says_claude_blocked_it_in_the_rehearsal():
+    b2 = _sec("### 2b.", "### 2c.")
+    row = next(l for l in b2.splitlines() if l.startswith("| Claude blocks it |"))
+    assert "Claude blocked it in the local sandbox rehearsal on 2026-10-19" in row
+    assert "UNSURE" not in row and "has not been run" not in row
+
+
+def test_recording_rules_name_the_sandbox_rehearsal():
+    rules = re.sub(r"\s+", " ", _sec("## Recording rules", "## Timeline"))
+    assert "one local sandbox rehearsal of this sequence ran on 2026-10-19" in rules
+    assert "no local sandbox run of this exact sequence yet" not in rules

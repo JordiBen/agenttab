@@ -161,3 +161,23 @@ def test_schedule_vendor_rows_show_the_short_name_with_the_full_name_on_hover(pa
                            timeout=10000)
     page.mouse.move(5, 5)
     assert not page.errs, page.errs
+
+
+@pytest.mark.parametrize("width", [1440, 1280])
+def test_held_row_shows_approve_and_reject_in_full(page, width):
+    """The held $64 row: both buttons are inside their cell and the window, and the grid has no horizontal scroll."""
+    page.locator("#dpurch").scroll_into_view_if_needed(); page.mouse.move(5, 5)
+    page.set_viewport_size({"width": width, "height": 900}); page.wait_for_timeout(600)
+    page.wait_for_function("[...document.querySelectorAll('#dpurch .ag-center-cols-container button')].some(b => b.innerText === 'Reject')")
+    r = page.evaluate("""(() => {
+      const btns = [...document.querySelectorAll('#dpurch .ag-center-cols-container button')].filter(b => ['Approve', 'Reject'].includes(b.innerText.trim()));
+      const vp = document.querySelector('#dpurch .ag-center-cols-viewport');
+      return {hscroll: vp.scrollWidth > vp.clientWidth, vw: innerWidth, btns: btns.map(b => { const c = b.closest('.ag-cell').getBoundingClientRect(),
+        x = b.getBoundingClientRect(), g = vp.getBoundingClientRect();
+        return {t: b.innerText.trim(), inCell: x.left >= c.left - 0.5 && x.right <= c.right + 0.5 && x.top >= c.top - 0.5 && x.bottom <= c.bottom + 0.5, inGrid: x.right <= g.right + 0.5,
+                inWin: x.left >= 0 && x.right <= innerWidth, w: x.width, full: b.scrollWidth <= b.clientWidth + 1,
+                // the cell clips with an ellipsis, which hides an overflowing inline button whole: no overflow allowed
+                fits: [...new Set([b.closest('.ag-cell-value'), b.closest('.ag-cell')].filter(Boolean))].every(e => e.scrollWidth <= e.clientWidth + 1)}; })}; })()""")
+    assert sorted(b["t"] for b in r["btns"]) == ["Approve", "Reject"], r
+    assert all(b["inCell"] and b["inGrid"] and b["inWin"] and b["full"] and b["fits"] and b["w"] > 30 for b in r["btns"]), r
+    assert not r["hscroll"], r
