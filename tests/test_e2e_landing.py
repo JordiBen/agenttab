@@ -703,7 +703,8 @@ def test_hero_proof_line_uses_the_honest_line_pace(server, browser):
         pace = pg.evaluate("""(() => { const q = getComputedStyle(document.getElementById('heroproof')),
             h = document.querySelector('.hero .honest'), ch = getComputedStyle(h);
           return {qd: q.animationDuration, qdel: q.animationDelay, qe: q.animationTimingFunction,
-                  hd: ch.transitionDuration.split(',')[0], hdel: h.style.transitionDelay, he: ch.transitionTimingFunction.split(',')[0]}; })()""")
+                  hd: ch.transitionDuration.split(',')[0], hdel: h.style.transitionDelay,
+                  he: ch.transitionTimingFunction.split(/,(?![^(]*\\))/)[0].trim()}; })()""")
         assert pace["qd"] == pace["hd"] and pace["qe"] == pace["he"], pace
         assert _css_ms(pace["qdel"]) == _css_ms(pace["hdel"]) > 0, pace
     finally:
