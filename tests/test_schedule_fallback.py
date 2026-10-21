@@ -86,7 +86,7 @@ def browser():
         b.close()
 
 
-def _open(browser, server, *, block_cdn=False, verify_png=None, trial_start_days_ago=None, clock=False, width=1440):
+def _open(browser, server, *, block_cdn=False, verify_png=None, trial_start_days_ago=None, clock=False, width=1440, init=None):
     """A fresh context. bryntum.com is always intercepted (never reached): aborted, or answered with verify_png."""
     ctx = browser.new_context(viewport={"width": width, "height": 900})
     seen = {"bryntum": [], "cdn_blocked": 0}
@@ -106,6 +106,8 @@ def _open(browser, server, *, block_cdn=False, verify_png=None, trial_start_days
     pg.on("pageerror", lambda e: pg.errs.append(str(e)))
     if clock:
         pg.clock.install()
+    if init:
+        pg.add_init_script(init)
     if trial_start_days_ago is not None:     # test-only: a browser that first saw the trial this many days ago
         pg.add_init_script(f"localStorage.setItem('b-scheduler-trial-start', String(Date.now() - {trial_start_days_ago} * {DAY_MS}))")
     pg.goto(server + "/"); pg.wait_for_selector("#demo", state="visible")
@@ -119,8 +121,9 @@ MASK_VISIBLE = """[...document.querySelectorAll('.b-mask')].some(m => /trial exp
   && m.getClientRects().length && getComputedStyle(m).visibility !== 'hidden')"""
 
 
-def _assert_fallback(pg):
+def _assert_fallback(pg, why):
     pg.wait_for_function(f"{FALLBACK_ROWS} >= 1", timeout=20000)
+    assert pg.get_attribute("#dsched", "data-fallback") == why
     assert pg.inner_text("#dsched .schedfb-note") == NOTE
     assert pg.evaluate("document.querySelector('#dsched .b-scheduler')") is None     # Bryntum container removed
     assert not pg.evaluate(MASK_VISIBLE)
@@ -139,7 +142,7 @@ def test_cdn_blocked_shows_the_fallback_list(browser, server):
     try:
         assert seen["cdn_blocked"] >= 1
         assert pg.evaluate("!(window.bryntum && window.bryntum.scheduler)")
-        _assert_fallback(pg)
+        _assert_fallback(pg, "not-loaded")
         rows = pg.evaluate("[...document.querySelectorAll('#dsched .schedfb .ag-row [col-id=\"event\"]')].map(c => c.innerText)")
         assert any("Top-up $100.00" in r for r in rows), rows
         for w in (1440, 1280):
@@ -155,7 +158,7 @@ def test_expired_trial_mask_switches_to_the_fallback(browser, server):
     ctx, pg, seen = _open(browser, server, clock=True, trial_start_days_ago=46)
     try:
         pg.clock.run_for(65000)
-        _assert_fallback(pg)
+        _assert_fallback(pg, "trial-expired")
         pg.clock.run_for(5000)
         assert not pg.evaluate(MASK_VISIBLE)
         assert not pg.errs, pg.errs
@@ -170,7 +173,7 @@ def test_verify_block_reply_switches_to_the_fallback(browser, server):
         pg.wait_for_selector("#dsched .b-scheduler", timeout=20000)    # starts as a normal timeline
         pg.clock.run_for(65000)                                        # Bryntum's own daily check runs after 60 s
         assert any("/verify" in u for u in seen["bryntum"]), seen      # answered by the stub, never the real site
-        _assert_fallback(pg)
+        _assert_fallback(pg, "trial-expired")
         assert not pg.errs, pg.errs
     finally:
         ctx.close()
@@ -193,7 +196,8 @@ def test_normal_load_keeps_the_bryntum_timeline(browser, server):
 
 
 SEAT = "demoBuy('shopsuite', 'inventory-seat', '', 'Inventory software to track stock across our two warehouses', 2)"
-SPY = "window.__pact = []; const _p = window.pAct; window.pAct = (...a) => { window.__pact.push(a); return _p(...a); };"
+# a function, so Playwright runs it once (a bare string ending in an arrow function would be called by evaluate itself)
+SPY = "() => { window.__pact = []; const _p = window.pAct; window.pAct = (...a) => { window.__pact.push(a); return _p(...a); }; }"
 
 
 def _held_row_button(pg, label):
@@ -206,7 +210,7 @@ def _held_row_button(pg, label):
 def test_fallback_approve_and_reject_go_through_pact_in_mock_mode(browser, server):
     ctx, pg, seen = _open(browser, server, block_cdn=True)
     try:
-        _assert_fallback(pg)
+        _assert_fallback(pg, "not-loaded")
         pg.evaluate(SPY)
         pg.evaluate(SEAT)
         pg.wait_for_function("document.querySelector('#dverdict .stamp.hold') !== null")
@@ -226,6 +230,21 @@ def test_fallback_approve_and_reject_go_through_pact_in_mock_mode(browser, serve
         st = pg.evaluate(f"fetch('/api/me/purchases', {{headers: {{'X-Agent-Key': sessionStorage.dkey}}}}).then(r => r.json())")
         rows = st if isinstance(st, list) else st.get("purchases", st)
         assert {r["id"]: r["status"] for r in rows}.get(pid2) == "completed", rows
+        assert not pg.errs, pg.errs
+    finally:
+        ctx.close()
+
+
+THROWING_BRYNTUM = """window.bryntum = {scheduler: {Scheduler: class { constructor() { throw new Error('constructor failed'); } },
+  EventModel: class {}, ResourceModel: class {}, DateHelper: {add: d => d, format: () => ''}, StringHelper: {}}};"""
+
+
+@pytestmark_e2e
+def test_scheduler_that_throws_while_constructing_shows_the_fallback(browser, server):
+    """A Bryntum that loads but throws in its constructor: caught, the list is shown, no uncaught page error."""
+    ctx, pg, seen = _open(browser, server, block_cdn=True, init=THROWING_BRYNTUM)
+    try:
+        _assert_fallback(pg, "error")
         assert not pg.errs, pg.errs
     finally:
         ctx.close()
