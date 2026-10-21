@@ -1,16 +1,23 @@
 # AgentTab: Devpost draft
 
+**Tagline:** Let your AI agent shop. Keep your rules. A PayPal budget for AI purchasing agents, checked by rules and Claude, with big buys waiting for your OK.
+
 <!-- Draft for the Devpost submission (not posted). Every sentence carries a source note: a code file (path:function),
 a test (path::test_name) or a result file (path#key). Numbers come only from eval/results.json and
-eval/heldout-results.json; tests/test_devpost_draft.py checks all of this. -->
+eval/heldout-results.json, except the three Why now facts in Inspiration, which quote static/dashboard.html word for word
+with their links; tests/test_devpost_draft.py checks all of this. -->
 
 ## Inspiration
 
 A small shop's AI agent can order supplier samples, buy software seats and pay for competitor research, but handing it the company card is reckless, and approving every small purchase by hand defeats the point. <!-- source: app/procurement.py | tests/test_realistic_shop.py::test_two_seats_need_approval_one_seat_does_not -->
 
-<!-- DEMAND-DATA: pending from reviewer -->
-
 We wanted the owner to set the budget and the rules once, and then let the agent shop inside them. <!-- source: app/procurement.py:decide | tests/test_realistic_shop.py::test_two_seats_need_approval_one_seat_does_not -->
+
+- 61% say spending limits would make them comfortable letting an AI agent buy. ([Nuvei consumer survey, 2026](https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay))
+- 84% say being able to reverse an AI purchase is very important. ([Nuvei, 2026](https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay))
+- PayPal launched Agent Ready so merchants can accept payments from AI agents. AgentTab is the other side: the payer's rules. ([PayPal Developer docs, 2026](https://developer.paypal.com/agent-ready/overview))
+
+<!-- DEMAND-DATA: pending from reviewer -->
 
 ## What it does
 
@@ -20,7 +27,7 @@ Claude answers three separate questions (is the target allowed, does the purpose
 If Claude errors or is unavailable, the purchase waits for a human and is never approved automatically. <!-- source: tests/test_claude_guard.py::test_unavailable_claude_sends_the_purchase_to_human_approval | tests/test_claude_guard.py::test_sdk_errors_mean_unavailable_never_allowed -->
 A purchase above $60 waits for the owner's approval inside AgentTab, with no PayPal call until the owner approves. <!-- source: app/procurement.py:SHOP_APPROVAL_THRESHOLD | tests/test_vendor_payouts_flow.py::test_above_threshold_reserves_no_paypal -->
 
-AgentTab never touches the money; the vendor is paid by PayPal only after delivery. <!-- source: tests/test_vendor_payouts_ui.py::test_demo_session_is_vendor_funded_with_the_flag_on | tests/test_vendor_payouts_flow.py::test_paypal_only_after_fulfil_and_amount_is_the_reservation -->
+A vendor-funded agent's money never passes through AgentTab: PayPal pays the vendor directly from the owner's saved card, only after delivery. <!-- source: tests/test_vendor_payouts_ui.py::test_demo_session_is_vendor_funded_with_the_flag_on | tests/test_vendor_payouts_flow.py::test_paypal_only_after_fulfil_and_amount_is_the_reservation -->
 Each purchase is one PayPal Orders v2 order with intent CAPTURE, the vendor's sandbox merchant account as the payee and the owner's saved card as the payment source. <!-- source: app/paypal.py:vendor_order_body | tests/test_vendor_payouts_flow.py::test_one_capture_order_straight_to_the_vendor -->
 If the delivery step fails, PayPal is never called. <!-- source: tests/test_vendor_payouts_flow.py::test_fulfil_fails_no_paypal_call -->
 Agents created in the owner console use a prepaid tab with authorize-then-capture holds. <!-- source: tests/test_paypal_depth.py::test_approval_link_authorizes_then_captures_after_delivery -->
