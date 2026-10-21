@@ -5,9 +5,13 @@ files prove:
 - every number comes from eval/results.json or eval/heldout-results.json, apart from one config value that is checked
   against the code, and every "X of Y" pair is a real pair from those files;
 - one explicit DEMAND-DATA placeholder in Inspiration is allowed;
-- the prose says "Claude" (no model ids), never the builder's real name, and uses the WebIntel Tools brand."""
+- the prose says "Claude" (no model ids), never the builder's real name, and uses the WebIntel Tools brand.
+t85u: Inspiration quotes the three facts of the landing page's "Why now" section (#whynow in static/dashboard.html)
+word for word, each with its link; those facts are sourced by their URL, so their numbers are allowed because the text
+is identical to the dashboard. The file opens with a Tagline (<= 200 chars)."""
 from __future__ import annotations
 
+import html
 import json
 import re
 from pathlib import Path
@@ -24,8 +28,34 @@ PLACEHOLDER = "<!-- DEMAND-DATA: pending from reviewer -->"
 SOURCE = re.compile(r"<!--\s*source:(.*?)-->", re.S)
 # numbers that are not results: each one is checked against the code that defines it
 CONFIG = {"60": ("app/procurement.py", r'SHOP_APPROVAL_THRESHOLD = Decimal\("60\.00"\)')}
-VENDOR_STORY = "AgentTab never touches the money; the vendor is paid by PayPal only after delivery."
+VENDOR_STORY = ("A vendor-funded agent's money never passes through AgentTab: PayPal pays the vendor directly from the "
+                "owner's saved card, only after delivery.")
+TAGLINE = ("Let your AI agent shop. Keep your rules. A PayPal budget for AI purchasing agents, checked by rules and Claude, "
+           "with big buys waiting for your OK.")
+DASHBOARD = (ROOT / "static" / "dashboard.html").read_text(encoding="utf-8")
 TAB_SENTENCE = "Agents created in the owner console use a prepaid tab with authorize-then-capture holds."
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"\s+", " ", t.replace("\u2019", "'")).strip()
+
+
+def _dashboard_facts() -> list[tuple[str, str, str]]:
+    sec = re.search(r'<section id="whynow".*?</section>', DASHBOARD, re.S).group(0)
+    facts = re.findall(r'<li><p>(.*?)</p><a href="([^"]+)">(.*?)</a></li>', sec, re.S)
+    assert len(facts) == 3
+    return [(_norm(html.unescape(p)), href, _norm(html.unescape(label))) for p, href, label in facts]
+
+
+def _fact_line(fact) -> str:
+    text, href, label = fact
+    return f"- {text} ([{label}]({href}))"
+
+
+def _without_facts(doc: str) -> str:
+    for f in _dashboard_facts():
+        doc = doc.replace(_fact_line(f), " ")
+    return doc
 
 
 def _doc() -> str:
@@ -106,8 +136,8 @@ def test_inspiration_keeps_the_demand_data_placeholder():
 
 
 def test_every_sentence_has_a_source_comment():
-    for name, block in _blocks(_doc()):
-        if block.lstrip().startswith("#") or block.strip() == PLACEHOLDER:
+    for name, block in _blocks(_without_facts(_doc())):
+        if block.lstrip().startswith("#") or block.strip() in (PLACEHOLDER, ""):
             continue
         rest = block.replace(PLACEHOLDER, " ")
         segs = SOURCE.split(rest)[0::2]                  # text between source comments
@@ -149,7 +179,7 @@ def test_every_source_reference_exists():
 
 
 def test_every_number_comes_from_the_result_files():
-    prose = _prose(_doc())
+    prose = _prose(_without_facts(_doc()).split("## Inspiration", 1)[1])     # facts: checked against the dashboard below
     allowed = _allowed_numbers()
     nums = re.findall(r"(?<![A-Za-z_\d.])\d+(?:\.\d+)?(?![A-Za-z_\d])", prose)
     assert nums, "the draft should report measured numbers"
@@ -159,6 +189,25 @@ def test_every_number_comes_from_the_result_files():
             assert re.search(pat, (ROOT / path).read_text(encoding="utf-8")), n
         else:
             assert n in allowed, f"{n} is not in eval/results.json or eval/heldout-results.json"
+
+
+def test_inspiration_quotes_the_dashboard_why_now_facts_word_for_word():
+    insp = _sections(_doc())["Inspiration"]
+    lines = [_norm(l) for l in insp.splitlines() if l.strip().startswith("- ")]
+    facts = _dashboard_facts()
+    assert lines == [_fact_line(f) for f in facts]
+    assert [f[1] for f in facts] == ["https://www.nuvei.com/posts/consumers-are-ready-for-ai-to-shop-they-are-not-ready-for-it-to-pay"] * 2 \
+        + ["https://developer.paypal.com/agent-ready/overview"]
+    assert facts[0][0].startswith("61% ") and facts[1][0].startswith("84% ") and "Agent Ready" in facts[2][0]
+    paras = [p for p in re.split(r"\n\s*\n", insp) if p.strip()]
+    first_fact = next(i for i, p in enumerate(paras) if p.lstrip().startswith("- "))
+    assert len([p for p in paras[:first_fact] if SOURCE.search(p)]) == 2        # after the two existing sentences
+
+
+def test_tagline_is_exact_and_fits():
+    m = re.search(r"^\*\*Tagline:\*\* (.+)$", _doc(), re.M)
+    assert m and m.group(1) == TAGLINE and len(TAGLINE) <= 200
+    assert _doc().index("**Tagline:**") < _doc().index("## Inspiration")
 
 
 def test_every_x_of_y_pair_is_a_real_pair():
@@ -181,6 +230,7 @@ def test_headline_numbers_match_the_files():
 def test_required_wording():
     prose = re.sub(r"\s+", " ", _prose(_doc()))
     assert VENDOR_STORY in prose and TAB_SENTENCE in prose
+    assert "never touches the money" not in prose
     assert "PayPal sandbox" in prose and "Claude" in prose and "WebIntel Tools" in prose
 
 
