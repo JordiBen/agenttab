@@ -478,7 +478,8 @@ async function runGauntlet() { const b = $('gbtn'); b.disabled = true; b.textCon
       if (i < 4) feedLive(c); }, i * 120));
   } finally { b.disabled = false; b.textContent = 'Run it again'; } }
 
-// ---- schedules (Bryntum) ----
+// ---- schedules (Bryntum timeline, or the same data as an AG Grid list when the timeline can't be shown) ----
+// Approve / Reject / Refund from either view go through pAct, like the Purchases table; schedAct is for the rest.
 let DS = null, OS = null;
 async function schedAct(path, owner) { let r; try { r = await (owner ? fetch : dfetch)(path, {method: 'POST', headers: owner ? H() : {'X-Agent-Key': DK()}}); } catch (e) { return; }
   const j = await r.json(); const out = r.ok ? JSON.stringify(j, null, 1) : 'Error: ' + JSON.stringify(j.detail || j);
@@ -487,8 +488,8 @@ async function schedAct(path, owner) { let r; try { r = await (owner ? fetch : d
   owner ? (load(), OS && OS.refresh()) : (dload(), DS && DS.refresh()); }
 function initSchedules() {
   if (!window.makeSchedule) return;
-  DS = makeSchedule($('dsched'), {url: () => '/api/me/schedule', headers: () => ({'X-Agent-Key': DK() || ''}), act: p => schedAct(p, false), listEl: $('dsugg'), onUnauthorized: demoExpired});
-  OS = makeSchedule($('osched'), {url: () => { const a = agentsGrid.getSelectedRows()[0] || agentsGrid.getDisplayedRowAtIndex(0)?.data; return '/api/schedule?agent_id=' + (a ? a.agent_id : ''); }, headers: H, act: p => schedAct(p, true), listEl: $('osugg')});
+  DS = makeSchedule($('dsched'), {url: () => '/api/me/schedule', headers: () => ({'X-Agent-Key': DK() || ''}), act: p => schedAct(p, false), pAct: (pid, act) => pAct(pid, act, false), grid: {theme: gridTheme, defaultColDef: DEF}, listEl: $('dsugg'), onUnauthorized: demoExpired});
+  OS = makeSchedule($('osched'), {url: () => { const a = agentsGrid.getSelectedRows()[0] || agentsGrid.getDisplayedRowAtIndex(0)?.data; return '/api/schedule?agent_id=' + (a ? a.agent_id : ''); }, headers: H, act: p => schedAct(p, true), pAct: (pid, act) => pAct(pid, act, true), grid: {theme: gridTheme, defaultColDef: DEF}, listEl: $('osugg')});
   setInterval(() => { if (DK() && DS) DS.refresh(); if (T() && OS) OS.refresh(); }, 8000);
   if (DK() && DS) DS.refresh(); if (T() && OS) OS.refresh();
 }

@@ -413,3 +413,8 @@ footer a{color:var(--field-1-ink)}
 .cmp-flag{display:inline-block;font-weight:700;color:var(--paper);background:var(--ink);border-radius:4px;padding:1px 7px;margin-right:4px}
 @media (max-width:640px){.cmp-form,.cmp-pair{grid-template-columns:1fr}.cmp-lines div{grid-template-columns:5em 1fr;gap:10px}.cmp-r{padding-left:18px;padding-right:18px}}
 @media (prefers-reduced-motion:reduce){.cmp .stamp.land{animation:none}.cmp-btn{transition:none}}
+/* ---- schedule fallback: the same schedule as an AG Grid list when the Bryntum timeline can't be shown ---- */
+.schedfb-note{margin:0 0 10px;color:var(--muted);font-size:var(--step-small)}
+.schedfb{height:320px}
+.schedfb-acts{display:flex;gap:6px;align-items:center;height:100%}
+.schedfb-acts .act{margin-right:0}

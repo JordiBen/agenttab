@@ -4,7 +4,9 @@
 // refunds before windows close; a human confirms each proposal from the event menu or the list below.
 (function () {
   const S = window.bryntum && window.bryntum.scheduler;
-  const enc = t => S ? S.StringHelper.encodeHtml(String(t ?? '')) : String(t ?? '');
+  // Always escaped, with or without Bryntum (the suggestions list below is HTML and reasons can come from an agent).
+  const ESC = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+  const enc = t => String(t ?? '').replace(/[&<>"']/g, c => ESC[c]);
   const ICON = {delivered: 'fa-check', budget: 'fa-wallet', refund_window: 'fa-rotate-left', approval: 'fa-user-check', renewal: 'fa-repeat',
     topup: 'fa-circle-plus', paypal_refund: 'fa-paypal', webhook: 'fa-bolt', denied: 'fa-ban',
     declined: 'fa-circle-xmark', voided: 'fa-circle-minus'};
@@ -23,9 +25,106 @@
     return name.slice(0, Math.max(1, max - 1)) + '…';
   }
 
+  // When the timeline can't be shown (Bryntum didn't load, threw while building, or covers itself with its
+  // "Trial expired" mask) the same /api/schedule data is shown as an AG Grid list with the same actions.
+  // Bryntum's own trial and verify logic is left alone: we only look at what it puts on screen.
+  const NOTE = 'Timeline view unavailable — showing the same schedule as a list.';
+  const WATCH_MS = 90000;     // Bryntum's own check runs about 60 s after load; watch a little longer, then stop
+  const when = v => v ? new Date(v).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}) : '';
+
   window.makeSchedule = function (el, opts) {
-    // opts: {url, headers(), act(path) -> Promise, listEl}
-    if (!S) { el.textContent = 'Bryntum Scheduler failed to load.'; return null; }
+    // opts: {url, headers(), act(path) -> Promise, pAct(pid, act) -> Promise, grid: AG Grid options, listEl, onUnauthorized}
+    let sch = null, list = null, last = null, mo = null, stopT = null;
+
+    // One list of actions per event, used by the timeline's event menu and by the fallback list alike.
+    // Approve / Reject / Refund always go through opts.pAct (app.js pAct), the same call as the Purchases table.
+    function actionsFor(e) {
+      const pid = e.purchaseId, vendor = e.funding === 'vendor', out = [];
+      if (e.suggestion) {
+        out.push({key: 'confirm', text: 'Confirm suggested refund', short: 'Confirm refund', icon: 'fa-check', run: () => opts.act(`/api/suggestions/${e.suggestion.id}/confirm`)});
+        out.push({key: 'dismiss', text: 'Dismiss suggestion', short: 'Dismiss', icon: 'fa-xmark', alt: true, run: () => opts.act(`/api/suggestions/${e.suggestion.id}/dismiss`)});
+      }
+      if (e.type === 'approval' && e.status === 'pending_approval') {
+        out.push({key: 'approve', text: vendor ? 'Approve' : 'Approve (pay with sandbox card)', short: 'Approve', icon: 'fa-credit-card', alt: true,
+          run: () => opts.pAct(pid, vendor ? 'approve' : 'approve-sandbox-card')});
+        out.push({key: 'reject', text: 'Reject', short: 'Reject', icon: 'fa-ban', run: () => opts.pAct(pid, 'reject')});
+      }
+      if (e.type === 'refund_window' && e.status === 'completed') {
+        if (!e.suggestion) out.push({key: 'refund', text: vendor ? 'Request refund' : 'Refund now', short: vendor ? 'Request refund' : 'Refund',
+          icon: 'fa-rotate-left', run: () => opts.pAct(pid, 'refund')});
+        if (!e.used) out.push({key: 'used', text: 'Mark as used (no refund suggestion)', short: 'Mark used', icon: 'fa-box-open',
+          run: () => opts.act(`/api/purchases/${pid}/used`)});
+      }
+      return out;
+    }
+
+    function rowsOf(j) {
+      const res = {};
+      for (const r of j.resources) res[r.id] = r.kind === 'vendor' ? (r.short || r.name) : r.name;
+      return j.events.map(e => ({id: String(e.id), row: res[e.resourceId] || '', event: String(e.name || ''),
+        start: e.startDate ? +new Date(e.startDate) : null,
+        end: e.endDate && e.endDate !== e.startDate ? +new Date(e.endDate) : null,
+        status: e.suggestion ? 'refund suggested' : String(e.status || '').replace(/_/g, ' '), e}));
+    }
+
+    function actionsCell(p) {
+      const box = document.createElement('div'); box.className = 'schedfb-acts';
+      for (const a of actionsFor(p.data.e)) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'act' + (a.alt ? ' alt' : '');
+        b.textContent = a.short; b.onclick = a.run; box.append(b);
+      }
+      return box;
+    }
+
+    function fallback(why) {
+      if (list) return;
+      stopWatch();
+      if (sch) { try { sch.destroy(); } catch (err) { /* already broken: the container is cleared below */ } sch = null; }
+      el.replaceChildren();
+      el.dataset.view = 'list'; el.dataset.fallback = why;
+      const note = document.createElement('p'); note.className = 'schedfb-note'; note.textContent = NOTE;
+      el.append(note);
+      if (!window.agGrid) return;
+      const box = document.createElement('div'); box.className = 'schedfb';
+      el.append(box);
+      list = agGrid.createGrid(box, {...(opts.grid || {}), rowData: [], getRowId: p => p.data.id,
+        tooltipShowDelay: 300,
+        columnDefs: [
+          {field: 'row', headerName: 'Row', flex: 1, minWidth: 110},
+          {field: 'event', headerName: 'Event', flex: 2.2, minWidth: 180, tooltipField: 'event'},
+          {field: 'start', headerName: 'Start', minWidth: 112, maxWidth: 130, sort: 'desc', valueFormatter: p => when(p.value)},
+          {field: 'end', headerName: 'End', minWidth: 112, maxWidth: 130, valueFormatter: p => when(p.value)},
+          {field: 'status', headerName: 'Status', minWidth: 120, maxWidth: 150},
+          {colId: 'actions', headerName: 'Actions', minWidth: 196, flex: 1.2, sortable: false, filter: false, cellRenderer: actionsCell}]});
+      if (last) list.setGridOption('rowData', rowsOf(last));   // otherwise the caller's next refresh() fills it
+    }
+
+    function expiredMask() {
+      return [...el.querySelectorAll('.b-mask')].some(m => /trial expired/i.test(m.textContent || ''));
+    }
+    function stopWatch() {
+      if (mo) { mo.disconnect(); mo = null; }
+      if (stopT) { clearTimeout(stopT); stopT = null; }
+    }
+    function watch() {
+      if (expiredMask()) return fallback('trial-expired');
+      mo = new MutationObserver(() => { if (expiredMask()) fallback('trial-expired'); });
+      mo.observe(el, {childList: true, subtree: true, characterData: true});
+      stopT = setTimeout(stopWatch, WATCH_MS);
+    }
+
+    if (!S) { fallback('not-loaded'); return controller(); }
+    try { sch = buildTimeline(); }
+    catch (err) { console.warn('Schedule timeline could not be built; showing the list instead.', err); fallback('error'); return controller(); }
+    el.dataset.view = 'timeline';
+    watch();
+    return controller();
+
+    function controller() {
+      return {refresh, clear, get scheduler() { return sch; }, get view() { return list ? 'list' : 'timeline'; }};
+    }
+
+    function buildTimeline() {
     const {Scheduler, EventModel, ResourceModel, DateHelper} = S;
     class AtEvent extends EventModel {
       static fields = ['type', 'purchaseId', 'amount', 'status', 'reason', 'funding', 'suggestion', 'confirmed',
@@ -63,21 +162,7 @@
         eventMenu: {
           processItems({eventRecord: e, items}) {
             Object.keys(items).forEach(k => items[k] = false);
-            const add = (key, text, icon, path) => items[key] = {text, icon: 'fa ' + icon, weight: 100,
-              onItem: () => opts.act(path)};
-            const pid = e.purchaseId;
-            if (e.suggestion) {
-              add('confirm', 'Confirm suggested refund', 'fa-check', `/api/suggestions/${e.suggestion.id}/confirm`);
-              add('dismiss', 'Dismiss suggestion', 'fa-xmark', `/api/suggestions/${e.suggestion.id}/dismiss`);
-            }
-            if (e.type === 'approval' && e.status === 'pending_approval') {
-              add('approve', 'Approve (pay with sandbox card)', 'fa-credit-card', `/api/purchases/${pid}/approve-sandbox-card`);
-              add('reject', 'Reject', 'fa-ban', `/api/purchases/${pid}/reject`);
-            }
-            if (e.type === 'refund_window' && e.status === 'completed') {
-              if (!e.suggestion) add('refund', 'Refund now', 'fa-rotate-left', `/api/purchases/${pid}/refund`);
-              if (!e.used) add('used', 'Mark as used (no refund suggestion)', 'fa-box-open', `/api/purchases/${pid}/used`);
-            }
+            for (const a of actionsFor(e)) items[a.key] = {text: a.text, icon: 'fa ' + a.icon, weight: 100, onItem: a.run};
             return Object.values(items).some(Boolean);
           }
         }
@@ -92,11 +177,25 @@
         return enc(shortLabel(e, room)) + (e.confirmed ? ' · confirmed' : '');
       }
     });
+    return sch;
+    }
+
     async function refresh() {
       const r = await fetch(opts.url(), {headers: opts.headers()});
       if (r.status === 401 && opts.onUnauthorized) { opts.onUnauthorized(); return; }
       if (!r.ok) return;
       const j = await r.json();
+      last = j;
+      if (list) list.setGridOption('rowData', rowsOf(j));
+      else if (sch) {
+        try { drawTimeline(j); }
+        catch (err) { console.warn('Schedule timeline failed to draw; showing the list instead.', err); fallback('error'); }
+      }
+      suggestions(j);
+      return j;
+    }
+    function drawTimeline(j) {
+      const {DateHelper} = S;
       // Each vendor's 30-day budget figure goes into its row header ("$18.00 of $200.00 · 9%").
       const bud = {};
       for (const e of j.events) if (e.type === 'budget') bud[e.resourceId] = {percent: e.percent || 0,
@@ -106,6 +205,8 @@
       // Open the timeline 3 days before "now", so today's events and their labels are in view (once per page load).
       if (!sch._atScrolled && j.events.length) { sch._atScrolled = true;
         Promise.resolve(sch.scrollToDate(DateHelper.add(new Date(), innerWidth < 800 ? -1 : -3, 'day'), {block: 'start', animate: false})).catch(() => {}); }
+    }
+    function suggestions(j) {
       if (opts.listEl) {
         opts.listEl.innerHTML = j.suggestions.length
           ? '<b>Refund suggestions from the scheduling agent</b> (nothing is refunded until you confirm):' + j.suggestions.map(s =>
@@ -115,13 +216,12 @@
           : '<small>No refund suggestions right now. The scheduling agent proposes refunds for duplicates, unused items within 48 h of their deadline, and captures PayPal reports as reversed.</small>';
         opts.listEl.querySelectorAll('button[data-p]').forEach(b => b.onclick = () => opts.act(b.dataset.p));
       }
-      return j;
     }
     function clear() {
-      sch.eventStore.data = [];
-      sch.resourceStore.data = [];
+      last = null;
+      if (list) list.setGridOption('rowData', []);
+      else if (sch) { sch.eventStore.data = []; sch.resourceStore.data = []; }
       if (opts.listEl) opts.listEl.innerHTML = '';
     }
-    return {scheduler: sch, refresh, clear};
   };
 })();
