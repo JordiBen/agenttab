@@ -1,0 +1,196 @@
+1
+00:00:00,300 --> 00:00:04,827
+Shops want AI agents that buy things:
+samples, data, software seats.
+
+2
+00:00:04,947 --> 00:00:10,206
+But giving an agent your card means one
+poisoned web page can spend your money.
+
+3
+00:00:10,326 --> 00:00:15,386
+AgentTab gives the agent a budget instead
+of a card: PayPal pays the vendor,
+
+4
+00:00:15,506 --> 00:00:19,700
+there are hard limits, and every purchase
+goes through a guard.
+
+5
+00:00:20,300 --> 00:00:26,045
+One click gives a demo agent a
+hundred-dollar budget
+
+6
+00:00:26,165 --> 00:00:29,700
+and a saved PayPal sandbox card.
+
+7
+00:00:30,300 --> 00:00:34,571
+Here's an instruction an agent copied from
+a web page.
+
+8
+00:00:34,691 --> 00:00:36,826
+Rules alone let it through.
+
+9
+00:00:36,946 --> 00:00:42,166
+With Claude as the judge, the guard asks
+three separate questions:
+
+10
+00:00:42,286 --> 00:00:46,636
+is the target allowed, does the purpose
+fit the policy,
+
+11
+00:00:46,756 --> 00:00:49,049
+is this an injection attempt.
+
+12
+00:00:49,169 --> 00:00:51,700
+Blocked, before any money moves.
+
+13
+00:00:52,300 --> 00:00:56,858
+Two software seats, seventy-eight dollars.
+
+14
+00:00:56,978 --> 00:00:59,258
+It passes the policy,
+
+15
+00:00:59,378 --> 00:01:06,378
+but anything over sixty dollars waits for
+the owner, here in AgentTab.
+
+16
+00:01:06,498 --> 00:01:09,103
+PayPal isn't called yet.
+
+17
+00:01:10,300 --> 00:01:11,723
+The owner approves.
+
+18
+00:01:11,843 --> 00:01:13,641
+AgentTab delivers first,
+
+19
+00:01:13,761 --> 00:01:19,378
+then makes one PayPal order with intent
+CAPTURE and ShopSuite as the payee,
+
+20
+00:01:19,498 --> 00:01:22,719
+so the money lands in the vendor's
+account.
+
+21
+00:01:22,839 --> 00:01:25,910
+If delivery fails, nobody touches PayPal.
+
+22
+00:01:26,030 --> 00:01:29,700
+If PayPal's answer is unclear, the agent
+freezes.
+
+23
+00:01:30,300 --> 00:01:34,363
+The same guard and limits work as MCP
+tools for Claude,
+
+24
+00:01:34,483 --> 00:01:36,330
+Cursor or any MCP client.
+
+25
+00:01:36,450 --> 00:01:39,700
+The agent key can buy; it can never
+approve.
+
+26
+00:01:40,300 --> 00:01:41,595
+We measured it.
+
+27
+00:01:41,715 --> 00:01:46,807
+Sixty-seven labeled purchases, forty-seven
+of them attacks,
+
+28
+00:01:46,927 --> 00:01:51,501
+run through the same decide function the
+server uses.
+
+29
+00:01:51,621 --> 00:01:54,210
+Rules alone stop thirty-seven.
+
+30
+00:01:54,330 --> 00:01:58,041
+Add Claude and all forty-seven are
+stopped,
+
+31
+00:01:58,161 --> 00:02:02,304
+and all twenty legitimate buys still go
+through.
+
+32
+00:02:02,424 --> 00:02:05,790
+The biggest jump is indirect injection:
+
+33
+00:02:05,910 --> 00:02:10,570
+two out of six with rules, six out of six
+with Claude.
+
+34
+00:02:10,690 --> 00:02:13,884
+On forty cases the builder never saw,
+
+35
+00:02:14,004 --> 00:02:19,700
+Claude stopped all twenty-six attacks and
+wrongly blocked nothing.
+
+36
+00:02:20,300 --> 00:02:22,130
+PayPal does the money work.
+
+37
+00:02:22,250 --> 00:02:25,909
+Each purchase is one PayPal order with
+intent CAPTURE,
+
+38
+00:02:26,029 --> 00:02:31,246
+paid from the owner's saved card straight
+to the vendor, only after delivery.
+
+39
+00:02:31,366 --> 00:02:35,974
+Budgets are kept in integer cents, so
+parallel buys can't overspend.
+
+40
+00:02:36,094 --> 00:02:40,159
+A refund is a request to the vendor that
+reconcile confirms,
+
+41
+00:02:40,279 --> 00:02:45,700
+and if PayPal's answer is unclear, the
+agent freezes until the owner reconciles.
+
+42
+00:02:46,300 --> 00:02:47,300
+AgentTab.
+
+43
+00:02:47,420 --> 00:02:50,660
+Your agent gets a budget, not your card.
